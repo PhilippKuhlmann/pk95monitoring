@@ -53,6 +53,11 @@ func (s *Store) CloseAlert(id, ended int64) error {
 	return err
 }
 
+// UnackAlert removes the acknowledgement of an alert (it got worse).
+func (s *Store) UnackAlert(id int64) error {
+	return affected(s.db.Exec("UPDATE alerts SET acked_by = '', acked_at = 0 WHERE id = ?", id))
+}
+
 // AckAlert marks an alert as acknowledged by user at time at (0 = now).
 func (s *Store) AckAlert(id int64, user string, at int64) error {
 	if at == 0 {

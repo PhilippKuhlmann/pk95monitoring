@@ -485,6 +485,12 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   agent, "Ausgeblendet" – with group headings. A search field and "Auffällig" filter rows client-side; the
   checkboxes (row, group, section) feed a sticky bar that sets Überwachen / Nur anzeigen / Ausblenden for all
   checked checks (pattern rules where a whole key family is checked, exact rules otherwise).
+- Acknowledging ("Quittieren", `POST /api/alerts/{id}/ack`): on the check page (head button, "Quittiert von …"
+  line), in the device's service list (tag "quittiert", bulk bar "Quittieren" for checked checks with an open
+  unacknowledged alert), on the alerts pages. An acknowledged alert gets no reminders (re-notify) until it gets
+  worse: an escalation warn → crit clears the acknowledgement (`Store.UnackAlert`) and notifies. The bell counts
+  open alerts nobody acknowledged.
+- Layout: `.wrap` max 1600 px, centred (as in ProxBackup).
 - Device list `/devices`: one compact row per device – state, name (+ attached agents) with address, type and
   group below and the first problem in one line (full text as tooltip), check counts with the last contact,
   CPU/RAM/disk bars, "Jetzt prüfen"; the whole row opens the device (edit and delete are on the device page).

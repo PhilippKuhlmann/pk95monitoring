@@ -471,3 +471,39 @@ func TestRedundantInstance(t *testing.T) {
 		}
 	}
 }
+
+func TestAckHoldsUntilWorse(t *testing.T) {
+	e := newEnv(t, Options{})
+	id := e.agentDevice(t, "web01", nil)
+	e.report(t, id, diskCheck(91))
+	e.wait()
+	active, _ := e.st.ActiveAlerts()
+	if len(active) != 1 {
+		t.Fatalf("alerts %+v", active)
+	}
+	if err := e.c.AckAlert(active[0].ID, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	// Still warn (other value): stays acknowledged.
+	e.report(t, id, diskCheck(92))
+	if a, _ := e.st.ActiveAlerts(); a[0].AckedBy != "admin" {
+		t.Fatalf("ack lost without escalation: %+v", a[0])
+	}
+	// Worse: the acknowledgement ends, the alert notifies and reminds again.
+	e.report(t, id, diskCheck(97))
+	e.wait()
+	a, _ := e.st.ActiveAlerts()
+	if len(a) != 1 || a[0].Severity != model.StateCrit || a[0].AckedBy != "" || a[0].AckedAt != 0 {
+		t.Fatalf("after escalation: %+v", a)
+	}
+	if got := e.rec.titles(); len(got) != 2 || !strings.HasPrefix(got[1], "Kritisch:") {
+		t.Fatalf("notifications %v", got)
+	}
+	e.c.settings.General.RenotifyHours = 1
+	e.clk.Add(61 * time.Minute)
+	e.c.renotify()
+	e.wait()
+	if got := e.rec.titles(); len(got) != 3 || !strings.HasPrefix(got[2], "Weiterhin Kritisch") {
+		t.Fatalf("renotify after escalation %v", got)
+	}
+}

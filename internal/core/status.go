@@ -292,6 +292,15 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 			}
 			oa.a.Severity, oa.a.Message = cs.State, body
 			if escalate {
+				// An acknowledgement holds until the alert gets worse: then it counts (and
+				// reminds) again.
+				if oa.a.AckedBy != "" {
+					if err := c.St.UnackAlert(oa.a.ID); err != nil {
+						log.Printf("unack alert: %v", err)
+					} else {
+						oa.a.AckedBy, oa.a.AckedAt = "", 0
+					}
+				}
 				oa.notified, oa.peak = now, model.Worst(oa.peak, cs.State)
 				c.Event(sevName(cs.State), name, title, body, c.alertDetails(d, rt, cs, ""), true)
 			} else {

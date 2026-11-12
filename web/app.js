@@ -587,13 +587,14 @@ async function pollOverview() {
 function drawAlertInd() {
   const a = qs("[data-alert-ind]");
   if (!a) return;
-  const list = (state.ov && state.ov.alerts) || [];
+  // the bell counts what still needs attention: open alerts nobody acknowledged
+  const all = (state.ov && state.ov.alerts) || [], list = all.filter((x) => !x.acked_by), acked = all.length - list.length;
   const n = list.length, crit = list.filter((x) => x.severity === "crit").length;
   a.classList.toggle("crit", crit > 0);
   a.classList.toggle("warn", !crit && n > 0);
   const c = qs(".alert-count", a);
   c.hidden = !n; c.textContent = n > 99 ? "99+" : String(n);
-  const t = n ? `${n === 1 ? "1 aktiver Alarm" : n + " aktive Alarme"}${crit ? `, davon ${crit} kritisch` : ""}` : "Keine aktiven Alarme";
+  const t = (n ? `${n === 1 ? "1 offener Alarm" : n + " offene Alarme"}${crit ? `, davon ${crit} kritisch` : ""}` : "Keine offenen Alarme") + (acked ? ` (${acked} quittiert)` : "");
   a.title = t; a.setAttribute("aria-label", t);
 }
 
@@ -1411,7 +1412,7 @@ PAGES["/devices/:id"] = async (el, token) => {
     const st = view();
     const att = attachedViews();
     const list = ckViewMode() === "list";
-    body.innerHTML = list ? svcList(data.device, st, att) : checksView(data.device, st, att);
+    body.innerHTML = list ? svcList(data.device, st, att, data.alerts || []) : checksView(data.device, st, att);
     bindCopy(body);
     qsa("[data-keep-scroll]", body).forEach((x) => { if (scroll[x.dataset.keepScroll]) x.scrollTop = scroll[x.dataset.keepScroll]; });
     // panels keep the state the user gave them (open by default or closed by default)
@@ -1490,6 +1491,18 @@ PAGES["/devices/:id"] = async (el, token) => {
       const setRows = (rows, on) => rows.filter((tr) => !tr.hidden).forEach((tr) => { const b = qs("input[data-sel]", tr); if (b) { if (on) sel.add(b.dataset.sel); else sel.delete(b.dataset.sel); } });
       qsa("input[data-selg]", body).forEach((cb) => cb.onchange = () => { setRows(groupRowsOf(cb.closest("tr")), cb.checked); syncSel(body, sel); });
       qsa("input[data-sela]", body).forEach((cb) => cb.onchange = () => { setRows(qsa("tr.sv-row", cb.closest("table")), cb.checked); syncSel(body, sel); });
+      const ackB = qs("[data-bulk-ack]", body);
+      if (ackB) ackB.onclick = () => {
+        const ids = qsa("tr.sv-row[data-ack-id]", body).filter((tr) => { const b = qs("input[data-sel]", tr); return b && sel.has(b.dataset.sel); }).map((tr) => tr.dataset.ackId);
+        if (!ids.length) return;
+        wantFocus = "svq";
+        run(ackB, async () => {
+          for (const aid of ids) await POST(`/api/alerts/${enc(aid)}/ack`);
+          sel.clear(); state.ovAt = 0;
+          await reload();
+          loadOverview().catch(() => {});
+        }, ids.length === 1 ? "Alarm quittiert – bis er schlimmer wird." : `${ids.length} Alarme quittiert – bis sie schlimmer werden.`);
+      };
       const clear = qs("[data-bulk-clear]", body);
       if (clear) clear.onclick = () => { sel.clear(); syncSel(body, sel); const n = qs("[data-svq]", body); if (n) n.focus(); };
       // a mode for the checked checks: pattern rules where they cover a whole family ("snmp:if:*"),
@@ -2437,11 +2450,14 @@ const svcSort = (list) => [...list].sort((a, b) => {
 });
 const selBox = (attrs, label) => `<label class="sv-cb"><input type="checkbox" ${attrs} aria-label="${esc(label)}"></label>`;
 // svcRow: one check; sel = the checked keys (null: no checkbox), mode: with the mode button.
-function svcRow(c, devId, sel, mode) {
+// ackTag marks a check whose open alert is acknowledged.
+const ackTag = (a) => (a && a.acked_by ? `<span class="tag ack-tag" title="Quittiert von ${esc(a.acked_by)} am ${esc(fmtTime(a.acked_at, true))} – keine Erinnerungen, bis es schlimmer wird">${icon("check")}quittiert</span>` : "");
+function svcRow(c, devId, sel, mode, alert) {
   const tone = cardTone(c), s = svcSummary(c), cv = cardValue(c), on = !!sel && sel.has(c.key);
+  const ackable = alert && !alert.ended && !alert.acked_by ? ` data-ack-id="${esc(alert.id)}"` : "";
   const box = sel && c.key !== REACH_KEY ? selBox(`data-sel="${esc(c.key)}" data-fk="s:${esc(devId)}|${esc(c.key)}" ${on ? "checked" : ""}`, `${c.name} auswählen`) : "";
-  return `<tr class="row-link sv-row st-${tone}${on ? " sel" : ""}" ${rowLink(devId, c)} data-bad="${svcBad(c) ? 1 : ""}" data-q="${esc(lc([c.name, c.key, c.group, s.text].join(" ")))}">
-    <td class="sv-sel">${box}</td><td class="sv-st">${ckPill(c)}</td>
+  return `<tr class="row-link sv-row st-${tone}${on ? " sel" : ""}" ${rowLink(devId, c)}${ackable} data-bad="${svcBad(c) ? 1 : ""}" data-q="${esc(lc([c.name, c.key, c.group, s.text].join(" ")))}">
+    <td class="sv-sel">${box}</td><td class="sv-st">${ckPill(c)}${ackTag(alert)}</td>
     <td class="sv-name">${ckLink(devId, c, esc(c.name))}${pendingTag(c)}</td>
     <td class="sv-sum">${s.html}</td>
     <td class="spark-cell">${cv.spark ? sparkBox(devId, c.key, cv.spark, tone, "tspark") : ""}</td>
@@ -2498,7 +2514,7 @@ function svcAgentSection(a) {
     selectable: false, extra, cls: `att-group st-${s}`, attrs: `data-att="${esc(dv.id)}"` });
 }
 // svcList renders the device overview as a service list.
-function svcList(dv, st, att = []) {
+function svcList(dv, st, att = [], alerts = []) {
   const checks = st.checks || [], hid = st.hidden || [];
   if (!checks.length && !hid.length && !(st.vanished || []).length) return checksView(dv, st, att);
   const sel = svcSel.get(dv.id) || new Set();
@@ -2509,7 +2525,8 @@ function svcList(dv, st, att = []) {
   const mon = checks.filter((c) => !isQuiet(c)), qu = checks.filter((c) => c.mode === "quiet"), nw = checks.filter(isNew);
   const van = st.vanished || [], off = hid.filter((h) => !h.pending).length;
   const nBad = checks.filter(svcBad).length + att.reduce((n, a) => n + ((a.status || {}).checks || []).filter(svcBad).length, 0);
-  const row = (c) => svcRow(c, dv.id, sel, true);
+  const open = new Map(alerts.filter((a) => !a.ended && a.device_id === dv.id).map((a) => [a.check_key, a]));
+  const row = (c) => svcRow(c, dv.id, sel, true, open.get(c.key));
   const tools = `<div class="sv-tools"><input type="search" data-svq data-fk="svq" value="${esc(f.q)}" placeholder="Dienste filtern …" aria-label="Dienste filtern" autocomplete="off">
     <div class="seg" role="group" aria-label="Nach Zustand filtern"><button type="button" data-svb="" data-fk="svb:0" aria-pressed="${!f.bad}">Alle</button><button type="button" data-svb="1" data-fk="svb:1" aria-pressed="${!!f.bad}">Auffällig${nBad ? ` (${nBad})` : ""}</button></div></div>`;
   const secs = [
@@ -2524,6 +2541,7 @@ function svcList(dv, st, att = []) {
   ].join("");
   const bulk = `<div class="sv-bulk" data-sv-bulk role="region" aria-label="Ausgewählte Dienste" hidden><span class="sv-bulk-n" data-sv-n aria-live="polite"></span>
     ${RULE_MODES.map(([m, , ic, sub]) => `<button class="btn ${m === "alert" ? "" : "gray"} sm" type="button" data-bulk="${m}" data-fk="b:${m}" title="${esc(sub)}">${icon(ic)} ${esc(RULE_MODE_SHORT[m])}</button>`).join("")}
+    <button class="btn gray sm" type="button" data-bulk-ack data-fk="b:ack" title="Keine Erinnerungen mehr, bis es schlimmer wird">${icon("check")} Quittieren</button>
     <button class="btn ghost sm" type="button" data-bulk-clear data-fk="b:clear">Auswahl aufheben</button></div>`;
   return ckSummary(st, att, "list") + dvNotes(dv) + tools + secs + bulk;
 }
@@ -2568,6 +2586,9 @@ function syncSel(root, sel) {
   if (bar) {
     bar.hidden = sel.size === 0;
     qs("[data-sv-n]", bar).textContent = `${sel.size} ${sel.size === 1 ? "Dienst" : "Dienste"} ausgewählt:`;
+    // "Quittieren" only for checked checks with an open, unacknowledged alert
+    const ack = qs("[data-bulk-ack]", bar), n = qsa("tr.sv-row[data-ack-id]", root).filter((tr) => { const b = qs("input[data-sel]", tr); return b && sel.has(b.dataset.sel); }).length;
+    if (ack) { ack.hidden = n === 0; ack.lastChild.textContent = n > 1 ? ` Quittieren (${n})` : " Quittieren"; }
   }
 }
 
@@ -3365,12 +3386,17 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     const modeL = c && isNew(c) ? "Neu – entscheiden" : RULE_MODE_SHORT[mode];
     const modeB = c && key !== REACH_KEY ? `<button class="btn gray ck-mode${isQuiet(c) ? " quiet" : ""}" type="button" data-ck-mode data-fk="mode" aria-haspopup="menu" aria-expanded="false" aria-label="Überwachung: ${esc(modeL)} – ändern">${icon(c && isNew(c) ? "sparkles" : mode === "quiet" ? "eye" : "bell")} ${esc(modeL)}</button>` : "";
     const pillH = c ? ckPill(c) : hidden ? pill("Ausgeblendet") : pill("Nicht vorhanden");
+    // the open alert of this check: "Quittieren" stops reminders until it gets worse
+    const alert = (data.alerts || []).find((a) => !a.ended && a.check_key === key && a.device_id === id);
+    const ackB = alert && !alert.acked_by ? `<button class="btn" type="button" data-ack-alert="${esc(alert.id)}" data-fk="ack" title="Keine Erinnerungen mehr, bis der Alarm schlimmer wird (Warnung → Kritisch)">${icon("check")} Quittieren</button>` : "";
+    const ackInfo = alert && alert.acked_by ? `<div class="ckd-ack">${icon("check")}<span>Quittiert von <b>${esc(alert.acked_by)}</b> am ${esc(fmtTime(alert.acked_at, true))} – keine Erinnerungen, bis es schlimmer wird.</span></div>` : "";
     let top = "";
     if (c) {
       const v = cardValue(c), tone = cardTone(c), msg = reasonText(c);
       const val = v.rxtx ? `<span class="svc-rx"><span aria-hidden="true">↓</span> ${esc(fmtVal(v.rxtx[0], "B/s"))}<span class="sr-only"> empfangen</span></span><span class="svc-tx"><span aria-hidden="true">↑</span> ${esc(fmtVal(v.rxtx[1], "B/s"))}<span class="sr-only"> gesendet</span></span>` : esc(v.text);
       top = `<div class="panel ckd-now st-${tone}"><div class="ckd-main"><div class="svc-val${v.rxtx ? " rxtx" : v.word ? " word" : ""}">${val}</div>${v.sub ? `<div class="svc-sec">${esc(v.sub)}</div>` : ""}</div>
         ${msg || (isQuiet(c) && MUTED_TITLE[c.muted]) || c.pending ? `<div class="ckd-msg">${reasonHTML(c)}${pendingTag(c)}${c.reason && c.msg && c.reason !== c.msg ? `<div class="t-sub">${esc(c.msg)}</div>` : ""}</div>` : ""}
+        ${ackInfo}
         ${isNew(c) ? `<div class="t-sub">Neu gefunden: Werte werden aufgezeichnet, Alarme gibt es erst, wenn der Check übernommen ist.</div>` : isQuiet(c) ? `<div class="t-sub">Nur Anzeige: Werte werden aufgezeichnet, der Check löst keinen Alarm aus.</div>` : ""}</div>`;
     } else if (hidden) {
       top = callout("", "Ausgeblendet", pending ? "Der Check erscheint mit der nächsten Abfrage wieder." : "Dieser Check wird durch eine Regel verworfen – es werden keine neuen Werte gespeichert. Der bisherige Verlauf steht unten.",
@@ -3380,7 +3406,7 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     }
     const ae = document.activeElement, fk = ae && head.contains(ae) ? ae.getAttribute("data-fk") : null;
     head.innerHTML = pageHead(`${esc(name)} ${pillH}`, sub,
-      `${modeB}<button class="btn gray" type="button" data-poll data-fk="poll" ${dv.enabled === false ? "disabled" : ""}>${icon("refresh")} Jetzt prüfen</button>`, back) + top;
+      `${ackB}${modeB}<button class="btn gray" type="button" data-poll data-fk="poll" ${dv.enabled === false ? "disabled" : ""}>${icon("refresh")} Jetzt prüfen</button>`, back) + top;
     if (fk) { const n = qs(`[data-fk="${CSS.escape(fk)}"]`, head); if (n) n.focus({ preventScroll: true }); }
     qs("[data-poll]", head).onclick = (e) => run(e.currentTarget, async () => {
       const r = await POST(`/api/devices/${enc(id)}/poll`);
@@ -3398,6 +3424,13 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     };
     const ub = qs("[data-unhide]", head);
     if (ub) ub.onclick = () => saveRules(ub, (rs) => setExactRule(rs, key, "alert"));
+    const ab = qs("[data-ack-alert]", head);
+    if (ab) ab.onclick = () => run(ab, async () => {
+      await POST(`/api/alerts/${enc(ab.dataset.ackAlert)}/ack`);
+      state.ovAt = 0;
+      await reload();
+      loadOverview().catch(() => {});
+    }, "Alarm quittiert – bis er schlimmer wird.");
     drawExplain();
   };
 
@@ -3491,7 +3524,7 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     const nm = list.length ? list[0].check_name : "";
     hist.innerHTML = list.length ? alertsTable(list, { device: false, check: false }) + (r.more ? `<p class="muted small" style="margin:0 12px">Nur die letzten 500 Alarme des Geräts sind berücksichtigt – ältere unter <a href="/alerts?tab=history" data-go>Alarme</a>.</p>` : "")
       : empty("Noch keine Alarme", "Dieser Check war bisher nicht auffällig.", "", "bell");
-    bindAck(hist, loadHist);
+    bindAck(hist, () => Promise.all([loadHist(), reload()])); // the head shows the acknowledgement, too
     if (nm && !alertName) { alertName = nm; if (!check().c) drawHead(); }
   };
 

@@ -103,7 +103,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 main { margin-left: 256px; padding: 64px 0 40px; min-height: 100vh; }
 .collapsed .sidebar { transform: translateX(-100%); }
 .collapsed main { margin-left: 0; }
-.wrap { max-width: 1440px; }
+.wrap { max-width: 1600px; margin-inline: auto; }
 
 /* ---- page header ---- */
 .page-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 12px 4px; }
@@ -1095,3 +1095,9 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .exp-more .sp-title { font-size: 15px; }
 .exp-more-body { padding: 0 16px 16px; }
 @media (max-width: 720px) { .exp-dl { grid-template-columns: minmax(0, 1fr); gap: 2px; } .exp-dl dd { margin-bottom: 8px; } }
+
+/* acknowledged alerts */
+.ack-tag { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; vertical-align: 1px; background: var(--blue-bg); color: var(--blue-ink); }
+.ack-tag .icon { width: 11px; height: 11px; }
+.ckd-ack { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-2); }
+.ckd-ack .icon { width: 16px; height: 16px; color: var(--c600); flex: none; }
