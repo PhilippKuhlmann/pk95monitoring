@@ -3125,6 +3125,173 @@ function effThreshold(dev, global, defs, n, inst) {
   return null;
 }
 
+// ---------- explanations (check page: "Was bedeutet das?") ----------
+// EXPLAIN: per metric what it measures, why a bad value matters and what to do. Texts for the
+// end user (German); `code` marks commands to run on the host.
+const EXPLAIN = {
+  "disk.media_errors": { what: "Wie oft die NVMe-SSD Daten nicht mehr fehlerfrei lesen konnte – auch nicht mit ihrer eingebauten Fehlerkorrektur (ECC). Der Zähler steigt nur und wird nie zurückgesetzt.",
+    why: "Die betroffenen Daten können beschädigt sein. Ein einzelner Fehler kann ein Ausreißer sein (z. B. nach einem Stromausfall). Steigt der Zähler weiter, verschleißt der Flash-Speicher oder der Controller hat ein Problem – die SSD kann bald ausfallen.",
+    todo: ["Prüfen, ob die Sicherungen aktuell sind und sich zurückspielen lassen.", "Auf dem Server `smartctl -a /dev/<platte>` ausführen und das Fehlerprotokoll („Error Information Log“) ansehen.", "Bei ZFS einen Scrub starten (`zpool scrub <pool>`) – er findet beschädigte Blöcke und repariert sie aus der Spiegelung.", "Steigt der Wert weiter: SSD tauschen. Bleibt er stehen, kannst du den Grenzwert für diese Platte auf den aktuellen Stand setzen und nur noch auf Zuwachs achten."] },
+  "disk.temp": { what: "Die Temperatur der Platte laut SMART.",
+    why: "Zu warme Platten altern schneller. SSDs drosseln ab etwa 70 °C ihre Geschwindigkeit (Thermal Throttling), und dauerhafte Hitze lässt die Flash-Zellen ihre Ladung schneller verlieren – Daten können unlesbar werden. Festplatten fühlen sich bis etwa 45 °C wohl; darüber steigt die Ausfallrate deutlich.",
+    todo: ["Lüfter und Luftstrom prüfen: Staub, ausgefallener Lüfter, verdeckte Öffnungen.", "Raumtemperatur im Serverraum prüfen.", "NVMe-SSDs ohne Kühlkörper: Kühlkörper nachrüsten.", "Kurze Spitzen bei viel Last (Sicherung, Scrub) sind normal – dauerhaft hohe Werte nicht."] },
+  "disk.wearout": { what: "Wie viel der vom Hersteller garantierten Schreibmenge (TBW) die SSD schon verbraucht hat. 100 % heißt: Lebensdauer laut Hersteller erreicht.",
+    why: "Flash-Zellen vertragen nur eine begrenzte Zahl von Schreibvorgängen. Je näher an 100 %, desto eher fallen Zellen aus; viele SSDs schalten dann in einen Nur-Lesen-Modus und der Server steht.",
+    todo: ["Ersatz-SSD einplanen und rechtzeitig tauschen.", "Prüfen, was so viel schreibt – z. B. Protokolle, Auslagerung, viele Snapshots.", "Für Server Enterprise-SSDs mit hoher Schreibfestigkeit (TBW/DWPD) verwenden, besonders unter ZFS oder Ceph."] },
+  "disk.spare": { what: "Der Reservespeicher der NVMe-SSD, mit dem sie defekte Zellen ersetzt (100 % = noch unbenutzt).",
+    why: "Sinkt die Reserve, ersetzt die SSD schon viele defekte Zellen. Unter dem Grenzwert des Herstellers (meist 10 %) ist ein Ausfall absehbar.",
+    todo: ["Sicherungen prüfen.", "SSD zeitnah tauschen."] },
+  "disk.pending": { what: "Sektoren, die beim Lesen nicht gelesen werden konnten und darauf warten, beim nächsten Schreiben ersetzt zu werden.",
+    why: "Die Daten in diesen Sektoren sind zurzeit nicht lesbar – ein deutliches Zeichen für eine beschädigte Oberfläche oder einen schwächelnden Lesekopf. Meist folgen weitere Fehler.",
+    todo: ["Sicherungen prüfen.", "Bei ZFS oder RAID einen Scrub bzw. eine Prüfung starten, damit die Daten aus der Redundanz neu geschrieben werden.", "Einen langen SMART-Selbsttest starten: `smartctl -t long /dev/<platte>`.", "Platte tauschen – vor allem, wenn der Wert steigt."] },
+  "disk.reallocated": { what: "Sektoren, die die Platte als defekt erkannt und durch Reservesektoren ersetzt hat.",
+    why: "Einzelne ersetzte Sektoren kommen vor. Steigt der Zähler, verschlechtert sich die Oberfläche, und irgendwann sind die Reservesektoren aufgebraucht.",
+    todo: ["Wert beobachten: Bleibt er über Wochen gleich, ist das meist unkritisch – dann den Grenzwert für diese Platte auf den aktuellen Stand anheben.", "Steigt er: Sicherungen prüfen und die Platte tauschen."] },
+  "disk.uncorrectable": { what: "Lesefehler, die die Platte auch mit ihrer Fehlerkorrektur nicht beheben konnte.",
+    why: "Daten wurden nicht korrekt gelesen. Ohne Redundanz (RAID, ZFS-Spiegel) können Dateien oder VM-Festplatten beschädigt sein.",
+    todo: ["Sicherungen prüfen.", "Bei ZFS einen Scrub starten (`zpool scrub <pool>`).", "Platte tauschen, wenn der Wert steigt."] },
+  "disk.crc_errors": { what: "Übertragungsfehler zwischen Platte und Controller.",
+    why: "Das ist fast immer ein Problem mit Kabel, Stecker oder Backplane – nicht mit der Platte selbst. Die Übertragung wird wiederholt, kann aber langsam werden.",
+    todo: ["SATA-Kabel tauschen bzw. Stecker prüfen, notfalls einen anderen Port verwenden.", "Der Zähler bleibt danach stehen, er sinkt nicht – wichtig ist, dass er nicht weiter steigt."] },
+  "zfs.errors": { what: "Lese-, Schreib- und Prüfsummenfehler der Platten im Pool (aus `zpool status`).",
+    why: "ZFS hat beschädigte oder nicht lesbare Daten entdeckt. Mit Redundanz repariert ZFS sie selbst – die Ursache (Platte, Kabel, Controller oder Arbeitsspeicher) bleibt aber bestehen.",
+    todo: ["Auf dem Server `zpool status -v <pool>` ansehen: Welche Platte zählt Fehler?", "SMART-Werte dieser Platte und das Kabel prüfen.", "Nach der Behebung `zpool clear <pool>` ausführen und einen Scrub starten."] },
+  "zfs.usage": { what: "Die Belegung des ZFS-Pools.",
+    why: "ZFS wird ab etwa 80 % Belegung deutlich langsamer, weil es schwerer freie Blöcke findet. Bei 100 % können VMs hängen bleiben, und selbst das Löschen wird mühsam.",
+    todo: ["Alte Snapshots und Sicherungen löschen.", "Nicht mehr genutzte VM-Festplatten entfernen.", "Den Pool erweitern."] },
+  "zfs.scrub_age": { what: "Tage seit dem letzten vollständigen Scrub – dabei liest ZFS alle Daten und vergleicht sie mit ihren Prüfsummen.",
+    why: "Nur ein Scrub findet stille Datenfehler („Bit Rot“), bevor sie beim Lesen auffallen oder eine zweite Platte ausfällt und die Redundanz fehlt. Proxmox plant normalerweise einen Scrub im Monat.",
+    todo: ["Scrub starten: `zpool scrub <pool>`.", "Prüfen, ob der monatliche Scrub geplant ist (`/etc/cron.d/zfsutils-linux`)."] },
+  "zfs.frag": { what: "Wie zerstückelt der freie Platz im Pool ist.", why: "Hohe Fragmentierung macht das Schreiben langsamer, ist aber kein Fehler.", todo: ["Freien Platz schaffen – Fragmentierung sinkt, wenn der Pool nicht zu voll ist."] },
+  "cpu.iowait": { what: "Der Anteil der Zeit, in der die Prozessoren warten, weil Daten von den Platten noch nicht da sind (in Proxmox „IO-Verzögerung“).",
+    why: "Hohe Werte bedeuten: Der Speicher ist der Engpass. VMs reagieren träge, obwohl die CPU frei ist.",
+    todo: ["Prüfen, welche VM gerade viel liest oder schreibt (Gast-Datenträger in den Diagrammen).", "Sicherungen und Scrubs zeitlich entzerren.", "Langsame oder fehlerhafte Platten ausschließen (SMART-Werte)."] },
+  "cpu.usage": { what: "Wie stark die Prozessoren ausgelastet sind.", why: "Dauerhaft volle CPUs machen Dienste und VMs langsam.", todo: ["Prüfen, welcher Prozess oder welche VM die Last erzeugt.", "Kurze Spitzen sind normal; der Alarm kommt erst, wenn die Last mehrere Werte lang hoch bleibt."] },
+  "mem.usage": { what: "Wie viel Arbeitsspeicher belegt ist.", why: "Ist der Speicher voll, lagert das System aus oder beendet Prozesse – alles wird langsam. Unter Proxmox belegt der ZFS-Cache (ARC) viel Speicher, gibt ihn aber bei Bedarf frei.", todo: ["Größte Verbraucher suchen (VMs, Dienste).", "Bei ZFS den ARC begrenzen oder Speicher nachrüsten."] },
+  "swap.usage": { what: "Wie viel ausgelagert ist (Swap).", why: "Viel Auslagerung bedeutet zu wenig Arbeitsspeicher und macht das System spürbar langsam.", todo: ["Speicherverbrauch prüfen.", "Speicher nachrüsten oder Last verteilen."] },
+  "disk.usage": { what: "Die Belegung des Dateisystems.", why: "Ist es voll, können Programme und Datenbanken nicht mehr schreiben – Dienste fallen aus, Protokolle und Updates scheitern.", todo: ["Große Verzeichnisse suchen (`du -sh /*`), alte Protokolle und Sicherungen löschen.", "Datenträger vergrößern."] },
+  "storage.usage": { what: "Die Belegung des Proxmox-Speichers.", why: "Ist er voll, können VMs nicht mehr schreiben und bleiben hängen; Sicherungen schlagen fehl.", todo: ["Alte Sicherungen, ISOs und Snapshots löschen.", "Speicher erweitern."] },
+  "cert.days": { what: "Wie viele Tage das Zertifikat noch gültig ist.", why: "Nach Ablauf zeigen Browser eine Warnung oder verweigern die Verbindung; Programme brechen die Verbindung ab.", todo: ["Zertifikat erneuern (bei Let's Encrypt: prüfen, warum die automatische Erneuerung nicht lief).", "Bei Proxmox: Knoten → System → Zertifikate."] },
+  "ping.loss": { what: "Wie viele Ping-Pakete unbeantwortet blieben.", why: "Paketverlust deutet auf Netzwerkprobleme hin (Kabel, Switch, WLAN, Überlast) – Verbindungen werden langsam oder brechen ab.", todo: ["Kabel und Switch-Port prüfen.", "Netzwerkauslastung prüfen."] },
+  "ping.rtt": { what: "Wie lange ein Ping hin und zurück braucht.", why: "Hohe Laufzeiten machen Anwendungen träge.", todo: ["Netzwerkauslastung und Leitung prüfen."] },
+  "http.time": { what: "Wie lange die Webseite für die Antwort braucht.", why: "Langsame Antworten ärgern Nutzer und deuten auf Überlast oder Störungen hin.", todo: ["Server-Auslastung und Protokolle der Webanwendung prüfen."] },
+  "ups.battery": { what: "Der Ladestand des USV-Akkus.", why: "Fällt der Strom aus, reicht ein leerer Akku nicht, um die Server sauber herunterzufahren.", todo: ["Prüfen, ob die USV gerade auf Batterie läuft.", "Ältere Akkus (meist 3–5 Jahre) tauschen."] },
+  "ups.runtime": { what: "Wie lange die USV die angeschlossenen Geräte noch versorgen kann.", why: "Ist die Restlaufzeit zu kurz, gehen Server bei einem Stromausfall hart aus – Daten können verloren gehen.", todo: ["Last reduzieren oder Akkus tauschen.", "Automatisches Herunterfahren (NUT) prüfen."] },
+  "ups.load": { what: "Wie stark die USV belastet ist.", why: "Eine überlastete USV schaltet ab oder hält nur kurz durch.", todo: ["Geräte auf eine weitere USV verteilen."] },
+  "printer.toner": { what: "Der Füllstand des Toners.", why: "Ist er leer, druckt der Drucker nicht mehr.", todo: ["Neuen Toner bestellen."] },
+  "poe.usage": { what: "Wie viel des PoE-Budgets der Switch verbraucht.", why: "Ist das Budget erschöpft, versorgt der Switch neue Geräte (Kameras, Access Points, Telefone) nicht mehr mit Strom.", todo: ["Prüfen, welche Ports viel ziehen.", "Geräte auf einen weiteren PoE-Switch verteilen."] },
+  "updates.security": { what: "Wie viele Sicherheitsupdates ausstehen.", why: "Offene Sicherheitslücken können angegriffen werden.", todo: ["Updates einspielen und, falls nötig, neu starten."] },
+  "updates.pending": { what: "Wie viele Updates ausstehen.", why: "Veraltete Systeme bekommen keine Fehlerbehebungen.", todo: ["Updates im nächsten Wartungsfenster einspielen."] },
+  "services.failed": { what: "Wie viele systemd-Units fehlgeschlagen sind.", why: "Ein fehlgeschlagener Dienst erledigt seine Aufgabe nicht mehr.", todo: ["Auf dem Server `systemctl --failed` ausführen und `journalctl -u <unit>` ansehen."] },
+  "eventlog.errors": { what: "Fehler und kritische Ereignisse im Windows-Ereignisprotokoll der letzten 24 Stunden.", why: "Viele Fehler deuten auf Treiber-, Hardware- oder Dienstprobleme hin.", todo: ["In der Ereignisanzeige (System und Anwendung) nach den häufigsten Quellen filtern."] },
+  "temp": { what: "Eine Temperatur des Geräts.", why: "Zu hohe Temperaturen verkürzen die Lebensdauer und können zur Notabschaltung führen.", todo: ["Lüftung und Raumtemperatur prüfen."] },
+  "if.errors": { what: "Fehlerhafte Pakete auf dem Port.", why: "Meist ein Kabel-, Stecker- oder Duplex-Problem; die Verbindung wird langsam oder bricht ab.", todo: ["Kabel tauschen, Port-Geschwindigkeit und Duplex prüfen."] },
+  "repl.age": { what: "Wie lange die letzte erfolgreiche Replikation her ist.", why: "Fällt der Quellknoten aus, fehlen auf dem Ziel alle Änderungen seit dieser Zeit.", todo: ["Replikationsprotokoll in Proxmox prüfen (Rechenzentrum → Replikation)."] },
+  "guest.cpu": { what: "Die CPU-Auslastung der VM bzw. des Containers.", why: "Dauerhaft volle CPUs machen den Gast langsam.", todo: ["Im Gast prüfen, was die Last erzeugt, oder mehr Kerne zuweisen."] },
+  "guest.mem": { what: "Der Speicherverbrauch der VM bzw. des Containers.", why: "Ist der Speicher voll, lagert der Gast aus oder beendet Prozesse.", todo: ["Im Gast prüfen oder mehr Speicher zuweisen."] },
+};
+
+// EXPLAIN_CHECKS: explanations of states without a metric (the device reports them itself).
+const EXPLAIN_CHECKS = [
+  { test: (c) => c.key === REACH_KEY, title: "Nicht erreichbar",
+    what: "Das Gerät hat auf die Abfrage nicht geantwortet bzw. der Agent hat sich nicht gemeldet.",
+    why: "Solange keine Daten kommen, sind alle anderen Werte veraltet – ein echter Ausfall bleibt sonst unbemerkt.",
+    todo: ["Prüfen, ob das Gerät läuft und im Netzwerk erreichbar ist (Ping).", "Bei Agents: läuft der Dienst `pk95agent`?", "Zugangsdaten, Firewall und Port prüfen."] },
+  { test: (c) => /^pve:disk:/.test(c.key) && /FAILED/.test(c.msg || ""), title: "SMART: Platte meldet Ausfall",
+    what: "Die Platte hat ihren eigenen Gesundheitstest nicht bestanden.", why: "Der Hersteller erwartet einen baldigen Ausfall; Daten sind in Gefahr.",
+    todo: ["Sofort prüfen, ob die Sicherungen aktuell sind.", "Platte so bald wie möglich tauschen."] },
+  { test: (c) => /^pve:disk:/.test(c.key) && /NVMe-Warnung/.test(c.msg || ""), title: "NVMe meldet eine kritische Warnung",
+    what: "Die SSD hat selbst eine kritische Warnung gesetzt (siehe Meldung).", why: "Je nach Warnung ist die Reserve aufgebraucht, die Zuverlässigkeit eingeschränkt oder die SSD nur noch lesbar.",
+    todo: ["Sicherungen prüfen.", "SSD tauschen."] },
+  { test: (c) => /^pve:disk:/.test(c.key) && /unter Grenze/.test(c.msg || ""), title: "SMART-Wert unter Herstellergrenze",
+    what: "Ein SMART-Wert hat die vom Hersteller festgelegte Grenze erreicht.", why: "Der Hersteller betrachtet die Platte damit als ausfallgefährdet.",
+    todo: ["Sicherungen prüfen.", "Platte tauschen."] },
+  { test: (c) => /^pve:zfs:/.test(c.key) && /DEGRADED|FAULTED|UNAVAIL|OFFLINE|REMOVED/.test(c.msg || ""), title: "ZFS-Pool eingeschränkt",
+    what: "Mindestens eine Platte des Pools ist ausgefallen oder fehlt.", why: "Der Pool läuft ohne volle Redundanz weiter – fällt eine weitere Platte aus, gehen Daten verloren.",
+    todo: ["`zpool status <pool>` auf dem Server ansehen.", "Defekte Platte tauschen: `zpool replace <pool> <alt> <neu>`."] },
+  { test: (c) => /^pve:zfs:/.test(c.key) && /Datenfehler/.test(c.msg || ""), title: "ZFS meldet Datenfehler",
+    what: "ZFS konnte Daten nicht mehr korrekt lesen und nicht reparieren.", why: "Die betroffenen Dateien oder VM-Festplatten sind beschädigt.",
+    todo: ["`zpool status -v <pool>` zeigt die betroffenen Dateien.", "Diese aus der Sicherung wiederherstellen."] },
+  { test: (c) => /^pve:zfs:/.test(c.key) && /Resilver/.test(c.msg || ""), title: "Resilver läuft",
+    what: "ZFS baut die Redundanz nach einem Plattentausch neu auf.", why: "Bis er fertig ist, fehlt die volle Redundanz.", todo: ["Abwarten und währenddessen keine weitere Platte ziehen."] },
+  { test: (c) => /^pve:(vm|ct):/.test(c.key), title: "Gast läuft nicht",
+    what: "Die VM bzw. der Container ist gestoppt, obwohl „Beim Booten starten“ gesetzt ist.", why: "Die Dienste dieses Gasts sind nicht verfügbar.",
+    todo: ["In Proxmox die Aufgaben-Protokolle des Gasts ansehen.", "Gast starten – oder „Beim Booten starten“ abschalten, wenn er absichtlich aus ist."] },
+  { test: (c) => c.key === "pve:backup", title: "Sicherung fehlgeschlagen",
+    what: "Mindestens ein Gast wurde bei der letzten Sicherung nicht gesichert.", why: "Fällt der Gast aus, fehlt eine aktuelle Sicherung.",
+    todo: ["In Proxmox das Protokoll der Sicherungsaufgabe ansehen (Speicherplatz, Sperren, Snapshot-Fehler).", "Sicherung für den Gast von Hand starten."] },
+  { test: (c) => /^pve:repl:/.test(c.key), title: "Replikation fehlgeschlagen",
+    what: "Die Replikation des Gasts auf den Zielknoten ist fehlgeschlagen.", why: "Fällt der Quellknoten aus, fehlen auf dem Ziel die letzten Änderungen.",
+    todo: ["Die Fehlermeldung oben lesen; häufig fehlt der Speicher auf dem Ziel oder ein Snapshot passt nicht.", "In Proxmox: Rechenzentrum → Replikation → Protokoll."] },
+  { test: (c) => c.key === "pve:ha", title: "Hochverfügbarkeit gestört",
+    what: "Eine HA-Ressource ist im Fehlerzustand oder dem Cluster fehlt das Quorum.", why: "Die betroffenen Gäste werden bei einem Ausfall nicht automatisch neu gestartet.",
+    todo: ["In Proxmox: Rechenzentrum → HA ansehen.", "Ressource im Fehlerzustand: Ursache beheben, dann deaktivieren und wieder aktivieren."] },
+  { test: (c) => c.key === "pve:ceph", title: "Ceph meldet ein Problem",
+    what: "Ceph ist nicht vollständig gesund (siehe Meldung).", why: "Je nach Meldung fehlen Kopien oder Daten sind nicht verfügbar.", todo: ["In Proxmox: Ceph → Status ansehen.", "`ceph health detail` auf einem Knoten ausführen."] },
+  { test: (c) => /^pve:node:/.test(c.key), title: "Knoten offline",
+    what: "Der Proxmox-Knoten ist im Cluster nicht erreichbar.", why: "Gäste auf dem Knoten laufen nicht (oder sind nicht erreichbar).", todo: ["Strom, Netzwerk und Konsole des Knotens prüfen."] },
+  { test: (c) => /^svc:/.test(c.key) || c.key === "services", title: "Dienst läuft nicht",
+    what: "Ein überwachter Dienst ist beendet oder nicht vorhanden.", why: "Was der Dienst bereitstellt, ist nicht verfügbar (z. B. Sicherung, Datenbank, Webseite).",
+    todo: ["Dienst starten und prüfen, warum er beendet wurde (Windows: Ereignisanzeige, Linux: `journalctl -u <dienst>`).", "Wird er absichtlich nicht gebraucht: unter Einstellungen des Geräts ignorieren."] },
+  { test: (c) => c.key === "systemd", title: "Fehlgeschlagene systemd-Units", what: "Mindestens eine systemd-Unit ist fehlgeschlagen.", why: "Ihre Aufgabe wird nicht erledigt.", todo: ["`systemctl --failed` und `journalctl -u <unit>` ansehen."] },
+  { test: (c) => c.key === "discovery", title: "Dienste zu entscheiden",
+    what: "Das Gerät meldet neue Dienste, oder bekannte Dienste fehlen.", why: "Neue Dienste werden noch nicht alarmiert; verschwundene können auf einen gelöschten Gast oder einen Ausfall hindeuten.",
+    todo: ["Auf der Geräteseite unter „Neu gefunden“ und „Verschwunden“ entscheiden."] },
+  { test: (c) => /^snmp:if:/.test(c.key), title: "Port ohne Verbindung",
+    what: "Der Switch-Port hat keinen Link, obwohl für ihn „Alarm bei Link-Ausfall“ eingeschaltet ist.", why: "Das angeschlossene Gerät ist nicht erreichbar.", todo: ["Kabel und Gegenstelle prüfen."] },
+];
+
+// thrHit judges a value against a threshold like the server: "crit", "warn" or "".
+function thrHit(t, v) {
+  if (!t || t.disabled || !isNum(v)) return "";
+  const hit = (lim) => isNum(lim) && (t.below ? v <= lim : v >= lim);
+  return hit(t.crit) ? "crit" : hit(t.warn) ? "warn" : "";
+}
+// explainCtx: the names the commands of a check refer to ("<platte>", "<pool>", "<dienst>").
+function explainCtx(c) {
+  const p = String(c.key).split(":"), fa = c.facts || {};
+  if (p[0] === "pve" && p[1] === "disk") return { platte: p.slice(3).join(":") }; // the texts say /dev/<platte>
+  if (p[0] === "pve" && p[1] === "zfs") return { pool: p.slice(3).join(":") };
+  if (p[0] === "svc") return { dienst: fa.Dienstname || p.slice(1).join(":") };
+  return {};
+}
+// codeText renders `…` as <code> in an escaped text and fills in the names of ctx.
+const codeText = (s, ctx = {}) => esc(String(s).replace(/<(platte|pool|dienst)>/g, (m, k) => ctx[k] || m)).replace(/`([^`]+)`/g, "<code>$1</code>");
+function explainBlock(e, head, ctx) {
+  return `<div class="exp-item">${head}
+    <dl class="exp-dl"><dt>Was ist das?</dt><dd>${codeText(e.what, ctx)}</dd>${e.why ? `<dt>Warum ist das wichtig?</dt><dd>${codeText(e.why, ctx)}</dd>` : ""}</dl>
+    ${(e.todo || []).length ? `<div class="exp-todo-h">Was tun?</div><ul class="exp-todo">${e.todo.map((x) => `<li>${codeText(x, ctx)}</li>`).join("")}</ul>` : ""}</div>`;
+}
+// explainHTML: why the check is bad (the metrics over their threshold, else the state the
+// device reports) and, folded, what its other values mean. thr(name, inst) returns the
+// effective threshold of a metric or null.
+function explainHTML(c, thr) {
+  if (!c) return "";
+  const bad = c.state === "warn" || c.state === "crit" || (isQuiet(c) && MUTED_TITLE[c.muted]);
+  const seen = new Set(), hits = [], others = [];
+  for (const m of c.metrics || []) {
+    const e = EXPLAIN[m.n];
+    if (!e) continue;
+    const t = thr(m.n, m.i || ""), lvl = thrHit(t, m.v);
+    if (bad && lvl) hits.push({ m, e, t, lvl });
+    else if (!seen.has(m.n)) { seen.add(m.n); others.push({ m, e }); }
+  }
+  const checkExp = bad && !hits.length ? EXPLAIN_CHECKS.find((x) => x.test(c)) : null;
+  const ctx = explainCtx(c);
+  let out = "";
+  if (hits.length || checkExp) {
+    const lvl = hits.some((h) => h.lvl === "crit") || c.state === "crit" || c.muted === "crit" ? "crit" : "warn";
+    out += `<section class="panel exp exp-${lvl}" aria-label="Was bedeutet das?"><div class="panel-head"><div class="panel-title">${icon("info")} Was bedeutet das?</div></div>` +
+      hits.map((h) => explainBlock(h.e, `<div class="exp-h"><b>${esc(instLabel(h.m.n, ""))}: ${esc(fmtVal(h.m.v, mUnit(h.m)))}</b> ${pill(h.lvl === "crit" ? "Kritisch" : "Warnung", h.lvl === "crit" ? "rose" : "amber")} <span class="muted small">${esc(thrText(h.t))}</span></div>`, ctx)).join("") +
+      (checkExp ? explainBlock(checkExp, `<div class="exp-h"><b>${esc(checkExp.title)}</b> ${statePill(c.muted || c.state)}</div>`, ctx) : "") + `</section>`;
+  }
+  if (others.length) {
+    out += `<details class="panel flush sp exp-more" data-keep="exp"><summary><span class="sp-title">${icon("info")} Was wird hier gemessen?</span><span class="muted small">${esc(others.map((o) => metricLabel(o.m.n)).join(", "))}</span>${icon("chevron-down", "sp-chev")}</summary>
+      <div class="exp-more-body">${others.map((o) => explainBlock(o.e, `<div class="exp-h"><b>${esc(metricLabel(o.m.n))}</b> <span class="muted small">zurzeit ${esc(fmtVal(o.m.v, mUnit(o.m)))}</span></div>`, ctx)).join("")}</div></details>`;
+  }
+  return out;
+}
+
 PAGES["/devices/:id/checks/:key"] = async (el, token) => {
   const m = location.pathname.match(/^\/devices\/([^/]+)\/checks\/([^/]+)$/);
   const dec = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };
@@ -3149,7 +3316,7 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     const h = (st.hidden || []).find((x) => x.key === key);
     return h ? { c: null, hidden: true, name: h.name, group: h.group, pending: h.pending } : { c: null, hidden: false };
   };
-  el.innerHTML = `<div data-head></div>
+  el.innerHTML = `<div data-head></div><div data-explain></div>
     <div class="chart-bar ckd-bar"><h2 class="ckd-h">Verlauf</h2><div class="seg" role="group" aria-label="Zeitraum">${RANGES.map(([k, l]) => `<button type="button" data-range="${k}" aria-pressed="${k === range}">${l}</button>`).join("")}</div>
       <span class="muted small" data-ch-info></span><a class="ckd-all small" href="/devices/${enc(id)}#charts" data-go>Alle Diagramme des Geräts</a></div>
     <div class="charts" data-charts>${loadingPanel()}</div>
@@ -3157,7 +3324,17 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     <div class="chart-bar ckd-bar"><h2 class="ckd-h">Alarmverlauf</h2><span class="muted small">Wann dieser Check auffällig war</span></div>
     <div data-hist>${loadingPanel()}</div>`;
   const head = qs("[data-head]", el), charts = qs("[data-charts]", el), info = qs("[data-ch-info]", el);
-  const factsBox = qs("[data-facts]", el), thrBox = qs("[data-thr]", el), hist = qs("[data-hist]", el);
+  const factsBox = qs("[data-facts]", el), thrBox = qs("[data-thr]", el), hist = qs("[data-hist]", el), explBox = qs("[data-explain]", el);
+  // drawExplain: "Was bedeutet das?" – needs the thresholds (settings) to know which value is bad.
+  const drawExplain = () => {
+    if (settings === undefined) return;
+    const was = qs("details.exp-more", explBox);
+    const open = was ? was.open : false;
+    const thr = (n, inst) => (settings ? (effThreshold(data.device.thresholds, settings.thresholds, settings.defaults, n, inst) || {}).t || null : null);
+    explBox.innerHTML = explainHTML(check().c, thr);
+    const now = qs("details.exp-more", explBox);
+    if (now && open) now.open = true;
+  };
 
   const reload = async () => {
     const r = await GET(`/api/devices/${enc(id)}`);
@@ -3221,6 +3398,7 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     };
     const ub = qs("[data-unhide]", head);
     if (ub) ub.onclick = () => saveRules(ub, (rs) => setExactRule(rs, key, "alert"));
+    drawExplain();
   };
 
   const drawFacts = () => {
@@ -3255,6 +3433,7 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
         ${rows.map(([n, t, s]) => `<tr><td>${esc(n)}</td><td>${esc(t)}</td><td class="muted small nowrap">${esc(s)}</td></tr>`).join("")}</tbody></table></div>`
       : `<p class="muted small">${c && (c.metrics || []).length ? "Für die Werte dieses Checks gilt keine Grenze – der Zustand kommt vom Gerät selbst." : "Dieser Check hat keine Messwerte; der Zustand kommt vom Gerät selbst (z. B. Dienst läuft / gestoppt)."}</p>`) +
       (c && isQuiet(c) ? `<p class="t-sub" style="margin-top:8px">Nur Anzeige: Grenzen werden ausgewertet, lösen aber keinen Alarm aus.</p>` : "");
+    drawExplain();
   };
 
   // series of this check: by check_key; series stored before the key was known by name+instance

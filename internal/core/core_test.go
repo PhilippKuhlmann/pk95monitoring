@@ -453,3 +453,21 @@ func TestPersistAndReload(t *testing.T) {
 		t.Fatalf("reloaded: %+v open=%d thr=%v", st, len(c2.open), c2.rt[id].thr)
 	}
 }
+
+func TestRedundantInstance(t *testing.T) {
+	for _, tc := range []struct {
+		name, inst string
+		want       bool
+	}{
+		{"Platte nvme1n1 (srv-pve01)", "srv-pve01/nvme1n1", true},
+		{"ZFS tank (pve3)", "pve3/tank", true},
+		{"Festplatte /", "/", false},
+		{"Festplatte /var", "/var", false},
+		{"Speicher local (pve1)", "pve2/local", false},
+		{"CPU", "", false},
+	} {
+		if got := redundantInstance(tc.name, tc.inst); got != tc.want {
+			t.Errorf("redundantInstance(%q, %q) = %v", tc.name, tc.inst, got)
+		}
+	}
+}

@@ -498,6 +498,11 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   card section (sparks requested with the agent's id). Proxmox nodes, guests and storage, switch ports and
   toner stay tables/lists with a sparkline column. Sparks are cached per device for about a minute (one
   request per device and attached agent per refresh). Tab "Alle Diagramme" = the former chart tab.
+- Check page, "Was bedeutet das?" (`EXPLAIN` per metric, `EXPLAIN_CHECKS` for states without a metric): for a
+  warn/crit check every metric over its effective threshold gets what it measures, why it matters and what to do
+  (commands with the disk, pool or service filled in); without such a metric the matching check explanation
+  (service stopped, SMART FAILED, pool degraded, …). The other metrics' explanations are folded below.
+  Reasons leave out a "node/device" instance the check name already holds ("Platte sdc (pve3)").
 - Check page `/devices/<id>/checks/<key>`: every card and table row (incl. each switch port) opens it. Header
   with back link (attached agent: parent `#agent-<id>`), mode menu and "Jetzt prüfen"; current value; one chart
   per metric of the check (pairs like rx/tx and used/total share one) for 1 h … 1 y via `/series` + `/metrics`;

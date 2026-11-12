@@ -95,6 +95,22 @@ func instanceLabel(label, instance string) string {
 	return label + " " + instance
 }
 
+// redundantInstance reports whether the check name already names every part of a
+// "node/device" instance ("Platte nvme1n1 (pve1)" for "pve1/nvme1n1").
+func redundantInstance(name, inst string) bool {
+	parts := strings.Split(inst, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	low := strings.ToLower(name)
+	for _, p := range parts {
+		if p == "" || !strings.Contains(low, strings.ToLower(p)) {
+			return false
+		}
+	}
+	return true
+}
+
 func metricUnit(m model.Metric) string {
 	if m.Unit != "" {
 		return m.Unit
@@ -170,7 +186,11 @@ func thresholdsOf(ch model.Check, lists ...[]model.Threshold) thrResult {
 		if t.Below {
 			op = "≤"
 		}
-		label := instanceLabel(MetricLabel(m.Name), m.Instance)
+		inst := m.Instance
+		if redundantInstance(ch.Name, inst) {
+			inst = "" // "Platte nvme1n1 (pve1)": not "Medienfehler pve1/nvme1n1"
+		}
+		label := instanceLabel(MetricLabel(m.Name), inst)
 		text := label + " " + fmtValue(m.Value, unit) + " " + op + " " + fmtLimit(limit, unit)
 		if model.Rank(st) > model.Rank(r.state) {
 			r.state, r.count, reasons = st, max(t.Count, 1), nil
