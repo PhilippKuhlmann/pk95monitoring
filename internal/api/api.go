@@ -124,6 +124,7 @@ func (s *Server) routes() {
 	a("POST /api/devices/{id}/detach", s.detach)
 	a("GET /api/devices/{id}/series", s.series)
 	a("GET /api/devices/{id}/metrics", s.metrics)
+	a("GET /api/devices/{id}/sparks", s.sparks)
 	a("POST /api/probe", s.probe)
 	a("POST /api/test/proxmox", s.testProxmox)
 	a("POST /api/test/snmp", s.testSNMP)
@@ -528,8 +529,9 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 
 // ---- static ----
 
-// static serves the web UI. Page paths (no dot, e.g. /devices/abc) get index.html; fonts are
-// cached for a year, everything else is revalidated.
+// static serves the web UI. Page paths (no dot, e.g. /devices/abc, or anything below /devices/,
+// whose check pages /devices/<id>/checks/<key> may carry keys like svc:ssh.service) get
+// index.html; fonts are cached for a year, everything else is revalidated.
 func (s *Server) static() http.Handler {
 	files := http.FileServerFS(s.Web)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -543,7 +545,7 @@ func (s *Server) static() http.Handler {
 			return
 		}
 		p := strings.TrimPrefix(r.URL.Path, "/")
-		if p == "" || !strings.Contains(p, ".") {
+		if p == "" || !strings.Contains(p, ".") || strings.HasPrefix(p, "devices/") {
 			r2 := r.Clone(r.Context())
 			r2.URL.Path = "/"
 			w.Header().Set("Cache-Control", "no-cache")

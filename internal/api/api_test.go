@@ -356,7 +356,9 @@ func TestStaticSPA(t *testing.T) {
 		s.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
 		return rec
 	}
-	for _, path := range []string{"/", "/devices", "/devices/abc", "/alerts", "/settings", "/events/"} {
+	for _, path := range []string{"/", "/devices", "/devices/abc", "/alerts", "/settings", "/events/",
+		"/devices/abc/checks/cpu", "/devices/abc/checks/svc%3Assh.service", "/devices/abc/checks/if%3Aeth0.100",
+		"/devices/abc/checks/disk%3A%2F", "/devices/abc/checks/snmp%3Aif%3AGi1%2F0%2F1", "/devices/abc/checks/disk%3AC%3A"} {
 		rec := get("GET", path)
 		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "INDEX") || rec.Header().Get("Cache-Control") != "no-cache" {
 			t.Errorf("%s: %d %q cache=%q", path, rec.Code, rec.Body.String(), rec.Header().Get("Cache-Control"))

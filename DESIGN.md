@@ -333,6 +333,17 @@ Authenticated:
 - `POST /api/devices/{id}/maintenance {until, note}` (until 0 = end) → Device
 - `GET /api/devices/{id}/series` → `{series:[{id, device_id, name, instance, unit, check_key, last_value, last_ts}]}`
 - `GET /api/devices/{id}/metrics?series=1,2&range=1h|6h|24h|7d|30d|1y` (default 24h, at most 16 series; step ≥ poll interval) → `{from, to, step, series:[{id, name, instance, unit, points:[[ts, avg, min, max], …]}]}`
+- `GET /api/devices/{id}/sparks?range=1h|6h|24h` (default 6h; other ranges 400) → `{from, to, step, capped,
+  series:[{id, check_key, name, instance, unit, last, last_ts, values:[number|null, …]}]}`: every series of the device
+  (ordered by name, instance) for the check overview of the device page. `values` are bucket averages, oldest first;
+  `step` = span / 48, at least the poll interval in whole minutes (so 48 buckets, fewer for slowly polled devices),
+  buckets aligned to multiples of `step`, the last one contains `to`, `from` = start of the first bucket; empty
+  buckets are `null`; 6 significant digits. `last` = latest value (full precision, `null` without one). At most 600
+  series (the most recently updated ones win, `capped: true`; otherwise `capped: false`); one store query for all
+  series (600 series × 6 h of 60 s samples: ≈ 0.2 s). An attached agent is queried with its own id.
+- UI route `/devices/<id>/checks/<encodeURIComponent(check key)>` = check detail page (charts over time via
+  `/series` + `/metrics`). The server answers every path below `/devices/` with `index.html`, even with a dot
+  in it (keys like `svc:ssh.service`, `if:eth0.100`).
 - `POST /api/probe {host, port}` → `{fingerprint}` (TLS fingerprint for Proxmox)
 - `POST /api/test/proxmox {id?, host, proxmox}` → `{ok, version, nodes:[…], guests, message}`
 - `POST /api/test/snmp {id?, host, snmp}` → `{ok, sys_name, sys_descr, profile, interfaces:[{name, descr, alias, speed, oper}], message}`
@@ -417,7 +428,13 @@ starts) is back-filled for 7 days so charts show data.
 
 ## Web UI notes
 
-- Per-port charts: the SNMP port table opens an inline chart per port (Empfangen/Gesendet, Fehler, PoE-Leistung;
-  1 h … 1 y) from the series with instance = port name (`if.rx`, `if.tx`, `if.errors`, `poe.port`) via
-  `GET /api/devices/{id}/series` and `/metrics`; no extra endpoint.
+- Device page, tab "Übersicht": every check as a card (name, primary value, second line, usage bar, 6 h
+  sparkline from `GET /api/devices/{id}/sparks`, reason), grouped as before; attached agents get their own
+  card section (sparks requested with the agent's id). Proxmox nodes, guests and storage, switch ports and
+  toner stay tables/lists with a sparkline column. Sparks are cached per device for about a minute (one
+  request per device and attached agent per refresh). Tab "Alle Diagramme" = the former chart tab.
+- Check page `/devices/<id>/checks/<key>`: every card and table row (incl. each switch port) opens it. Header
+  with back link (attached agent: parent `#agent-<id>`), mode menu and "Jetzt prüfen"; current value; one chart
+  per metric of the check (pairs like rx/tx and used/total share one) for 1 h … 1 y via `/series` + `/metrics`;
+  values and facts; effective thresholds; alert history (`/api/alerts?device=<id>&state=all`, filtered by key).
 - Device types in the UI: Proxmox VE, Agent, SNMP, Netzwerk, "USV (NUT)".

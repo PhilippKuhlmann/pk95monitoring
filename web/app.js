@@ -593,6 +593,7 @@ const PAGES = {};
 function route(p) {
   if (PAGES[p]) return PAGES[p];
   if (/^\/devices\/[^/]+$/.test(p)) return PAGES["/devices/:id"];
+  if (/^\/devices\/[^/]+\/checks\/[^/]+$/.test(p)) return PAGES["/devices/:id/checks/:key"];
   return PAGES["/"];
 }
 
@@ -1264,7 +1265,9 @@ function deviceForm(dev, type, done) {
 }
 
 // ---------- device detail ----------
-const DTABS = [["overview", "Übersicht", "home"], ["charts", "Diagramme", "chart"], ["alerts", "Alarme", "bell"], ["settings", "Einstellungen", "cog"]];
+// The overview shows every monitored check as a card (tables for large groups); a check opens its
+// own page with the charts. "Alle Diagramme" is the free multi-series view.
+const DTABS = [["overview", "Übersicht", "apps"], ["charts", "Alle Diagramme", "chart"], ["alerts", "Alarme", "bell"], ["settings", "Einstellungen", "cog"]];
 
 PAGES["/devices/:id"] = async (el, token) => {
   const id = decodeURIComponent(location.pathname.slice("/devices/".length));
@@ -1276,7 +1279,10 @@ PAGES["/devices/:id"] = async (el, token) => {
     return;
   }
   if (token !== pageToken) return;
-  let tab = DTABS.some(([k]) => k === location.hash.slice(1)) ? location.hash.slice(1) : "overview";
+  // #agent-<id> (back link of an attached agent's check page) opens the overview at that agent
+  const hash = location.hash.slice(1);
+  let tab = DTABS.some(([k]) => k === hash) ? hash : "overview";
+  let scrollAgent = hash.startsWith("agent-") ? decodeURIComponent(hash.slice("agent-".length)) : "";
   let seq = 0;
   el.innerHTML = `<div data-head></div><div class="tabs" role="tablist" aria-label="Ansicht">${DTABS.map(([k, l, ic]) => `<button type="button" role="tab" id="tab-${k}" aria-controls="tabpanel" data-tab="${k}" aria-selected="${k === tab}" tabindex="${k === tab ? 0 : -1}">${icon(ic)}${l}</button>`).join("")}</div><div data-body id="tabpanel" role="tabpanel"></div>`;
   const head = qs("[data-head]", el), body = qs("[data-body]", el);
@@ -1389,15 +1395,20 @@ PAGES["/devices/:id"] = async (el, token) => {
     const scroll = Object.fromEntries(qsa("[data-keep-scroll]", body).map((x) => [x.dataset.keepScroll, x.scrollTop]));
     const open = Object.fromEntries(qsa("details[data-keep]", body).map((x) => [x.dataset.keep, x.open]));
     const st = view();
-    body.innerHTML = checksView(data.device, st, attachedViews());
+    const att = attachedViews();
+    body.innerHTML = checksView(data.device, st, att);
     bindCopy(body);
-    const pc = portChart.get(id);
-    if (pc) openPortChart(body, id, pc.port, ovAlive, { restore: true });
-    onResize = () => { if (ovAlive() && portChart.has(id)) drawPortCharts(body, id); };
     qsa("[data-keep-scroll]", body).forEach((x) => { if (scroll[x.dataset.keepScroll]) x.scrollTop = scroll[x.dataset.keepScroll]; });
     qsa("details[data-keep]", body).forEach((x) => { if (open[x.dataset.keep]) x.open = true; });
-    if (fk) { const n = qs(`[data-fk="${CSS.escape(fk)}"]`, body); if (n) n.focus(); }
+    if (fk) { const n = qs(`[data-fk="${CSS.escape(fk)}"]`, body); if (n) n.focus({ preventScroll: true }); }
+    if (scrollAgent) {
+      const sec = qs(`[data-att="${CSS.escape(scrollAgent)}"]`, body);
+      scrollAgent = "";
+      if (sec) requestAnimationFrame(() => sec.scrollIntoView({ block: "start" }));
+    }
     bindOverview(st);
+    // sparklines: one request per device (and attached agent) and minute, never one per card
+    loadSparks([id, ...att.map((a) => a.device.id)]).then((got) => { if (got && ovAlive()) fillSparks(body); }).catch(() => {});
   };
   const bindOverview = (st) => {
     const dv = data.device;
@@ -1438,21 +1449,10 @@ PAGES["/devices/:id"] = async (el, token) => {
       qsa("[data-pf]", sec).forEach((x) => x.setAttribute("aria-pressed", x === b));
       let n = 0;
       qsa("tr[data-pst]", sec).forEach((tr) => { tr.hidden = !portShown(tr.dataset.pst, f); if (!tr.hidden) n++; });
-      qsa("tr.pt-chart-row", sec).forEach((tr) => { const pr = tr.previousElementSibling; tr.hidden = !!(pr && pr.hidden); });
       const none = qs("tr.pt-none", sec);
       if (none) none.hidden = n > 0;
     });
-    // per-port charts: the chart button (keyboard) or a click anywhere on the row
-    const togglePort = (name, focus) => {
-      const pc = portChart.get(id);
-      if (pc && pc.port === name && qs("tr.pt-chart-row", body)) closePortChart(body, id, focus);
-      else openPortChart(body, id, name, ovAlive);
-    };
-    qsa("[data-port-chart]", body).forEach((b) => b.onclick = () => togglePort(b.dataset.portChart, true));
-    qsa("tr[data-port-row]", body).forEach((tr) => tr.onclick = (e) => {
-      if (e.target.closest("button, a, input, label, select, textarea") || String(getSelection() || "")) return;
-      togglePort(tr.dataset.portRow, false);
-    });
+    bindRowLinks(body);
     qsa("[data-port-alarm]", body).forEach((cb) => cb.onchange = async () => {
       const name = cb.dataset.portAlarm, descr = cb.dataset.descr, on = cb.checked;
       const same = (x) => lc(x) === lc(name) || (descr && lc(x) === lc(descr));
@@ -1776,18 +1776,27 @@ function modeMenu(btn, { title, current, hint = "", onPick }) {
   (items.find((b) => b.dataset.m === current) || items[0]).focus();
 }
 
+// bindRowLinks: table rows (and toner lines) with data-href open their check page on a click
+// anywhere outside the controls; the real link in the first cell serves keyboard and middle click.
+function bindRowLinks(root) {
+  qsa("[data-href]", root).forEach((row) => row.onclick = (e) => {
+    if (e.target.closest("button, a, input, label, select, textarea, summary") || String(getSelection() || "")) return;
+    if (e.metaKey || e.ctrlKey) { window.open(row.dataset.href, "_blank", "noopener"); return; }
+    go(row.dataset.href);
+  });
+}
+
 // ---------- check views ----------
 const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Eigene Werte", "Netzwerk-Checks"];
-function kindOf(key) {
+// tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
+// toner); every other check is a card.
+function tableKind(key) {
   if (key.startsWith("pve:node:")) return "node";
   if (/^pve:(vm|ct):/.test(key)) return "guest";
-  if (/^pve:(storage|zfs):/.test(key) || key.startsWith("disk:") || key.startsWith("snmp:storage:")) return "storage";
-  if (key.startsWith("snmp:if:") || key.startsWith("if:")) return "iface";
-  if (key === "snmp:ups" || key.startsWith("nut:")) return "ups";
-  if (key === "snmp:poe") return "poe";
-  if (key.startsWith("snmp:temp:") || key.startsWith("snmp:fan:")) return "sensor";
+  if (/^pve:(storage|zfs):/.test(key)) return "storage";
+  if (key.startsWith("snmp:if:")) return "port";
   if (key.startsWith("snmp:toner:")) return "toner";
-  return "generic";
+  return "";
 }
 const firstMetric = (c, pred) => (c.metrics || []).find(pred);
 // An instance that already names the metric stands alone ("Magenta Toner", not "Toner Magenta Toner").
@@ -1812,23 +1821,223 @@ function modeBtn(c) {
   const q = isQuiet(c);
   return `<button class="ib sm-ib ck-mode ${q ? "quiet" : ""}" type="button" data-mode-key="${esc(c.key)}" data-fk="m:${esc(c.key)}" aria-haspopup="menu" aria-expanded="false" title="Überwachung: ${q ? "nur anzeigen" : "überwachen"}" aria-label="Überwachung von ${esc(c.name)} einstellen">${icon("eye")}</button>`;
 }
+// cardTone: colour of a check card, its left bar and its sparkline.
+const cardTone = (c) => (isQuiet(c) ? "quiet" : ["ok", "warn", "crit"].includes(c.state) ? c.state : "unknown");
 
-function checkRow(c) {
-  const ms = (c.metrics || []).slice(0, 8);
-  const facts = c.facts ? Object.entries(c.facts) : [];
-  return `<div class="row ck-row ${isQuiet(c) ? "is-quiet" : ""}"><span class="ck-st">${ckPill(c)}</span><div class="grow">
-      <div class="title"><b>${esc(c.name)}</b>${pendingTag(c)}</div>
-      ${reasonText(c) || MUTED_TITLE[c.muted] ? `<div class="body">${reasonHTML(c)}</div>` : ""}${c.reason && c.msg && c.reason !== c.msg ? `<div class="t-sub">${esc(c.msg)}</div>` : ""}
-      ${ms.length ? `<div class="ck-metrics">${ms.map(metricChip).join("")}</div>` : ""}
-      ${facts.length ? `<table class="kv ck-facts">${facts.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>` : ""}</div>
-    <span class="ck-since t-sub">${sinceCell(c)}</span>${c.key !== REACH_KEY ? `<span class="ck-act">${modeBtn(c)}</span>` : ""}</div>`;
-}
+// checkPath is the URL of the check page; ":" stays readable, "/" is encoded.
+const checkPath = (devId, key) => `/devices/${enc(devId)}/checks/${enc(key).replace(/%3A/gi, ":")}`;
+// ckLink: the real link in the first cell of a check row (the whole row opens the page on click, too).
+const ckLink = (devId, c, html) => `<a class="row-main" href="${checkPath(devId, c.key)}" data-go data-fk="r:${esc(c.key)}">${html}</a>`;
+const rowLink = (devId, c) => `data-href="${checkPath(devId, c.key)}"`;
+const instOf = (c, n) => { const m = (c.metrics || []).find((x) => x.n === n); return m ? m.i || "" : undefined; };
 
 // tableOf renders a check table; the last column holds the mode button of each row.
+// Heads starting with "#" are numeric columns, with "~" the sparkline column.
 function tableOf(head, rows) {
-  return `<div class="table-wrap"><table class="resp ck-table"><thead><tr>${head.map((h) => `<th${h.startsWith("#") ? ' class="num"' : ""}>${esc(h.replace(/^#/, ""))}</th>`).join("")}<th><span class="sr-only">Überwachung</span></th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  const th = (h) => h.startsWith("#") ? `<th class="num">${esc(h.slice(1))}</th>` : h.startsWith("~") ? `<th class="spark-h">${esc(h.slice(1))}</th>` : `<th>${esc(h)}</th>`;
+  return `<div class="table-wrap"><table class="resp ck-table"><thead><tr>${head.map(th).join("")}<th><span class="sr-only">Überwachung</span></th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 const actTd = (c) => `<td class="act ck-act">${modeBtn(c)}</td>`;
+
+// ---------- sparklines (GET /api/devices/{id}/sparks: one request per device and minute) ----------
+const SPARK_RANGE = "6h";
+const sparkCache = new Map(); // device id → {at, missing, byKey: Map(check key → [series])}
+const sparkLoading = new Map(); // device id → pending request
+// loadSparks fetches the sparklines of the devices whose data are older than a minute; an older
+// server without the endpoint (404) is asked again after 10 minutes, the cards render without.
+// Returns true when something was requested.
+async function loadSparks(ids) {
+  const now = Date.now();
+  const todo = [...new Set(ids)].filter((id) => {
+    const c = sparkCache.get(id);
+    return !sparkLoading.has(id) && (!c || now - c.at > (c.missing ? 600000 : 55000));
+  });
+  await Promise.all(todo.map((id) => {
+    const p = (async () => {
+      try {
+        const r = await GET(`/api/devices/${enc(id)}/sparks?range=${SPARK_RANGE}`);
+        const byKey = new Map();
+        for (const s of r.series || []) {
+          const k = s.check_key || "";
+          if (!byKey.has(k)) byKey.set(k, []);
+          byKey.get(k).push(s);
+        }
+        sparkCache.set(id, { at: Date.now(), byKey });
+      } catch (e) {
+        if (e.status === 404) sparkCache.set(id, { at: Date.now(), missing: true, byKey: new Map() });
+      }
+    })().finally(() => sparkLoading.delete(id));
+    sparkLoading.set(id, p);
+    return p;
+  }));
+  return todo.length > 0;
+}
+// sparkSVG draws bucket values (oldest first, null = gap) as area and line; b is drawn as a
+// dashed second line on the same scale (sent next to received).
+function sparkSVG(a, b, unit) {
+  const all = [...a, ...(b || [])].filter(isNum).map(Number);
+  if (!all.length) return "";
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (unit === "%") { lo = Math.min(0, lo); hi = Math.max(100, hi); }
+  else if (["°C", "V", "d", "min", "rpm"].includes(unit)) { const pad = Math.max((hi - lo) * 0.25, Math.abs(hi) * 0.02, 0.5); lo -= pad; hi += pad; }
+  else { lo = Math.min(0, lo); hi = hi > lo ? hi + (hi - lo) * 0.12 : lo + 1; }
+  if (!(hi > lo)) hi = lo + 1;
+  const W = 100, H = 30, n = Math.max(a.length, b ? b.length : 0);
+  const X = (i) => (n > 1 ? (i * W) / (n - 1) : W / 2);
+  const Y = (v) => H - 1 - ((v - lo) / (hi - lo)) * (H - 2);
+  const f = (x) => x.toFixed(2);
+  const segs = (vals) => {
+    const out = [];
+    let cur = [];
+    vals.forEach((v, i) => { if (!isNum(v)) { if (cur.length) out.push(cur); cur = []; } else cur.push([X(i), Y(Number(v))]); });
+    if (cur.length) out.push(cur);
+    return out;
+  };
+  // a single point between gaps becomes a short dash so it stays visible
+  const line = (g) => (g.length === 1 ? `M${f(Math.max(0, g[0][0] - 1))} ${f(g[0][1])}H${f(Math.min(W, g[0][0] + 1))}` : "M" + g.map(([x, y]) => `${f(x)} ${f(y)}`).join("L"));
+  let s = `<svg class="spk-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true" focusable="false">`;
+  for (const g of segs(a)) if (g.length > 1) s += `<path class="spk-a" d="${line(g)}L${f(g[g.length - 1][0])} ${H}L${f(g[0][0])} ${H}Z"/>`;
+  if (b) for (const g of segs(b)) s += `<path class="spk-l2" d="${line(g)}"/>`;
+  for (const g of segs(a)) s += `<path class="spk-l" d="${line(g)}"/>`;
+  return s + "</svg>";
+}
+// sparkInner draws the sparkline of a check from the cache: names[0] (instance inst when given) and
+// optionally names[1] as second line. Empty when there are no data (yet).
+function sparkInner(devId, key, names, inst) {
+  const c = sparkCache.get(devId);
+  const list = (c && c.byKey.get(key)) || [];
+  const pick = (n) => list.find((s) => s.name === n && (inst === undefined || (s.instance || "") === inst)) || list.find((s) => s.name === n);
+  const a = pick(names[0]);
+  if (!a) return "";
+  const b = names[1] ? pick(names[1]) : null;
+  return sparkSVG(a.values || [], b ? b.values || [] : null, a.unit || metricUnitOf(a.name));
+}
+// sparkBox reserves the space of a sparkline (no layout shift when the data arrive later) and
+// fills it from the cache; fillSparks refills every box after a request.
+function sparkBox(devId, key, sp, tone, cls) {
+  return `<div class="${cls} spk t-${tone}" data-sdev="${esc(devId)}" data-skey="${esc(key)}" data-sn="${esc(sp.names.join(","))}"${sp.inst !== undefined ? ` data-si="${esc(sp.inst)}"` : ""}>${sparkInner(devId, key, sp.names, sp.inst)}</div>`;
+}
+function fillSparks(root) {
+  qsa("[data-skey]", root).forEach((el) => { el.innerHTML = sparkInner(el.dataset.sdev, el.dataset.skey, el.dataset.sn.split(","), el.dataset.si); });
+}
+
+// ---------- check cards ----------
+const SPARK_SKIP = new Set(["uptime", "procs", "printer.pages", "http.status", "mem.used", "mem.total", "disk.used", "disk.total", "storage.used", "storage.total", "poe.budget", "updates.security"]);
+const cap1 = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+// stateWord: the state of a check as a short word – its message when that is short ("Läuft", "Gestoppt").
+function stateWord(c) {
+  const m = String(c.msg || "").trim();
+  if (m && m.length <= 28) return [cap1(m), true];
+  return [(STATES[c.state] || STATES.unknown)[0], false];
+}
+// ofTotal: "6,1 von 16 GiB" (the unit once when both share it).
+function ofTotal(used, total) {
+  const a = fmtBytes(used), b = fmtBytes(total);
+  return a.split(" ")[1] === b.split(" ")[1] ? `${a.split(" ")[0]} von ${b}` : `${a} von ${b}`;
+}
+// cardValue picks the primary value of a check card from its metrics: {text, sub, bar, low,
+// rxtx, word, fromMsg, generic, spark: {names, inst}}. Counts shown as words (updates, failed
+// units, event log errors) get no sparkline – a flat line of small integers is noise; their
+// check page has the chart.
+function cardValue(c) {
+  const v = (n) => mval(c, n), has = (n) => isNum(v(n));
+  const sp = (n, n2) => ({ names: n2 ? [n, n2] : [n], inst: instOf(c, n) });
+  const fa = c.facts || {};
+  if (has("ups.battery")) {
+    const sub = [has("ups.runtime") ? `Restlaufzeit ${fmtVal(v("ups.runtime"), "min")}` : "", has("ups.load") ? `Last ${fmtPct(v("ups.load"))}` : ""].filter(Boolean).join(" · ");
+    return { text: `Akku ${fmtPct(v("ups.battery"))}`, sub, spark: sp("ups.battery") };
+  }
+  if (has("poe.power")) {
+    const bud = v("poe.budget"), u = has("poe.usage") ? v("poe.usage") : isNum(bud) && bud > 0 ? (v("poe.power") * 100) / bud : null;
+    return { text: isNum(bud) ? `${fmtVal(v("poe.power"), "W")} von ${fmtVal(bud, "W")}` : fmtVal(v("poe.power"), "W"), sub: isNum(u) ? `Auslastung ${fmtPct(u)}` : "", bar: u, spark: sp("poe.power") };
+  }
+  for (const [rx, tx] of [["net.rx", "net.tx"], ["if.rx", "if.tx"]]) {
+    if (!has(rx) && !has(tx)) continue;
+    const er = v("if.errors");
+    return { rxtx: [v(rx), v(tx)], text: `Empfangen ${fmtVal(v(rx), "B/s")}, gesendet ${fmtVal(v(tx), "B/s")}`,
+      sub: isNum(er) && er > 0 ? `Fehler ${fmtVal(er, "1/s")}` : fa.Geschwindigkeit || "", spark: sp(rx, tx) };
+  }
+  if (has("http.time")) return { text: fmtVal(v("http.time"), "ms"), sub: [has("http.status") ? `HTTP ${fmtNum(v("http.status"), 0)}` : "", has("cert.days") ? `Zertifikat ${fmtVal(v("cert.days"), "d")}` : ""].filter(Boolean).join(" · "), spark: sp("http.time") };
+  if (has("ping.rtt")) return { text: fmtVal(v("ping.rtt"), "ms"), sub: has("ping.loss") ? `${fmtPct(v("ping.loss"))} Verlust` : "", spark: sp("ping.rtt") };
+  if (has("tcp.time")) return { text: fmtVal(v("tcp.time"), "ms"), sub: "Verbindungsaufbau", spark: sp("tcp.time") };
+  if (has("dns.time")) return { text: fmtVal(v("dns.time"), "ms"), sub: "Antwortzeit", spark: sp("dns.time") };
+  if (has("cert.days")) return { text: fmtVal(v("cert.days"), "d"), sub: "Zertifikat gültig", spark: sp("cert.days") };
+  if (has("cpu.usage")) return { text: fmtPct(v("cpu.usage")), sub: has("cpu.load1") ? `Load ${fmtNum(v("cpu.load1"), 2)}` : "", spark: sp("cpu.usage") };
+  if (has("mem.usage")) return { text: fmtPct(v("mem.usage")), sub: has("mem.used") && v("mem.total") > 0 ? ofTotal(v("mem.used"), v("mem.total")) : "", spark: sp("mem.usage") };
+  if (has("swap.usage")) return { text: fmtPct(v("swap.usage")), sub: "belegt", spark: sp("swap.usage") };
+  for (const n of ["disk", "storage"]) {
+    if (!has(n + ".usage")) continue;
+    const used = v(n + ".used"), tot = v(n + ".total");
+    return { text: fmtPct(v(n + ".usage")), sub: isNum(used) && tot > 0 ? `${fmtBytes(Math.max(0, tot - used))} frei von ${fmtBytes(tot)}` : "", bar: v(n + ".usage"), spark: sp(n + ".usage") };
+  }
+  if (has("guest.cpu")) return { text: fmtPct(v("guest.cpu")), sub: has("guest.mem") ? `Arbeitsspeicher ${fmtPct(v("guest.mem"))}` : "", spark: sp("guest.cpu") };
+  if (has("printer.toner")) return { text: fmtPct(v("printer.toner")), sub: "Füllstand", bar: v("printer.toner"), low: true, spark: sp("printer.toner") };
+  if (has("temp")) { const m = firstMetric(c, (x) => x.n === "temp" && isNum(x.v)); return { text: fmtVal(m.v, "°C"), sub: m.i && !String(c.name).includes(m.i) ? m.i : "Temperatur", spark: sp("temp") }; }
+  if (has("fan.rpm")) return { text: fmtVal(v("fan.rpm"), "rpm"), sub: "Drehzahl", spark: sp("fan.rpm") };
+  if (has("updates.pending")) {
+    const n = int(v("updates.pending")), s = int(v("updates.security"));
+    return { word: true, text: n ? `${n.toLocaleString("de-DE")} ${n === 1 ? "Update" : "Updates"}${s ? ` (${s.toLocaleString("de-DE")} Sicherheit)` : ""}` : "Aktuell" };
+  }
+  if (has("services.failed")) { const n = int(v("services.failed")); return { word: true, text: n ? `${n.toLocaleString("de-DE")} fehlgeschlagen` : "Keine Fehler" }; }
+  if (has("eventlog.errors")) { const n = int(v("eventlog.errors")); return { word: true, text: `${n.toLocaleString("de-DE")} Fehler`, sub: "in 24 Std." }; }
+  if (has("uptime")) {
+    const sub = ["Laufzeit", fa.Betriebssystem || fa.Modell || "", has("procs") ? `${fmtNum(v("procs"), 0)} Prozesse` : ""].filter(Boolean).join(" · ");
+    return { text: fmtUptime(v("uptime")), sub };
+  }
+  const m = firstMetric(c, (x) => !SPARK_SKIP.has(x.n) && isNum(x.v));
+  if (m) return { text: fmtVal(m.v, mUnit(m)), sub: m.i && !String(c.name).includes(m.i) ? instLabel(m.n, m.i) : metricLabel(m.n), spark: { names: [m.n], inst: m.i || "" }, generic: true };
+  // SSDs of a Proxmox node (pve:disk:*) have no metrics, only the wear level as a fact
+  if (fa["Verschleiß"]) return { word: true, text: `Verschleiß ${fa["Verschleiß"]}`, sub: [fa.Typ, fa["Größe"]].filter(Boolean).join(" · "), generic: true };
+  const [w, fromMsg] = stateWord(c);
+  return { word: true, text: w, fromMsg, generic: true, stateOnly: !fromMsg };
+}
+// cardMsg: the small line under the value – the reason of a problem; for cards that only show a
+// state also the message of an ok check.
+function cardMsg(c, v) {
+  const muted = isQuiet(c) && MUTED_TITLE[c.muted];
+  if (c.state !== "ok" || muted) {
+    const t = reasonText(c);
+    if (!t && !muted) return "";
+    if (v.fromMsg && t === c.msg && !muted) return "";
+    return reasonHTML(c);
+  }
+  return v.generic && !v.fromMsg && c.msg ? esc(c.msg) : "";
+}
+function thinBar(p, tone, low) {
+  const w = Math.max(0, Math.min(100, p));
+  const cls = tone === "crit" ? "bad" : tone === "warn" ? "warn" : tone === "quiet" || tone === "unknown" ? "mute" : low && p <= 25 ? "warn" : "";
+  return `<span class="svc-track"><span class="fill ${cls}" style="width:${w.toFixed(1)}%"></span></span>`;
+}
+// svcCard: one monitored check as a card. The name is a link stretched over the card (Enter and
+// click open the check page); the mode button sits above it and stays a separate control.
+function svcCard(c, devId, { mode = true } = {}) {
+  const v = cardValue(c), tone = cardTone(c);
+  // a card whose value is only the state word ("Kritisch") shows no extra state pill
+  const pillH = isQuiet(c) ? ckPill(c) : c.state !== "ok" && !v.stateOnly ? statePill(c.state) : "";
+  const stTxt = isQuiet(c) ? "Nur Anzeige" : c.state !== "ok" && !v.stateOnly ? (STATES[c.state] || STATES.unknown)[0] : "";
+  const aria = [c.name, v.text, v.sub, stTxt].filter(Boolean).join(", ");
+  const val = v.rxtx ? `<span class="svc-rx" title="Empfangen"><span aria-hidden="true">↓</span> ${esc(fmtVal(v.rxtx[0], "B/s"))}</span><span class="svc-tx" title="Gesendet"><span aria-hidden="true">↑</span> ${esc(fmtVal(v.rxtx[1], "B/s"))}</span>` : esc(v.text);
+  const msg = cardMsg(c, v);
+  return `<div class="svc-card st-${tone}">
+    <div class="svc-head"><a class="svc-link" href="${checkPath(devId, c.key)}" data-go data-fk="c:${esc(devId)}|${esc(c.key)}" aria-label="${esc(aria)} – Verlauf anzeigen">${esc(c.name)}</a>${pillH}${mode ? modeBtn(c) : ""}</div>
+    <div class="svc-val${v.rxtx ? " rxtx" : v.word ? " word" : ""}" aria-hidden="true">${val}</div>
+    ${v.sub ? `<div class="svc-sec" aria-hidden="true">${esc(v.sub)}</div>` : ""}
+    ${isNum(v.bar) ? `<div class="svc-bar" aria-hidden="true">${thinBar(v.bar, tone, v.low)}</div>` : ""}
+    ${v.spark ? sparkBox(devId, c.key, v.spark, tone, "svc-spark") : ""}
+    ${msg || c.pending ? `<div class="svc-msg">${msg}${pendingTag(c)}</div>` : ""}</div>`;
+}
+// cardsGrid: the cards of a group; very many (Windows services) show problems first and fold the rest.
+const CARD_LIMIT = 12;
+function cardsGrid(list, devId, opts = {}, keep = "") {
+  let cs = list, more = [];
+  if (cs.length > CARD_LIMIT + 4) {
+    cs = [...cs].sort(stateFirst);
+    const n = Math.max(CARD_LIMIT, cs.filter((c) => c.state !== "ok").length);
+    more = cs.slice(n); cs = cs.slice(0, n);
+  }
+  const grid = (l) => `<div class="svc-cards">${l.map((c) => svcCard(c, devId, opts)).join("")}</div>`;
+  return grid(cs) + (more.length ? `<details class="svc-more" data-keep="${esc(keep)}"><summary>${more.length} weitere anzeigen</summary>${grid(more)}</details>` : "");
+}
 
 // ---------- switch ports (snmp:if:*) ----------
 const portFilters = new Map(); // device id → all | up | down (kept across the 30-s refresh)
@@ -1858,6 +2067,9 @@ function poeCell(c) {
   if (f) return `<span class="${/^aus/i.test(f) ? "muted" : ""}">${esc(f)}</span>${sub}`;
   return isNum(w) ? esc(fmtVal(w, "W")) + sub : "";
 }
+// portTitle: "Port 7" for "7" or "Gi1/0/7"; UniFi names its ports "Port 7" already.
+const portTitle = (n) => (/^port\b/i.test(String(n)) ? String(n) : "Port " + n);
+// portView: the port table; a click on a row (or the port name) opens the port's check page with its charts.
 function portView(list, dv) {
   const watch = (dv.snmp && dv.snmp.interfaces) || [];
   const f = portFilters.get(dv.id) || "all";
@@ -1872,8 +2084,9 @@ function portView(list, dv) {
     const tone = isQuiet(c) ? "" : c.state === "crit" ? "rose" : c.state === "warn" ? "amber" : ptone;
     const extra = ps === "unknown" ? reasonText(c) : c.reason && c.reason !== c.msg ? c.reason : "";
     const poe = hasPoe ? poeCell(c) : "", nb = fa.Nachbar || "", nbp = fa["Nachbar-Port"] || "";
-    return `<tr data-pst="${ps}" data-port-row="${esc(name)}" ${portShown(ps, f) ? "" : "hidden"} class="pt-click ${ps === "up" ? "" : "pt-off"}">
-      ${td("Port", `<b>${esc(name)}</b>${pendingTag(c)}${fa.Beschreibung && fa.Beschreibung !== name ? `<div class="t-sub">${esc(fa.Beschreibung)}</div>` : ""}`, "pt-port")}
+    const hasTraffic = isNum(rx) || isNum(tx);
+    return `<tr data-pst="${ps}" ${rowLink(dv.id, c)} ${portShown(ps, f) ? "" : "hidden"} class="row-link ${ps === "up" ? "" : "pt-off"}">
+      ${td("Port", `<a class="row-main" href="${checkPath(dv.id, c.key)}" data-go data-fk="r:${esc(c.key)}" aria-label="${esc(portTitle(name))} – Verlauf anzeigen"><b>${esc(name)}</b></a>${pendingTag(c)}${fa.Beschreibung && fa.Beschreibung !== name ? `<div class="t-sub" title="${esc(fa.Beschreibung)}">${esc(fa.Beschreibung)}</div>` : ""}`, "pt-port")}
       ${td("Status", `<span class="flex pt-stl">${pill(pl, tone, !!tone && ps !== "up")}${isQuiet(c) ? `<span class="tag" title="Nur Anzeige – kein Alarm">Nur Anzeige</span>` : ""}</span>${extra || MUTED_TITLE[c.muted] && isQuiet(c) ? `<div class="t-sub">${reasonHTML({ ...c, reason: extra, msg: "" })}</div>` : ""}${isNum(er) && er > 0 ? `<div class="t-sub">Fehler ${esc(fmtVal(er, "1/s"))}</div>` : ""}`, "pt-st")}
       ${td("Geschwindigkeit", esc(fa.Geschwindigkeit || "—"), "small nowrap pt-meta" + (fa.Geschwindigkeit ? "" : " pt-empty"))}
       ${td("Alias", fa.Alias ? esc(fa.Alias) : '<span class="muted">—</span>', "small pt-meta pt-alias" + (fa.Alias ? "" : " pt-empty"))}
@@ -1881,23 +2094,18 @@ function portView(list, dv) {
       ${hasNb ? td("Nachbar", nb || nbp ? `${esc(nb || "—")}${nbp ? `<div class="t-sub mono">${esc(nbp)}</div>` : ""}` : '<span class="muted">—</span>', "small pt-meta pt-nb" + (nb || nbp ? "" : " pt-empty")) : ""}
       ${td("Empfangen", esc(isNum(rx) ? fmtVal(rx, "B/s") : "—"), "num small pt-meta" + (isNum(rx) ? "" : " pt-empty"))}
       ${td("Senden", esc(isNum(tx) ? fmtVal(tx, "B/s") : "—"), "num small pt-meta" + (isNum(tx) ? "" : " pt-empty"))}
+      <td class="spark-cell pt-spark${hasTraffic ? "" : " pt-empty"}">${hasTraffic ? sparkBox(dv.id, c.key, { names: ["if.rx", "if.tx"], inst: instOf(c, "if.rx") ?? instOf(c, "if.tx") }, cardTone(c), "tspark") : ""}</td>
       <td class="pt-alarm"><label class="check"><input type="checkbox" data-port-alarm="${esc(name)}" data-descr="${esc(fa.Beschreibung || "")}" data-fk="pa:${esc(name)}" ${on ? "checked" : ""} aria-label="Alarm bei Link-Ausfall für Port ${esc(name)}"><span class="pt-alarm-t" aria-hidden="true">Alarm bei Link-Ausfall</span></label></td>
-      <td class="act pt-chart"><button class="ib sm-ib pt-chart-btn" type="button" data-port-chart="${esc(name)}" data-fk="pc:${esc(name)}" aria-expanded="false" title="Diagramme" aria-label="Diagramme für ${esc(portTitle(name))}">${icon("chart")}<span class="pt-chart-t" aria-hidden="true">Diagramme</span></button></td>
       <td class="act ck-act pt-mode">${modeBtn(c)}</td></tr>`;
   });
   const none = !list.some((c) => portShown(portState(c), f));
   return `<div class="port-bar"><span class="muted small" data-port-count>${esc(portCount(list, watch))}</span>
       <div class="seg" role="group" aria-label="Ports filtern">${[["all", "Alle"], ["up", "Verbunden"], ["down", "Ohne Link"]].map(([k, l]) => `<button type="button" data-pf="${k}" data-fk="pf:${k}" aria-pressed="${k === f}">${l}</button>`).join("")}</div></div>
-    <div class="port-scroll" data-keep-scroll="ports"><table class="resp ck-table port-table" data-cols="${cols}"><thead><tr><th>Port</th><th>Status</th><th>Geschwindigkeit</th><th>Alias</th>${hasPoe ? "<th>PoE</th>" : ""}${hasNb ? "<th>Nachbar</th>" : ""}<th class="num">Empfangen</th><th class="num">Senden</th><th class="pt-alarm-h">Alarm bei Link-Ausfall</th><th><span class="sr-only">Diagramme</span></th><th><span class="sr-only">Überwachung</span></th></tr></thead>
+    <div class="port-scroll" data-keep-scroll="ports"><table class="resp ck-table port-table"><thead><tr><th>Port</th><th>Status</th><th>Geschwindigkeit</th><th>Alias</th>${hasPoe ? "<th>PoE</th>" : ""}${hasNb ? "<th>Nachbar</th>" : ""}<th class="num">Empfangen</th><th class="num">Senden</th><th class="spark-h" title="Datenverkehr der letzten 6 Stunden">6 Std.</th><th class="pt-alarm-h">Alarm bei Link-Ausfall</th><th><span class="sr-only">Überwachung</span></th></tr></thead>
     <tbody>${rows.join("")}<tr class="pt-none" ${none ? "" : "hidden"}><td colspan="${cols}" class="muted small">Keine Ports in dieser Auswahl.</td></tr></tbody></table></div>`;
 }
-// ---------- per-port charts (inline panel under a port row) ----------
-const PORT_RANGES = [["1h", "1 Std."], ["24h", "24 Std."], ["7d", "7 Tage"], ["30d", "30 Tage"], ["1y", "1 Jahr"]];
-const PORT_CHARTS = [["Datenverkehr", "B/s", [["if.rx", "Empfangen"], ["if.tx", "Gesendet"]]], ["Fehler", "1/s", [["if.errors", "Fehler"]]], ["PoE-Leistung", "W", [["poe.port", "PoE-Leistung"]]]];
-const PORT_METRICS = PORT_CHARTS.flatMap(([, , ms]) => ms.map(([n]) => n));
-const portChart = new Map(); // device id → {port, range, data, at, seq} of the one expanded port
-const seriesCache = new Map(); // device id → {at, series} of GET /api/devices/{id}/series
 
+const seriesCache = new Map(); // device id → {at, series} of GET /api/devices/{id}/series
 async function deviceSeries(id, maxAge = 60000) {
   const c = seriesCache.get(id);
   if (c && Date.now() - c.at < maxAge) return c.series;
@@ -1906,181 +2114,39 @@ async function deviceSeries(id, maxAge = 60000) {
   return r.series || [];
 }
 
-// portTitle: "Port 7" for "7" or "Gi1/0/7"; UniFi names its ports "Port 7" already.
-const portTitle = (n) => (/^port\b/i.test(String(n)) ? String(n) : "Port " + n);
-// portChartRow is the table row with the chart panel of one port.
-function portChartRow(devId, name, cols, range) {
-  return `<tr class="pt-chart-row" data-pc-for="${esc(name)}"><td colspan="${int(cols)}"><div class="port-chart" id="pc-${esc(devId)}" role="region" aria-label="Diagramme für ${esc(portTitle(name))}">
-    <div class="pc-head"><div class="pc-title">${icon("chart")}<b>${esc(portTitle(name))}</b><span class="muted small">Verlauf</span></div>
-      <div class="pc-tools"><div class="seg" role="group" aria-label="Zeitraum">${PORT_RANGES.map(([k, l]) => `<button type="button" data-pc-range="${k}" data-fk="pcr:${k}" aria-pressed="${k === range}">${l}</button>`).join("")}</div>
-      <button class="ib sm-ib" type="button" data-pc-close data-fk="pcx" title="Schließen" aria-label="Diagramme von ${esc(portTitle(name))} schließen">${icon("x")}</button></div></div>
-    <div class="pc-body" data-pc-body><div class="pc-msg"><span class="spinner"></span> Lade …</div></div></div></td></tr>`;
-}
-
-// drawPortCharts draws the cached data of the expanded port (no request).
-function drawPortCharts(root, devId) {
-  const st = portChart.get(devId), box = qs("[data-pc-body]", root);
-  if (!st || !box) return;
-  if (st.error) { box.innerHTML = `<div class="pc-msg bad">${esc(st.error)}</div>`; return; }
-  if (!st.data) return;
-  if (!st.data.series.length) { box.innerHTML = `<div class="pc-msg muted">Für diesen Port gibt es noch keine Messwerte. Datenverkehr wird nur für verbundene Ports aufgezeichnet.</div>`; return; }
-  const { from, to, step } = st.data;
-  const parts = PORT_CHARTS.map(([title, unit, ms]) => {
-    const list = ms.map(([n, label]) => { const x = st.data.series.find((y) => y.name === n); return x ? { ...x, label } : null; }).filter(Boolean);
-    return list.length ? { title, unit, list } : null;
-  }).filter(Boolean);
-  const last = (x) => { for (let i = (x.points || []).length - 1; i >= 0; i--) if (isNum(x.points[i][1])) return x.points[i][1]; return null; };
-  box.innerHTML = `<div class="pc-charts">${parts.map((p, i) => `<div class="pc-chart"><div class="pc-ct">${esc(p.title)}</div>
-      <div class="legend">${p.list.map((x, j) => `<span><i class="sw s${j % N_COLORS}"></i>${esc(x.label)} <b>${esc(fmtVal(last(x), p.unit))}</b></span>`).join("")}</div>
-      <div class="chart-box" tabindex="0" role="img" data-pc-chart="${i}" aria-label="${esc(`Diagramm ${p.title} für ${portTitle(st.port)} – mit den Pfeiltasten durch die Werte gehen`)}"></div></div>`).join("")}</div>
-    <div class="t-sub pc-info">${esc(fmtTime(from, true))} bis ${esc(fmtTime(to, true))}${step ? ` · ein Punkt je ${esc(fmtUptime(step))}` : ""}</div>`;
-  qsa("[data-pc-chart]", box).forEach((cb) => { const p = parts[+cb.dataset.pcChart]; drawChart(cb, p.list, p.unit, from, to, step); });
-}
-
-// loadPortChart fetches the series of the expanded port for its range and draws them.
-async function loadPortChart(root, devId, alive) {
-  const st = portChart.get(devId);
-  if (!st) return;
-  const my = ++st.seq;
-  const cur = () => alive() && portChart.get(devId) === st && st.seq === my;
-  try {
-    let ser = (await deviceSeries(devId)).filter((x) => x.instance === st.port && PORT_METRICS.includes(x.name));
-    if (!ser.length) ser = (await deviceSeries(devId, 0)).filter((x) => x.instance === st.port && PORT_METRICS.includes(x.name));
-    if (!cur()) return;
-    if (!ser.length) { st.data = { series: [] }; st.at = Date.now(); st.error = ""; drawPortCharts(root, devId); return; }
-    const box = qs("[data-pc-body]", root);
-    if (box && st.data) box.classList.add("loading");
-    const r = await GET(`/api/devices/${enc(devId)}/metrics?series=${ser.map((x) => enc(x.id)).join(",")}&range=${enc(st.range)}`);
-    if (!cur()) return;
-    st.data = { from: r.from || nowSec() - RANGE_SECS[st.range], to: r.to || nowSec(), step: r.step, series: r.series || [] };
-    st.at = Date.now(); st.error = "";
-  } catch (e) {
-    if (!cur()) return;
-    st.error = "Die Messwerte konnten nicht geladen werden: " + e.message;
-  }
-  const box = qs("[data-pc-body]", root);
-  if (box) box.classList.remove("loading");
-  drawPortCharts(root, devId);
-}
-
-// openPortChart expands the chart panel under the port row (only one port at a time).
-// restore: re-insert the panel after a redraw of the overview (cached data, reload when stale).
-function openPortChart(root, devId, name, alive, { restore = false, focus = false } = {}) {
-  qsa("tr.pt-chart-row", root).forEach((r) => r.remove());
-  qsa("[data-port-chart]", root).forEach((b) => { b.setAttribute("aria-expanded", "false"); b.removeAttribute("aria-controls"); });
-  const row = qs(`tr[data-port-row="${CSS.escape(name)}"]`, root);
-  if (!row) { if (!restore) portChart.delete(devId); return; }
-  let st = portChart.get(devId);
-  if (!st || st.port !== name) {
-    const r = lsGet("pk95mon-port-range");
-    st = { port: name, range: PORT_RANGES.some(([k]) => k === r) ? r : "24h", data: null, at: 0, seq: 0, error: "" };
-    portChart.set(devId, st);
-  }
-  const cols = +(row.closest("table").dataset.cols || 11);
-  row.insertAdjacentHTML("afterend", portChartRow(devId, name, cols, st.range));
-  const cr = row.nextElementSibling;
-  cr.hidden = row.hidden;
-  const btn = qs("[data-port-chart]", row);
-  if (btn) { btn.setAttribute("aria-expanded", "true"); btn.setAttribute("aria-controls", "pc-" + devId); }
-  qsa("[data-pc-range]", cr).forEach((b) => b.onclick = () => {
-    st.range = b.dataset.pcRange; lsSet("pk95mon-port-range", st.range);
-    qsa("[data-pc-range]", cr).forEach((x) => x.setAttribute("aria-pressed", x === b));
-    loadPortChart(root, devId, alive);
-  });
-  qs("[data-pc-close]", cr).onclick = () => closePortChart(root, devId, true);
-  qs(".port-chart", cr).addEventListener("keydown", (e) => { if (e.key === "Escape" && !e.target.closest(".chart-box")) { e.preventDefault(); closePortChart(root, devId, true); } });
-  if (st.data || st.error) drawPortCharts(root, devId);
-  if (!st.data || Date.now() - st.at > 55000) loadPortChart(root, devId, alive);
-  if (focus) { const pb = qs(`[data-pc-range="${st.range}"]`, cr); if (pb) pb.focus(); }
-}
-function closePortChart(root, devId, focus) {
-  const st = portChart.get(devId);
-  portChart.delete(devId);
-  qsa("tr.pt-chart-row", root).forEach((r) => r.remove());
-  qsa("[data-port-chart]", root).forEach((b) => { b.setAttribute("aria-expanded", "false"); b.removeAttribute("aria-controls"); });
-  if (focus && st) { const b = qs(`[data-port-chart="${CSS.escape(st.port)}"]`, root); if (b) b.focus(); }
-}
-
 const td = (label, html, cls = "") => `<td data-l="${esc(label)}"${cls ? ` class="${cls}"` : ""}>${html}</td>`;
 const stateFirst = (a, b) => RANK[b.state] - RANK[a.state] || String(a.name).localeCompare(String(b.name), "de", { numeric: true });
+const sparkTd = (devId, c, n) => `<td class="spark-cell">${isNum(mval(c, n)) ? sparkBox(devId, c.key, { names: [n], inst: instOf(c, n) }, cardTone(c), "tspark") : ""}</td>`;
 
 const KIND_VIEWS = {
-  node: (list) => tableOf(["Knoten", "CPU", "Arbeitsspeicher", "Root-Platte", "Laufzeit"], list.map((c) => {
+  node: (list, dv) => tableOf(["Knoten", "CPU", "Arbeitsspeicher", "Root-Platte", "Laufzeit", "~CPU · 6 Std."], list.map((c) => {
     const mu = mval(c, "mem.used"), mtot = mval(c, "mem.total");
     const agf = (c.facts || {}).Agent;
-    return `<tr>${td("Knoten", `<div class="flex" style="gap:8px">${ckPill(c)}<b>${esc(c.name)}</b></div>${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}${agf ? `<div class="t-sub node-agent" title="Zugeordneter Agent">${icon("desktop", "sm")}<span>${esc(agf)}</span></div>` : ""}`)}
+    return `<tr class="row-link" ${rowLink(dv.id, c)}>${td("Knoten", `<div class="flex" style="gap:8px">${ckPill(c)}${ckLink(dv.id, c, `<b>${esc(c.name)}</b>`)}</div>${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}${agf ? `<div class="t-sub node-agent" title="Zugeordneter Agent">${icon("desktop", "sm")}<span>${esc(agf)}</span></div>` : ""}`)}
       ${td("CPU", pctBar(mval(c, "cpu.usage")), "bar-cell")}
       ${td("Arbeitsspeicher", pctBar(mval(c, "mem.usage"), mtot ? `${fmtBytes(mu)} von ${fmtBytes(mtot)}` : "") + (mtot ? `<div class="t-sub">${fmtBytes(mu)} von ${fmtBytes(mtot)}</div>` : ""), "bar-cell")}
       ${td("Root-Platte", pctBar(mval(c, "disk.usage")), "bar-cell")}
-      ${td("Laufzeit", esc(isNum(mval(c, "uptime")) ? fmtUptime(mval(c, "uptime")) : "—"), "small nowrap")}${actTd(c)}</tr>`;
+      ${td("Laufzeit", esc(isNum(mval(c, "uptime")) ? fmtUptime(mval(c, "uptime")) : "—"), "small nowrap")}${sparkTd(dv.id, c, "cpu.usage")}${actTd(c)}</tr>`;
   })),
-  guest: (list) => tableOf(["Zustand", "Gast", "Status", "CPU", "Arbeitsspeicher", "#Netz ein/aus"], [...list].sort((a, b) => RANK[b.state] - RANK[a.state] || (parseInt(a.key.split(":")[2], 10) || 0) - (parseInt(b.key.split(":")[2], 10) || 0)).map((c) => {
+  guest: (list, dv) => tableOf(["Zustand", "Gast", "Status", "CPU", "Arbeitsspeicher", "#Netz ein/aus", "~CPU · 6 Std."], [...list].sort((a, b) => RANK[b.state] - RANK[a.state] || (parseInt(a.key.split(":")[2], 10) || 0) - (parseInt(b.key.split(":")[2], 10) || 0)).map((c) => {
     const kind = c.key.startsWith("pve:ct:") ? "CT" : "VM";
     const mu = mval(c, "guest.mem_used");
-    return `<tr>${td("Zustand", ckPill(c))}
-      ${td("Gast", `<span class="tag mono">${kind}</span> <b>${esc(c.name.replace(/^(VM|CT)\s+/, ""))}</b>${pendingTag(c)}`)}
+    return `<tr class="row-link" ${rowLink(dv.id, c)}>${td("Zustand", ckPill(c))}
+      ${td("Gast", `<span class="tag mono">${kind}</span> ${ckLink(dv.id, c, `<b>${esc(c.name.replace(/^(VM|CT)\s+/, ""))}</b>`)}${pendingTag(c)}`)}
       ${td("Status", `<span class="small">${reasonHTML(c, "—")}</span>`)}
       ${td("CPU", isNum(mval(c, "guest.cpu")) ? pctBar(mval(c, "guest.cpu")) : '<span class="muted">—</span>', "bar-cell")}
       ${td("Arbeitsspeicher", isNum(mval(c, "guest.mem")) ? pctBar(mval(c, "guest.mem")) + (mu ? `<div class="t-sub">${fmtBytes(mu)}</div>` : "") : '<span class="muted">—</span>', "bar-cell")}
-      ${td("Netz ein/aus", isNum(mval(c, "guest.netin")) ? `${esc(fmtVal(mval(c, "guest.netin"), "B/s"))}<div class="t-sub">${esc(fmtVal(mval(c, "guest.netout"), "B/s"))}</div>` : '<span class="muted">—</span>', "num small")}${actTd(c)}</tr>`;
+      ${td("Netz ein/aus", isNum(mval(c, "guest.netin")) ? `${esc(fmtVal(mval(c, "guest.netin"), "B/s"))}<div class="t-sub">${esc(fmtVal(mval(c, "guest.netout"), "B/s"))}</div>` : '<span class="muted">—</span>', "num small")}${sparkTd(dv.id, c, "guest.cpu")}${actTd(c)}</tr>`;
   })),
-  storage: (list) => tableOf(["Zustand", "Speicher", "Belegung", "#Frei"], [...list].sort(stateFirst).map((c) => {
+  storage: (list, dv) => tableOf(["Zustand", "Speicher", "Belegung", "#Frei", "~Belegung · 6 Std."], [...list].sort(stateFirst).map((c) => {
     const u = firstMetric(c, (m) => mUnit(m) === "%"), used = firstMetric(c, (m) => /\.used$/.test(m.n)), tot = firstMetric(c, (m) => /\.total$/.test(m.n));
-    return `<tr>${td("Zustand", ckPill(c))}
-      ${td("Speicher", `<b>${esc(c.name)}</b>${pendingTag(c)}${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}`)}
+    return `<tr class="row-link" ${rowLink(dv.id, c)}>${td("Zustand", ckPill(c))}
+      ${td("Speicher", `${ckLink(dv.id, c, `<b>${esc(c.name)}</b>`)}${pendingTag(c)}${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}`)}
       ${td("Belegung", (u ? pctBar(u.v) : '<span class="muted">—</span>') + (used && tot ? `<div class="t-sub">${fmtBytes(used.v)} von ${fmtBytes(tot.v)}</div>` : ""), "bar-cell")}
-      ${td("Frei", used && tot ? esc(fmtBytes(Math.max(0, tot.v - used.v))) : "—", "num small")}${actTd(c)}</tr>`;
-  })),
-  iface: (list) => tableOf(["Zustand", "Port", "Status", "#Empfangen", "#Gesendet", "#Fehler"], [...list].sort(stateFirst).map((c) => {
-    const rx = mval(c, "if.rx") ?? mval(c, "net.rx"), tx = mval(c, "if.tx") ?? mval(c, "net.tx"), er = mval(c, "if.errors");
-    return `<tr>${td("Zustand", ckPill(c))}${td("Port", `<b>${esc(c.name.replace(/^(Port|Netzwerk)\s+/, ""))}</b>`)}
-      ${td("Status", `<span class="small">${reasonHTML(c, "—")}</span>`)}
-      ${td("Empfangen", esc(isNum(rx) ? fmtVal(rx, "B/s") : "—"), "num small")}${td("Gesendet", esc(isNum(tx) ? fmtVal(tx, "B/s") : "—"), "num small")}
-      ${td("Fehler", esc(isNum(er) ? fmtVal(er, "1/s") : "—"), "num small")}${actTd(c)}</tr>`;
+      ${td("Frei", used && tot ? esc(fmtBytes(Math.max(0, tot.v - used.v))) : "—", "num small")}${u ? sparkTd(dv.id, c, u.n) : `<td class="spark-cell"></td>`}${actTd(c)}</tr>`;
   })),
   port: (list, dv) => portView(list, dv),
-  ups: (list) => list.map((c) => {
-    const b = mval(c, "ups.battery"), rt = mval(c, "ups.runtime"), ld = mval(c, "ups.load"), vi = mval(c, "ups.input"), vo = mval(c, "ups.output");
-    const pw = mval(c, "ups.power"), bv = mval(c, "ups.battery_voltage");
-    const temps = (c.metrics || []).filter((m) => m.n === "temp");
-    const fa = c.facts || {};
-    const facts = ["Hersteller", "Modell", "Seriennummer", "Firmware", "Akku-Datum", "Treiber"].filter((k) => fa[k]).map((k) => [k, fa[k]]);
-    for (const [k, v] of Object.entries(fa)) if (!facts.some(([x]) => x === k) && k !== "Status") facts.push([k, v]);
-    const cell = (label, html) => `<div><div class="t-sub">${esc(label)}</div>${html}</div>`;
-    const val = (v, unit) => `<div class="ups-v">${esc(fmtVal(v, unit))}</div>`;
-    return `<div class="ups-card"><div class="ups-head"><div class="flex ups-title">${icon("bolt")}<b>${esc(c.name)}</b>${ckPill(c)}${fa.Status ? `<span class="tag mono" title="Status-Kennungen des NUT-Servers">${esc(fa.Status)}</span>` : ""}</div><span class="flex"><span class="t-sub">${sinceCell(c)}</span>${modeBtn(c)}</span></div>
-      ${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="ups-msg">${reasonHTML(c)}</div>` : ""}
-      <div class="ups-grid">
-        ${cell("Akku", levelBar(b))}
-        ${cell("Last", pctBar(ld))}
-        ${cell("Restlaufzeit", val(rt, "min"))}
-        ${cell("Spannung ein / aus", `<div class="ups-v">${esc(fmtVal(vi, "V"))} / ${esc(fmtVal(vo, "V"))}</div>`)}
-        ${isNum(pw) ? cell("Leistung", val(pw, "W")) : ""}
-        ${isNum(bv) ? cell("Akkuspannung", val(bv, "V")) : ""}
-        ${temps.map((m) => cell(m.i ? `Temperatur ${m.i}` : "Temperatur", val(m.v, "°C"))).join("")}
-      </div>
-      ${facts.length ? `<table class="kv ck-facts ups-facts">${facts.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>` : ""}</div>`;
-  }).join(""),
-  poe: (list) => list.map((c) => {
-    const pw = mval(c, "poe.power"), bud = mval(c, "poe.budget"), u = mval(c, "poe.usage");
-    const use = isNum(u) ? u : isNum(pw) && bud ? (pw * 100) / bud : null;
-    return `<div class="ups-card poe-card"><div class="ups-head"><div class="flex ups-title">${icon("bolt")}<b>${esc(c.name)}</b>${ckPill(c)}</div><span class="flex"><span class="t-sub">${sinceCell(c)}</span>${modeBtn(c)}</span></div>
-      ${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="ups-msg">${reasonHTML(c)}</div>` : ""}
-      <div class="ups-grid">
-        <div><div class="t-sub">Verbrauch</div><div class="ups-v">${esc(fmtVal(pw, "W"))}</div></div>
-        <div><div class="t-sub">Budget</div><div class="ups-v">${esc(fmtVal(bud, "W"))}</div></div>
-        <div><div class="t-sub">Frei</div><div class="ups-v">${isNum(pw) && isNum(bud) ? esc(fmtVal(Math.max(0, bud - pw), "W")) : "—"}</div></div>
-        <div class="poe-use"><div class="t-sub">Auslastung</div>${pctBar(use, isNum(pw) && isNum(bud) ? `${fmtVal(pw, "W")} von ${fmtVal(bud, "W")}` : "", false, isQuiet(c) ? "" : c.state)}</div>
-      </div></div>`;
-  }).join(""),
-  sensor: (list) => tableOf(["Zustand", "Sensor", "#Wert"], [...list].sort((a, b) => (a.key.startsWith("snmp:fan:") - b.key.startsWith("snmp:fan:")) || stateFirst(a, b)).map((c) => {
-    const fan = c.key.startsWith("snmp:fan:");
-    const v = fan ? mval(c, "fan.rpm") : mval(c, "temp");
-    return `<tr>${td("Zustand", ckPill(c))}
-      ${td("Sensor", `<span class="flex sn-name">${icon(fan ? "refresh" : "pulse", "sm muted")}<b>${esc(c.name)}</b>${pendingTag(c)}</span>${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}`)}
-      ${td("Wert", esc(isNum(v) ? fmtVal(v, fan ? "rpm" : "°C") : "—"), "num")}${actTd(c)}</tr>`;
-  })),
-  toner: (list) => `<div class="toner-list">${[...list].sort(stateFirst).map((c) => { const t = mval(c, "printer.toner"); return `<div class="toner"><span class="toner-name"><span class="toner-dot ${esc(tonerColor(c.name))}"></span>${esc(c.name.replace(/^Toner\s+/, ""))}</span>${levelBar(t, "", isQuiet(c) ? "" : c.state)}<span${isQuiet(c) && MUTED_TITLE[c.muted] ? ` class="ck-muted" title="${MUTED_TITLE[c.muted]}"` : ""}>${ckPill(c, false)}</span><span>${modeBtn(c)}</span></div>`; }).join("")}</div>`,
+  toner: (list, dv) => `<div class="toner-list">${[...list].sort(stateFirst).map((c) => { const t = mval(c, "printer.toner"); return `<div class="toner row-link" ${rowLink(dv.id, c)}><a class="toner-name row-main" href="${checkPath(dv.id, c.key)}" data-go data-fk="r:${esc(c.key)}"><span class="toner-dot ${esc(tonerColor(c.name))}"></span>${esc(c.name.replace(/^Toner\s+/, ""))}</a>${levelBar(t, "", isQuiet(c) ? "" : c.state)}<span${isQuiet(c) && MUTED_TITLE[c.muted] ? ` class="ck-muted" title="${MUTED_TITLE[c.muted]}"` : ""}>${ckPill(c, false)}</span><span>${modeBtn(c)}</span></div>`; }).join("")}</div>`,
 };
 // nutStatusText turns NUT ups.status flags ("OL CHRG") into German words; unknown flags stay as they are.
 // Text that is already German (the server's test answer, e.g. "Netzbetrieb, Akku lädt") is returned unchanged.
@@ -2134,22 +2200,14 @@ function hiddenPanel(st) {
 const shortHost = (h) => lc(String(h || "").trim().split(".")[0]);
 // attLabel names an attached agent inside its parent: the node, else the agent's name.
 const attLabel = (dv) => dv.node || dv.name;
-function attRow(c) {
-  const disk = mval(c, "disk.usage");
-  const chips = (c.metrics || []).filter((m) => m.n !== "disk.usage" && !/\.(used|total)$/.test(m.n)).slice(0, 3);
-  const dot = isQuiet(c) ? "" : SDOT[c.state] || "";
-  return `<div class="row att-row ${isQuiet(c) ? "is-quiet" : ""}"><span class="sdot ${dot}" aria-hidden="true"></span><div class="grow">
-      <div class="title"><span class="sr-only">${esc(isQuiet(c) ? "Nur Anzeige" : (STATES[c.state] || STATES.unknown)[0])}: </span>${esc(c.name)}${pendingTag(c)}</div>
-      ${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}
-      ${isNum(disk) ? `<div class="att-bar">${pctBar(disk, "", false, isQuiet(c) ? "" : c.state)}</div>` : chips.length ? `<div class="ck-metrics">${chips.map(metricChip).join("")}</div>` : ""}</div></div>`;
-}
-// attSection: one attached agent with its checks, grouped and compact (details on its own page).
+const groupIndex = (g) => { const i = GROUP_ORDER.indexOf(g); return i < 0 ? 99 : i; };
+// attSection: one attached agent with its checks as cards (they open the agent's own check pages;
+// rules are changed on the agent's page, so the cards have no mode button).
 function attSection(a) {
   const dv = a.device, st = a.status || {}, ag = dv.agent || {};
   const s = devState({ ...dv, state: st.state });
   const checks = st.checks || [];
-  const gi = (g) => { const i = GROUP_ORDER.indexOf(g); return i < 0 ? 99 : i; };
-  const groups = groupBy(checks, (c) => c.group || "Weitere").sort(([x], [y]) => gi(x) - gi(y) || x.localeCompare(y, "de"));
+  const groups = groupBy(checks, (c) => c.group || "Weitere").sort(([x], [y]) => groupIndex(x) - groupIndex(y) || x.localeCompare(y, "de"));
   const sub = [
     dv.node && dv.name !== dv.node ? `<b>${esc(dv.name)}</b>` : "",
     ag.platform ? esc([ag.platform, ag.platform_version].filter(Boolean).join(" ")) : "",
@@ -2158,13 +2216,9 @@ function attSection(a) {
   ].filter(Boolean).join(" · ");
   const body = !checks.length ? `<div class="att-empty muted small">${dv.enabled === false ? "Der Agent ist deaktiviert." : "Noch kein Bericht vom Agent – läuft der Dienst pk95agent auf dem Server?"}</div>` :
     `<div class="att-groups">${groups.map(([g, list]) => {
-      const sorted = [...list].sort(stateFirst);
-      const bad = sorted.filter((c) => c.state === "crit" || c.state === "warn").length;
-      const many = sorted.length > 6;
-      const shown = many ? sorted.filter((c, i) => i < 3 || c.state !== "ok") : sorted, more = many ? sorted.filter((c) => !shown.includes(c)) : [];
+      const bad = list.filter((c) => c.state === "crit" || c.state === "warn").length;
       return `<div class="att-g"><div class="att-gh"><b>${esc(g)}</b><span class="muted small">${list.length}</span>${bad ? pill(`${bad} auffällig`, list.some((c) => c.state === "crit") ? "rose" : "amber") : ""}</div>
-        <div class="rows">${shown.map(attRow).join("")}</div>
-        ${more.length ? `<details class="att-more" data-keep="att:${esc(dv.id)}:${esc(g)}"><summary>${more.length} weitere</summary><div class="rows">${more.map(attRow).join("")}</div></details>` : ""}</div>`;
+        ${cardsGrid(list, dv.id, { mode: false }, `att:${dv.id}:${g}`)}</div>`;
     }).join("")}</div>`;
   return `<section class="panel flush ck-group wide att-group st-${s}" data-att="${esc(dv.id)}" aria-label="${esc(`Agent auf ${attLabel(dv)}`)}">
     <div class="panel-head"><div class="panel-title att-title">${icon("desktop")}<span>Host ${esc(attLabel(dv))} · Agent</span>${statePill(s)}</div>
@@ -2174,8 +2228,9 @@ function attSection(a) {
     ${body}</section>`;
 }
 
-// checksView renders the check groups of a device; att = attached agents [{device, status}],
-// shown after the node group when their node is known (Proxmox), else after the own checks.
+// checksView renders the check groups of a device: cards, and tables for large groups;
+// att = attached agents [{device, status}], shown after the node group when their node is known
+// (Proxmox), else after the own checks.
 function checksView(dv, st, att = []) {
   const checks = st.checks || [];
   const nodeGroup = (checks.find((c) => c.key.startsWith("pve:node:")) || {}).group;
@@ -2191,18 +2246,18 @@ function checksView(dv, st, att = []) {
   checks.forEach((c) => { counts[c.state in counts ? c.state : "unknown"]++; });
   const quiet = checks.filter(isQuiet).length, hidden = (st.hidden || []).filter((h) => !h.pending).length;
   const groups = groupBy(checks, (c) => c.group || "Weitere");
-  const gi = (g) => { const i = GROUP_ORDER.indexOf(g); return i < 0 ? 99 : i; };
-  groups.sort(([a], [b]) => gi(a) - gi(b) || a.localeCompare(b, "de"));
-  const summary = `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span></div>`;
+  groups.sort(([a], [b]) => groupIndex(a) - groupIndex(b) || a.localeCompare(b, "de"));
+  const summary = `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span><span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span></div>`;
   const notes = dv.notes ? `<div class="panel tight dv-notes"><span class="muted small">Notizen</span><div>${esc(dv.notes)}</div></div>` : "";
+  const order = ["node", "storage", "guest", "port", "card", "toner"];
   return summary + notes + `<div class="ck-groups">` + groups.map(([g, list]) => {
     const bad = list.filter((c) => c.state === "crit" || c.state === "warn").length;
-    const parts = groupBy(list, (c) => (c.key.startsWith("snmp:if:") ? "port" : kindOf(c.key)));
-    const order = ["node", "storage", "guest", "port", "iface", "poe", "ups", "sensor", "toner", "generic"];
+    const parts = groupBy(list, (c) => tableKind(c.key) || "card");
     parts.sort(([a], [b]) => order.indexOf(a) - order.indexOf(b));
-    const inner = parts.map(([k, cs]) => k === "generic" ? `<div class="rows">${[...cs].sort((a, b) => RANK[b.state] - RANK[a.state]).map(checkRow).join("")}</div>`
-      : k === "ups" || k === "toner" || k === "poe" ? `<div class="ck-pad">${KIND_VIEWS[k](cs, dv)}</div>` : KIND_VIEWS[k](cs, dv)).join("");
-    const wide = parts.some(([k]) => ["node", "guest", "port", "iface", "storage"].includes(k)) || list.length > 6;
+    const inner = parts.map(([k, cs]) => k === "card" ? `<div class="ck-pad">${cardsGrid(cs, dv.id, {}, "more:" + g)}</div>`
+      : k === "toner" ? `<div class="ck-pad">${KIND_VIEWS.toner(cs, dv)}</div>` : KIND_VIEWS[k](cs, dv)).join("");
+    const cards = parts.reduce((n, [k, cs]) => n + (k === "card" ? cs.length : 0), 0);
+    const wide = parts.some(([k]) => ["node", "guest", "port", "storage"].includes(k)) || cards > 4;
     const gb = groupModeBtn(st, g);
     return `<section class="panel flush ck-group ${wide ? "wide" : ""}" data-group="${esc(g)}"><div class="panel-head"><div class="panel-title">${esc(g)} <span class="muted small">${list.length}</span></div>${bad || gb ? `<div class="actions">${bad ? pill(`${bad} auffällig`, list.some((c) => c.state === "crit") ? "rose" : "amber") : ""}${gb}</div>` : ""}</div>${inner}</section>` +
       (g === nodeGroup ? underNode.map(attSection).join("") : "");
@@ -2212,11 +2267,11 @@ function checksView(dv, st, att = []) {
 // ---------- alerts table (alerts page and device tab) ----------
 function alertsTable(list, opts) {
   const now = nowSec();
-  return `<div class="panel flush"><div class="table-wrap"><table class="resp"><thead><tr><th>Schwere</th>${opts.device ? "<th>Gerät</th>" : ""}<th>Check</th><th>Meldung</th><th>Beginn</th><th>Ende / Dauer</th><th>Quittiert</th><th></th></tr></thead><tbody>
+  return `<div class="panel flush"><div class="table-wrap"><table class="resp"><thead><tr><th>Schwere</th>${opts.device ? "<th>Gerät</th>" : ""}${opts.check !== false ? "<th>Check</th>" : ""}<th>Meldung</th><th>Beginn</th><th>Ende / Dauer</th><th>Quittiert</th><th></th></tr></thead><tbody>
     ${list.map((a) => `<tr class="${a.ended ? "off" : ""}">
       ${td("Schwere", sevPill(a.severity))}
       ${opts.device ? td("Gerät", `<a class="t-main" href="/devices/${enc(a.device_id)}" data-go>${esc(a.device_name)}</a>`) : ""}
-      ${td("Check", `<div class="t-main">${esc(a.check_name)}</div><div class="t-sub mono">${esc(a.check_key)}</div>`)}
+      ${opts.check !== false ? td("Check", `<div class="t-main">${esc(a.check_name)}</div><div class="t-sub mono">${esc(a.check_key)}</div>`) : ""}
       ${td("Meldung", `<span class="small">${esc(a.message || "")}</span>`)}
       ${td("Beginn", `<span class="nowrap">${esc(fmtTime(a.started, true))}</span><div class="t-sub">${esc(fmtAgo(a.started))}</div>`)}
       ${td("Ende / Dauer", a.ended ? `<span class="nowrap">${esc(fmtTime(a.ended, true))}</span><div class="t-sub">Dauer ${esc(fmtUptime(a.ended - a.started))}</div>` : `${pill("aktiv", a.severity === "crit" ? "rose" : "amber", true, true)}<div class="t-sub">seit ${esc(fmtUptime(now - a.started))}</div>`)}
@@ -2528,6 +2583,9 @@ function nearest(points, t) {
   return Math.abs(points[lo][0] - t) <= Math.abs(points[hi][0] - t) ? points[lo] : points[hi];
 }
 
+// chartCls is the colour class of series i of a chart; a series with dash (a total next to the
+// used value) is a gray dashed line.
+const chartCls = (list, i) => (list[i] && list[i].dash ? "sd" : `s${i % N_COLORS}`);
 // drawChart renders one chart (several series of one metric) into box and binds the hover crosshair.
 // Series points: [ts, avg, min, max]; null avg or a jump in time is drawn as a gap.
 function drawChart(box, list, unit, from, to, step) {
@@ -2570,15 +2628,15 @@ function drawChart(box, list, unit, from, to, step) {
       cur.push(p);
     });
     if (cur.length) segs.push(cur);
-    const c = `s${i % N_COLORS}`;
+    const c = chartCls(list, i), dash = !!list[i].dash;
     segs.forEach((g) => {
-      const band = g.some((p) => isNum(p[2]) && isNum(p[3]) && p[2] !== p[3]);
+      const band = !dash && g.some((p) => isNum(p[2]) && isNum(p[3]) && p[2] !== p[3]);
       if (band && g.length > 1) {
         const up = g.map((p) => `${f1(X(p[0]))},${f1(Y(isNum(p[3]) ? p[3] : p[1]))}`), dn = g.slice().reverse().map((p) => `${f1(X(p[0]))},${f1(Y(isNum(p[2]) ? p[2] : p[1]))}`);
         s += `<polygon class="bd ${c}" points="${up.concat(dn).join(" ")}"/>`;
       }
       if (g.length === 1) s += `<circle class="dt ${c}" cx="${f1(X(g[0][0]))}" cy="${f1(Y(g[0][1]))}" r="2"/>`;
-      else s += `<path class="ln ${c}" d="M${g.map((p) => `${f1(X(p[0]))} ${f1(Y(p[1]))}`).join("L")}"/>`;
+      else s += `<path class="ln ${c}${dash ? " dash" : ""}" d="M${g.map((p) => `${f1(X(p[0]))} ${f1(Y(p[1]))}`).join("L")}"/>`;
     });
   });
   s += `<line class="xh" data-xh x1="-10" x2="-10" y1="${PT}" y2="${PT + ih}" visibility="hidden"/><g data-dots></g></svg><div class="chart-tip" hidden></div>`;
@@ -2594,11 +2652,11 @@ function drawChart(box, list, unit, from, to, step) {
     cur = at;
     const x = X(at);
     xh.setAttribute("x1", f1(x)); xh.setAttribute("x2", f1(x)); xh.setAttribute("visibility", "visible");
-    dots.innerHTML = rows.map((r) => `<circle class="pt s${r.i % N_COLORS}" cx="${f1(X(r.p[0]))}" cy="${f1(Y(r.p[1]))}" r="3.5"/>`).join("");
+    dots.innerHTML = rows.map((r) => `<circle class="pt ${chartCls(list, r.i)}" cx="${f1(X(r.p[0]))}" cy="${f1(Y(r.p[1]))}" r="3.5"/>`).join("");
     const shown = rows.slice().sort((a, b) => b.p[1] - a.p[1]);
     tip.innerHTML = `<div class="tt-time">${esc(fmtTime(at, true))}</div>` + shown.slice(0, 12).map((r) => {
       const sr = list[r.i], mm = isNum(r.p[2]) && isNum(r.p[3]) && r.p[2] !== r.p[3];
-      return `<div class="tt-row"><i class="sw s${r.i % N_COLORS}"></i><span class="tt-l">${esc(sr.label || sr.instance || metricLabel(sr.name))}</span><span class="v">${esc(fmtVal(r.p[1], unit))}</span></div>${mm ? `<div class="tt-sub">${esc(fmtVal(r.p[2], unit))} … ${esc(fmtVal(r.p[3], unit))}</div>` : ""}`;
+      return `<div class="tt-row"><i class="sw ${chartCls(list, r.i)}"></i><span class="tt-l">${esc(sr.label || sr.instance || metricLabel(sr.name))}</span><span class="v">${esc(fmtVal(r.p[1], unit))}</span></div>${mm ? `<div class="tt-sub">${esc(fmtVal(r.p[2], unit))} … ${esc(fmtVal(r.p[3], unit))}</div>` : ""}`;
     }).join("") + (shown.length > 12 ? `<div class="tt-sub">und ${shown.length - 12} weitere</div>` : "");
     tip.hidden = false;
     const scale = svg.getBoundingClientRect().width / W || 1, px = x * scale, bw = box.clientWidth, tw = tip.offsetWidth;
@@ -2712,6 +2770,258 @@ async function chartsTab(box, dv, st, alive, att = []) {
   onResize = () => { if (alive()) drawCharts(); };
   await load();
 }
+
+// ---------- check page (/devices/<id>/checks/<key>): one check with its charts ----------
+// CHART_PAIRS: metrics drawn together in one chart [names, title, labels, second line dashed].
+const CHART_PAIRS = [
+  [["net.rx", "net.tx"], "Datenverkehr", ["Empfangen", "Gesendet"]],
+  [["if.rx", "if.tx"], "Datenverkehr", ["Empfangen", "Gesendet"]],
+  [["guest.netin", "guest.netout"], "Netzwerk", ["Empfangen", "Gesendet"]],
+  [["guest.diskread", "guest.diskwrite"], "Datenträger", ["Lesen", "Schreiben"]],
+  [["ups.input", "ups.output"], "Spannung", ["Eingang", "Ausgang"]],
+  [["mem.used", "mem.total"], "Arbeitsspeicher belegt", ["Belegt", "Gesamt"], true],
+  [["disk.used", "disk.total"], "Belegt", ["Belegt", "Gesamt"], true],
+  [["storage.used", "storage.total"], "Belegt", ["Belegt", "Gesamt"], true],
+  [["poe.power", "poe.budget"], "PoE-Leistung", ["Verbrauch", "Budget"], true],
+];
+const seriesUnit = (s) => s.unit || metricUnitOf(s.name);
+// checkCharts groups the series of one check into charts: the pairs above, else one chart per
+// metric name (several instances as several lines); ordered like the check's metrics.
+function checkCharts(series, c) {
+  const order = ((c && c.metrics) || []).map((m) => m.n);
+  const rank = (n) => (n === "uptime" ? 9999 : order.includes(n) ? order.indexOf(n) : 100 + (DEFAULT_SERIES.includes(n) ? DEFAULT_SERIES.indexOf(n) : 900));
+  const multi = new Set(series.map((s) => s.instance || "")).size > 1;
+  const used = new Set(), out = [];
+  for (const [names, title, labels, dash] of CHART_PAIRS) {
+    const list = series.filter((s) => names.includes(s.name));
+    if (!list.some((s) => s.name === names[0])) continue;
+    list.forEach((s) => used.add(s));
+    list.sort((a, b) => names.indexOf(a.name) - names.indexOf(b.name) || String(a.instance).localeCompare(String(b.instance), "de", { numeric: true }));
+    out.push({ title, names, unit: seriesUnit(list[0]), rank: Math.min(...names.map(rank)),
+      list: list.map((s) => ({ ...s, label: labels[names.indexOf(s.name)] + (multi && s.instance ? " " + s.instance : ""), dash: !!dash && names.indexOf(s.name) === 1 })) });
+  }
+  for (const [n, list] of groupBy(series.filter((s) => !used.has(s)), (s) => s.name)) {
+    list.sort((a, b) => String(a.instance).localeCompare(String(b.instance), "de", { numeric: true }));
+    out.push({ title: metricLabel(n), names: [n], unit: seriesUnit(list[0]), rank: rank(n), list: list.map((s) => ({ ...s, label: list.length > 1 && s.instance ? s.instance : metricLabel(n) })) });
+  }
+  return out.sort((a, b) => a.rank - b.rank || a.title.localeCompare(b.title, "de"));
+}
+// effThreshold returns the threshold that applies to a metric (see DESIGN.md "Evaluation"): device
+// with instance > device > global with instance > global > default; with its source.
+function effThreshold(dev, global, defs, n, inst) {
+  const pick = (list) => (inst ? (list || []).find((t) => t.metric === `${n}:${inst}`) : null) || (list || []).find((t) => t.metric === n);
+  for (const [list, src] of [[dev, "Dieses Gerät"], [global, "Einstellungen"], [defs, "Standard"]]) { const t = pick(list); if (t) return { t, src }; }
+  return null;
+}
+
+PAGES["/devices/:id/checks/:key"] = async (el, token) => {
+  const m = location.pathname.match(/^\/devices\/([^/]+)\/checks\/([^/]+)$/);
+  const dec = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };
+  const id = dec(m[1]), key = dec(m[2]);
+  let data;
+  try { data = await GET(`/api/devices/${enc(id)}`); }
+  catch (e) {
+    if (e.status !== 404) throw e;
+    el.innerHTML = pageHead("Gerät nicht gefunden", "", "", ["/devices", "Geräte"]) + empty("Dieses Gerät gibt es nicht (mehr)", "", `<a class="btn" href="/devices" data-go>Zu den Geräten</a>`, "server");
+    return;
+  }
+  if (token !== pageToken) return;
+  const alive = () => token === pageToken;
+  const rk = "pk95mon-check-range:" + (state.user || "");
+  let range = RANGES.some(([k]) => k === lsGet(rk)) ? lsGet(rk) : "24h";
+  let series = null, cache = null, seq = 0, settings, alertName = "", busy = 0;
+  const view = () => projectStatus(data.status || {}, data.device.rules);
+  // check: {c, hidden} of the current status; c is null when the device does not report the check
+  const check = () => {
+    const st = view(), c = (st.checks || []).find((x) => x.key === key);
+    if (c) return { c, hidden: false };
+    const h = (st.hidden || []).find((x) => x.key === key);
+    return h ? { c: null, hidden: true, name: h.name, group: h.group, pending: h.pending } : { c: null, hidden: false };
+  };
+  el.innerHTML = `<div data-head></div>
+    <div class="chart-bar ckd-bar"><h2 class="ckd-h">Verlauf</h2><div class="seg" role="group" aria-label="Zeitraum">${RANGES.map(([k, l]) => `<button type="button" data-range="${k}" aria-pressed="${k === range}">${l}</button>`).join("")}</div>
+      <span class="muted small" data-ch-info></span><a class="ckd-all small" href="/devices/${enc(id)}#charts" data-go>Alle Diagramme des Geräts</a></div>
+    <div class="charts" data-charts>${loadingPanel()}</div>
+    <div class="ckd-cols"><section class="panel" data-facts aria-label="Werte und Details"></section><section class="panel" data-thr aria-label="Schwellwerte"></section></div>
+    <div class="chart-bar ckd-bar"><h2 class="ckd-h">Alarmverlauf</h2><span class="muted small">Wann dieser Check auffällig war</span></div>
+    <div data-hist>${loadingPanel()}</div>`;
+  const head = qs("[data-head]", el), charts = qs("[data-charts]", el), info = qs("[data-ch-info]", el);
+  const factsBox = qs("[data-facts]", el), thrBox = qs("[data-thr]", el), hist = qs("[data-hist]", el);
+
+  const reload = async () => {
+    const r = await GET(`/api/devices/${enc(id)}`);
+    if (!alive()) return;
+    data = r; state.ovAt = 0;
+    drawHead(); drawFacts(); drawThr();
+  };
+  // saveRules changes the device's rules: fresh GET, mutate, PUT (as on the device page)
+  const saveRules = (btn, fn) => run(btn, async () => {
+    busy++;
+    try {
+      const cur = (await GET(`/api/devices/${enc(id)}`)).device;
+      cur.rules = fn(cur.rules || []);
+      const r = await PUT(`/api/devices/${enc(id)}`, cur);
+      data.device.rules = r && Array.isArray(r.rules) ? r.rules : cur.rules;
+      await reload();
+    } finally { busy--; }
+  }, "Gespeichert.");
+
+  const drawHead = () => {
+    const dv = data.device, par = data.parent || null, { c, hidden, name: hName, group: hGroup, pending } = check();
+    const name = (c && c.name) || hName || alertName || key;
+    const back = par ? [`/devices/${enc(par.id)}#agent-${enc(dv.id)}`, `${par.name} / ${attLabel(dv)}`] : [`/devices/${enc(dv.id)}`, dv.name];
+    const group = (c && c.group) || hGroup || "";
+    const sub = [par ? esc(dv.name) : "", group ? esc(group) : "", c && c.since ? `Zustand ${sinceCell(c)}` : "", `<span class="mono">${esc(key)}</span>`].filter(Boolean).join(" · ");
+    const mode = ruleMode(dv.rules || [], key);
+    const modeB = c && key !== REACH_KEY ? `<button class="btn gray ck-mode${isQuiet(c) ? " quiet" : ""}" type="button" data-ck-mode data-fk="mode" aria-haspopup="menu" aria-expanded="false" aria-label="Überwachung: ${esc(RULE_MODE_SHORT[mode])} – ändern">${icon(mode === "quiet" ? "eye" : "bell")} ${esc(RULE_MODE_SHORT[mode])}</button>` : "";
+    const pillH = c ? ckPill(c) : hidden ? pill("Ausgeblendet") : pill("Nicht vorhanden");
+    let top = "";
+    if (c) {
+      const v = cardValue(c), tone = cardTone(c), msg = reasonText(c);
+      const val = v.rxtx ? `<span class="svc-rx"><span aria-hidden="true">↓</span> ${esc(fmtVal(v.rxtx[0], "B/s"))}<span class="sr-only"> empfangen</span></span><span class="svc-tx"><span aria-hidden="true">↑</span> ${esc(fmtVal(v.rxtx[1], "B/s"))}<span class="sr-only"> gesendet</span></span>` : esc(v.text);
+      top = `<div class="panel ckd-now st-${tone}"><div class="ckd-main"><div class="svc-val${v.rxtx ? " rxtx" : v.word ? " word" : ""}">${val}</div>${v.sub ? `<div class="svc-sec">${esc(v.sub)}</div>` : ""}</div>
+        ${msg || (isQuiet(c) && MUTED_TITLE[c.muted]) || c.pending ? `<div class="ckd-msg">${reasonHTML(c)}${pendingTag(c)}${c.reason && c.msg && c.reason !== c.msg ? `<div class="t-sub">${esc(c.msg)}</div>` : ""}</div>` : ""}
+        ${isQuiet(c) ? `<div class="t-sub">Nur Anzeige: Werte werden aufgezeichnet, der Check löst keinen Alarm aus.</div>` : ""}</div>`;
+    } else if (hidden) {
+      top = callout("", "Ausgeblendet", pending ? "Der Check erscheint mit der nächsten Abfrage wieder." : "Dieser Check wird durch eine Regel verworfen – es werden keine neuen Werte gespeichert. Der bisherige Verlauf steht unten.",
+        pending ? "" : `<button class="btn gray sm" type="button" data-unhide data-fk="unhide">${icon("eye")} Wieder anzeigen</button>`);
+    } else {
+      top = callout("yellow", "Diesen Check gibt es zurzeit nicht", "Das Gerät meldet ihn nicht (mehr) – zum Beispiel ein gelöschter Gast oder ein entfernter Dienst. Der bisherige Verlauf und die Alarme stehen unten.");
+    }
+    const ae = document.activeElement, fk = ae && head.contains(ae) ? ae.getAttribute("data-fk") : null;
+    head.innerHTML = pageHead(`${esc(name)} ${pillH}`, sub,
+      `${modeB}<button class="btn gray" type="button" data-poll data-fk="poll" ${dv.enabled === false ? "disabled" : ""}>${icon("refresh")} Jetzt prüfen</button>`, back) + top;
+    if (fk) { const n = qs(`[data-fk="${CSS.escape(fk)}"]`, head); if (n) n.focus({ preventScroll: true }); }
+    qs("[data-poll]", head).onclick = (e) => run(e.currentTarget, async () => {
+      const r = await POST(`/api/devices/${enc(id)}/poll`);
+      if (!alive()) return;
+      if (r.status) data.status = r.status;
+      state.ovAt = 0;
+      drawHead(); drawFacts();
+      toast("Geprüft.");
+    });
+    const mb = qs("[data-ck-mode]", head);
+    if (mb) mb.onclick = () => {
+      const rules = data.device.rules || [], r = ruleFor(rules, key);
+      const hint = !r ? "" : r.match === key ? "Eigene Einstellung für diesen Check." : `Zurzeit durch die Regel <code>${esc(r.match)}</code>.`;
+      modeMenu(mb, { title: name, current: ruleMode(rules, key), hint, onPick: (mo) => saveRules(mb, (rs) => setExactRule(rs, key, mo)) });
+    };
+    const ub = qs("[data-unhide]", head);
+    if (ub) ub.onclick = () => saveRules(ub, (rs) => setExactRule(rs, key, "alert"));
+  };
+
+  const drawFacts = () => {
+    const { c } = check();
+    const ms = (c && c.metrics) || [], facts = c && c.facts ? Object.entries(c.facts) : [];
+    const rows = [
+      ...ms.map((x) => [instLabel(x.n, x.i), fmtVal(x.v, mUnit(x))]),
+      ...facts,
+      ...(c && c.msg ? [["Meldung", c.msg]] : []),
+      ...(c && c.since ? [["Zustand seit", fmtTime(c.since, true)]] : []),
+      ["Letzte Prüfung", data.status && data.status.last_poll ? `${fmtTime(data.status.last_poll, true)} (${fmtAgo(data.status.last_poll)})` : "—"],
+    ];
+    factsBox.innerHTML = `<div class="panel-head"><div class="panel-title">Werte und Details</div></div>
+      <table class="kv ckd-kv">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>`;
+  };
+
+  const drawThr = () => {
+    const { c } = check();
+    const link = `<a class="btn gray sm" href="/devices/${enc(id)}#settings" data-go>${icon("pencil")} Schwellwerte ändern</a>`;
+    const headH = `<div class="panel-head"><div class="panel-title">Schwellwerte</div>${link}</div>`;
+    if (settings === undefined) { thrBox.innerHTML = headH + `<div class="flex muted small"><span class="spinner"></span> Lade …</div>`; return; }
+    if (settings === null) { thrBox.innerHTML = headH + `<p class="muted small">Die Schwellwerte konnten nicht geladen werden.</p>`; return; }
+    const seen = new Set(), rows = [];
+    for (const x of (c && c.metrics) || []) {
+      const k = x.n + "|" + (x.i || "");
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const e = effThreshold(data.device.thresholds, settings.thresholds, settings.defaults, x.n, x.i || "");
+      if (e) rows.push([instLabel(x.n, x.i), e.t.disabled ? "aus" : thrText(e.t), e.src]);
+    }
+    thrBox.innerHTML = headH + (rows.length ? `<div class="table-wrap"><table class="ckd-thr"><thead><tr><th>Messwert</th><th>Grenze</th><th>Gilt aus</th></tr></thead><tbody>
+        ${rows.map(([n, t, s]) => `<tr><td>${esc(n)}</td><td>${esc(t)}</td><td class="muted small nowrap">${esc(s)}</td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="muted small">${c && (c.metrics || []).length ? "Für die Werte dieses Checks gilt keine Grenze – der Zustand kommt vom Gerät selbst." : "Dieser Check hat keine Messwerte; der Zustand kommt vom Gerät selbst (z. B. Dienst läuft / gestoppt)."}</p>`) +
+      (c && isQuiet(c) ? `<p class="t-sub" style="margin-top:8px">Nur Anzeige: Grenzen werden ausgewertet, lösen aber keinen Alarm aus.</p>` : "");
+  };
+
+  // series of this check: by check_key; series stored before the key was known by name+instance
+  const pickSeries = (all) => {
+    const { c } = check();
+    const mk = new Set(((c && c.metrics) || []).map((x) => x.n + "|" + (x.i || "")));
+    return all.filter((s) => s.check_key === key || (!s.check_key && mk.has(s.name + "|" + (s.instance || ""))));
+  };
+  const drawCharts = () => {
+    if (!cache || !alive()) return;
+    const { c } = check();
+    const defs = checkCharts(series, c);
+    const { from, to, step } = cache;
+    info.textContent = `${fmtTime(from, true)} bis ${fmtTime(to, true)}${step ? ` · ein Punkt je ${fmtUptime(step)}` : ""}`;
+    const last = (x) => { for (let i = (x.points || []).length - 1; i >= 0; i--) if (isNum(x.points[i][1])) return x.points[i][1]; return null; };
+    defs.forEach((d) => { d.full = d.list.map((s) => ({ ...s, points: (cache.byId.get(s.id) || {}).points || [] })); });
+    charts.innerHTML = defs.map((d, i) => {
+      const legend = d.full.length > 1 ? `<div class="legend">${d.full.map((x, j) => `<span><i class="sw ${chartCls(d.full, j)}${x.dash ? " dash" : ""}"></i>${esc(x.label)} <b>${esc(fmtVal(last(x), d.unit))}</b></span>`).join("")}</div>`
+        : `<div class="legend"><span>zuletzt <b>${esc(fmtVal(last(d.full[0]), d.unit))}</b></span></div>`;
+      return `<div class="panel chart-panel"><div class="panel-head"><div class="panel-title">${esc(d.title)}</div><span class="muted small mono">${esc(d.names.join(" · "))}</span></div>${legend}
+        <div class="chart-box" tabindex="0" role="img" aria-label="${esc(`Diagramm ${d.title}, ${d.full.length} ${d.full.length === 1 ? "Reihe" : "Reihen"} – mit den Pfeiltasten durch die Werte gehen`)}" data-chart="${i}"></div></div>`;
+    }).join("");
+    qsa("[data-chart]", charts).forEach((cb) => { const d = defs[+cb.dataset.chart]; drawChart(cb, d.full, d.unit, from, to, step); });
+  };
+  const loadCharts = async () => {
+    const my = ++seq;
+    try {
+      const first = series === null;
+      series = pickSeries(await deviceSeries(id));
+      if (!series.length && first) series = pickSeries(await deviceSeries(id, 0));
+      if (!alive() || my !== seq) return;
+      if (!series.length) {
+        cache = null; info.textContent = "";
+        const { c } = check();
+        charts.innerHTML = empty("Noch keine Messwerte", c && (c.metrics || []).length ? "Die ersten Werte erscheinen nach der nächsten Abfrage." : "Dieser Check meldet nur einen Zustand, keine Messwerte. Wann er auffällig war, zeigt der Alarmverlauf.", "", "chart");
+        return;
+      }
+      charts.classList.add("loading");
+      const reqs = [];
+      for (let i = 0; i < series.length; i += MAX_CHART_SERIES) reqs.push(series.slice(i, i + MAX_CHART_SERIES));
+      const parts = await Promise.all(reqs.map((l) => GET(`/api/devices/${enc(id)}/metrics?series=${l.map((x) => enc(x.id)).join(",")}&range=${enc(range)}`)));
+      if (!alive() || my !== seq) return;
+      const p0 = parts[0] || {};
+      cache = { from: p0.from || nowSec() - RANGE_SECS[range], to: p0.to || nowSec(), step: Math.max(0, ...parts.map((p) => p.step || 0)), byId: new Map(parts.flatMap((p) => p.series || []).map((s) => [s.id, s])) };
+      drawCharts();
+    } catch (e) {
+      if (alive() && my === seq && !cache) charts.innerHTML = callout("red", "Die Messwerte konnten nicht geladen werden", esc(e.message));
+      else if (alive()) toastErr(e);
+    } finally { if (my === seq) charts.classList.remove("loading"); }
+  };
+  const loadHist = async () => {
+    const r = await GET(`/api/alerts?device=${enc(id)}&state=all&limit=500`);
+    if (!alive()) return;
+    const list = (r.alerts || []).filter((a) => a.check_key === key);
+    const nm = list.length ? list[0].check_name : "";
+    hist.innerHTML = list.length ? alertsTable(list, { device: false, check: false }) + (r.more ? `<p class="muted small" style="margin:0 12px">Nur die letzten 500 Alarme des Geräts sind berücksichtigt – ältere unter <a href="/alerts?tab=history" data-go>Alarme</a>.</p>` : "")
+      : empty("Noch keine Alarme", "Dieser Check war bisher nicht auffällig.", "", "bell");
+    bindAck(hist, loadHist);
+    if (nm && !alertName) { alertName = nm; if (!check().c) drawHead(); }
+  };
+
+  qsa("[data-range]", el).forEach((b) => b.onclick = () => {
+    range = b.dataset.range; lsSet(rk, range);
+    qsa("[data-range]", el).forEach((x) => x.setAttribute("aria-pressed", x === b));
+    loadCharts();
+  });
+  drawHead(); drawFacts(); drawThr();
+  GET("/api/settings").then((r) => { settings = r; }, () => { settings = null; }).then(() => { if (alive()) drawThr(); });
+  loadHist().catch((e) => { if (alive()) hist.innerHTML = callout("red", "Die Alarme konnten nicht geladen werden", esc(e.message)); });
+  onResize = () => { if (alive()) drawCharts(); };
+  await loadCharts();
+  every(60000, token, async () => {
+    if (modeMenuOpen || busy) return;
+    const r = await GET(`/api/devices/${enc(id)}`);
+    if (!alive()) return;
+    data = r; drawHead(); drawFacts(); drawThr();
+    if (["1h", "6h", "24h"].includes(range)) await loadCharts();
+    await loadHist();
+  });
+};
 
 // ---------- alerts ----------
 PAGES["/alerts"] = async (el, token) => {
