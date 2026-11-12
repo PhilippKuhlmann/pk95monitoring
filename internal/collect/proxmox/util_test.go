@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"pk95monitoring/internal/model"
 )
 
 func TestFingerprintFormat(t *testing.T) {
@@ -87,21 +89,37 @@ func TestPermMessage(t *testing.T) {
 }
 
 func TestDiskWearout(t *testing.T) {
+	// The used life is the metric disk.wearout (its threshold warns); the native state is SMART.
 	tests := []struct {
 		d     disk
 		state string
+		wear  float64 // -1: no metric
 	}{
-		{disk{DevPath: "/dev/sda", Type: "ssd", Health: "PASSED", Wearout: optNum{V: 11, OK: true}}, "ok"},
-		{disk{DevPath: "/dev/sda", Type: "ssd", Health: "PASSED", Wearout: optNum{V: 10, OK: true}}, "warn"},
-		{disk{DevPath: "/dev/sda", Type: "ssd", Health: "FAILED", Wearout: optNum{V: 5, OK: true}}, "crit"},
-		{disk{DevPath: "/dev/nvme0n1", Type: "nvme", Health: "OK"}, "ok"},
-		{disk{DevPath: "/dev/sdb", Type: "hdd", Health: "UNKNOWN"}, "ok"},
-		{disk{DevPath: "/dev/sdc", Type: "hdd", Health: "PREFAIL"}, "warn"},
+		{disk{DevPath: "/dev/sda", Type: "ssd", Health: "PASSED", Wearout: optNum{V: 11, OK: true}}, "ok", 89},
+		{disk{DevPath: "/dev/sda", Type: "ssd", Health: "PASSED", Wearout: optNum{V: 10, OK: true}}, "ok", 90},
+		{disk{DevPath: "/dev/sda", Type: "ssd", Health: "FAILED", Wearout: optNum{V: 5, OK: true}}, "crit", 95},
+		{disk{DevPath: "/dev/nvme0n1", Type: "nvme", Health: "OK"}, "ok", -1},
+		{disk{DevPath: "/dev/sdb", Type: "hdd", Health: "UNKNOWN"}, "ok", -1},
+		{disk{DevPath: "/dev/sdc", Type: "hdd", Health: "PREFAIL"}, "warn", -1},
 	}
 	for _, tt := range tests {
-		got := diskChecks("pve1", []disk{tt.d})
+		got := diskChecks("pve1", []disk{tt.d}, nil)
 		if len(got) != 1 || got[0].State != tt.state {
 			t.Errorf("%+v: %+v", tt.d, got)
+			continue
+		}
+		w, ok := metricValue(got[0], "disk.wearout")
+		if (tt.wear < 0) == ok || (ok && w != tt.wear) {
+			t.Errorf("%+v: wearout %v %v", tt.d, w, ok)
 		}
 	}
+}
+
+func metricValue(ch model.Check, name string) (float64, bool) {
+	for _, m := range ch.Metrics {
+		if m.Name == name {
+			return m.Value, true
+		}
+	}
+	return 0, false
 }

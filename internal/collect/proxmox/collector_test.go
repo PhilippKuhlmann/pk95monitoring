@@ -19,6 +19,9 @@ var units = map[string]string{
 	"guest.cpu": "%", "guest.mem": "%", "guest.mem_used": "B",
 	"guest.netin": "B/s", "guest.netout": "B/s", "guest.diskread": "B/s", "guest.diskwrite": "B/s",
 	"storage.usage": "%", "storage.used": "B", "storage.total": "B",
+	"cpu.iowait": "%", "zfs.usage": "%", "zfs.frag": "%", "zfs.errors": "", "zfs.scrub_age": "d",
+	"disk.temp": "°C", "disk.wearout": "%", "disk.spare": "%", "disk.reallocated": "", "disk.pending": "",
+	"disk.uncorrectable": "", "disk.media_errors": "", "disk.crc_errors": "", "repl.age": "min", "cert.days": "d",
 }
 
 func setup(t *testing.T) (*fakepve.Server, *Collector, model.Device) {
@@ -159,8 +162,10 @@ func TestCollectChecks(t *testing.T) {
 	want(t, m, "pve:storage:pve3:tank", model.StateOK, "", "")
 	want(t, m, "pve:zfs:pve3:tank", model.StateOK, "ZFS tank (pve3)", "Speicher")
 	want(t, m, "pve:zfs:pve1:rpool", model.StateOK, "", "")
-	if ch := want(t, m, "pve:disk:pve1:sda", model.StateWarn, "Platte sda (pve1)", "Platten"); ch.Facts["Verschleiß"] != "92 %" {
-		t.Errorf("wearout fact %v", ch.Facts)
+	if ch := want(t, m, "pve:disk:pve1:sda", model.StateOK, "Platte sda (pve1)", "Platten"); ch.Facts["Verschleiß"] != "92 %" {
+		t.Errorf("wearout fact %v", ch.Facts) // the disk.wearout threshold (core) makes it warn
+	} else if w, _ := metricValue(ch, "disk.wearout"); w != 92 {
+		t.Errorf("wearout metric %v", ch.Metrics)
 	}
 	want(t, m, "pve:disk:pve1:nvme0n1", model.StateOK, "", "")
 	if ch := want(t, m, "pve:disk:pve3:sdb", model.StateOK, "", ""); ch.Facts["Verschleiß"] != "" {

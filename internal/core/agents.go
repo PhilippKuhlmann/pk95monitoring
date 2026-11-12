@@ -228,6 +228,10 @@ func (c *Core) IngestReport(deviceID string, rep model.AgentReport) (model.Agent
 		return model.AgentReply{}, fmt.Errorf("Gerät %s ist kein Agent", d.Name)
 	}
 	if !rep.Buffered && ts >= rt.lastEval {
+		// a new agent version may report new or renamed checks: those are expected
+		if d.Agent != nil && d.Agent.Version != "" && rep.Version != "" && rep.Version != d.Agent.Version {
+			rt.acceptUnseen = true
+		}
 		discover(d, rt, checks, now)
 		if dc, ok := discoveryCheck(rt); ok {
 			checks = append(checks, dc)

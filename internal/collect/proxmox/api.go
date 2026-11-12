@@ -69,6 +69,7 @@ type nodeStatus struct {
 		Used  num `json:"used"`
 	} `json:"rootfs"`
 	Uptime  num `json:"uptime"`
+	Wait    num `json:"wait"` // IO delay, fraction of CPU time
 	CPUInfo struct {
 		Model   string `json:"model"`
 		CPUs    num    `json:"cpus"`

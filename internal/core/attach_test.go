@@ -150,7 +150,7 @@ func TestAttachedState(t *testing.T) {
 	e.wait()
 
 	r, _ := rowOf(e.c.Rows(), p.ID)
-	if r.State != model.StateCrit || !strings.HasPrefix(r.Message, "6 Probleme: ") ||
+	if r.State != model.StateCrit || !strings.HasPrefix(r.Message, "7 Probleme: ") ||
 		!strings.Contains(r.Message, "; pve1: Festplatte /: Festplattenbelegung / 97 % ≥ 95 %") {
 		t.Errorf("parent row %s %q (own %s %q)", r.State, r.Message, parentOwn.State, parentOwn.Message)
 	}

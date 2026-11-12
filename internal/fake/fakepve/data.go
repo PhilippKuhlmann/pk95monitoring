@@ -47,12 +47,24 @@ type pool struct {
 	node, name, health string
 	size, allocPct     float64
 	frag               int
+	layout             string          // mirror-0, raidz1-0
+	leaves             []string        // vdev members
+	cksum              map[string]int  // leaf -> checksum errors
+	faulted            map[string]bool // leaf -> FAULTED
+	scrubAt            time.Time       // last finished scrub
+	dataErrors         string          // "" = "No known data errors"
 }
 
 type disk struct {
 	node, dev, model, serial, typ, health string
 	size                                  float64
 	wearout                               int // remaining life in percent, -1 = N/A
+	// SMART
+	temp                             float64
+	hours, cycles                    int
+	realloc, pending, uncorrect, crc int // ATA
+	spare, mediaErrors, unsafe       int // NVMe
+	writtenTB                        float64
 }
 
 type aptPkg struct {
@@ -111,10 +123,12 @@ func (s *Server) seed(now time.Time) {
 			&storage{name: "local-lvm", node: n.name, typ: "lvmthin", content: "images,rootdir", total: 1.7 * tib, pct: 0.48 + 0.08*float64(i), phase: ph + 0.4},
 			&storage{name: "backup", node: n.name, typ: "nfs", content: "backup", shared: true, total: 16 * tib, pct: 0.63, phase: 1.1},
 		)
-		s.pools = append(s.pools, &pool{node: n.name, name: "rpool", health: "ONLINE", size: 1.8 * tib, allocPct: 0.24 + 0.04*float64(i), frag: 6 + 3*i})
+		s.pools = append(s.pools, &pool{node: n.name, name: "rpool", health: "ONLINE", size: 1.8 * tib, allocPct: 0.24 + 0.04*float64(i), frag: 6 + 3*i,
+			layout: "mirror-0", scrubAt: now.Add(-time.Duration(4+i) * day)})
 	}
 	s.storages = append(s.storages, &storage{name: "tank", node: "pve3", typ: "zfspool", content: "images,rootdir", total: 10.5 * tib, pct: 0.57, phase: 2.2})
-	s.pools = append(s.pools, &pool{node: "pve3", name: "tank", health: "ONLINE", size: 14.5 * tib, allocPct: 0.57, frag: 14})
+	s.pools = append(s.pools, &pool{node: "pve3", name: "tank", health: "ONLINE", size: 14.5 * tib, allocPct: 0.57, frag: 14,
+		layout: "raidz1-0", leaves: []string{"sdb", "sdc", "sdd", "sde"}, scrubAt: now.Add(-20 * day)})
 
 	s.disks = []*disk{
 		{node: "pve1", dev: "nvme0n1", model: "Samsung SSD 980 PRO 2TB", serial: "S6B0NL0W412345K", typ: "nvme", health: "PASSED", size: 2e12, wearout: 97},
@@ -128,6 +142,8 @@ func (s *Server) seed(now time.Time) {
 		{node: "pve3", dev: "sdd", model: "WDC WD40EFRX-68N32N0", serial: "WD-WCC7K1ABCD03", typ: "hdd", health: "PASSED", size: 4e12, wearout: -1},
 		{node: "pve3", dev: "sde", model: "WDC WD40EFRX-68N32N0", serial: "WD-WCC7K1ABCD04", typ: "hdd", health: "PASSED", size: 4e12, wearout: -1},
 	}
+
+	s.seedHealth(now)
 
 	updates := []aptPkg{
 		{Package: "proxmox-ve", Title: "Proxmox Virtual Environment", Version: "8.3.0", OldVersion: "8.2.0", Origin: "Proxmox", Priority: "optional", Section: "admin"},

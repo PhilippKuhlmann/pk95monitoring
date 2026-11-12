@@ -29,6 +29,7 @@ const (
 	KindDevice     = "device"     // object kind of model.Device
 	keySettings    = "settings"   // Settings
 	keyEnrollKey   = "enroll_key" // agent enrollment key
+	keyVersion     = "version"    // server version of the last start (inventory baseline)
 	maxPolls       = 16           // concurrent polls
 	maxPollTimeout = 45 * time.Second
 	notifyTimeout  = 60 * time.Second
@@ -116,6 +117,20 @@ func New(st *store.Store, opt Options) (*Core, error) {
 			rt.saved = d.Agent.LastSeen
 		}
 		c.rt[d.ID] = rt
+	}
+	// After an update the collectors may report new or renamed checks: the first collection
+	// of every device is the new inventory baseline, nothing is "new" or "vanished" by it.
+	var lastVersion string
+	if err := st.GetSetting(keyVersion, &lastVersion); err != nil {
+		return nil, fmt.Errorf("version: %w", err)
+	}
+	if lastVersion != opt.Version {
+		for _, rt := range c.rt {
+			rt.acceptUnseen = true
+		}
+		if err := st.SetSetting(keyVersion, opt.Version); err != nil {
+			return nil, fmt.Errorf("version: %w", err)
+		}
 	}
 	alerts, err := st.ActiveAlerts()
 	if err != nil {

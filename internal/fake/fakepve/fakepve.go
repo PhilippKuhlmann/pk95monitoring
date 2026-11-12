@@ -37,6 +37,11 @@ type Server struct {
 	apt          map[string][]aptPkg
 	backupFailed bool
 	forbidden    map[string]bool
+	repl         []*replJob
+	ha           map[string]string // sid -> state
+	ceph         *cephState        // nil: Ceph not installed
+	certs        map[string][]cert // node -> certificates
+	iowait       map[string]float64
 }
 
 // New starts a simulated PVE cluster. Close it when done.
@@ -244,6 +249,13 @@ func (s *Server) route(p []string, q url.Values) (any, int, string) {
 		return s.clusterStatus(), 200, ""
 	case len(p) == 2 && p[0] == "cluster" && p[1] == "resources":
 		return s.resources(now, q.Get("type")), 200, ""
+	case len(p) == 4 && p[0] == "cluster" && p[1] == "ha" && p[2] == "status" && p[3] == "current":
+		return s.haStatus(), 200, ""
+	case len(p) == 3 && p[0] == "cluster" && p[1] == "ceph" && p[2] == "status":
+		if s.ceph == nil {
+			return nil, 500, "binary not installed: /usr/bin/ceph-mon"
+		}
+		return s.cephStatus(), 200, ""
 	case len(p) == 2 && p[0] == "cluster" && p[1] == "tasks":
 		tasks := s.tasks(now)
 		out := make([]map[string]any, len(tasks))
@@ -310,6 +322,15 @@ func (s *Server) nodeRoute(n *node, p []string, q url.Values, now time.Time) (an
 		return out, 200, ""
 	case "apt/update":
 		return s.apt[n.name], 200, ""
+	case "disks/smart":
+		return s.smart(n, q.Get("disk"))
+	case "replication":
+		return s.replication(n, now), 200, ""
+	case "certificates/info":
+		return s.certInfo(n), 200, ""
+	}
+	if len(p) == 3 && p[0] == "disks" && p[1] == "zfs" {
+		return s.zfsDetail(n, p[2], now)
 	}
 	// qemu/<id>/config, lxc/<id>/config, tasks/<upid>/log
 	if len(p) == 3 && (p[0] == "qemu" || p[0] == "lxc") && p[2] == "config" {
@@ -378,7 +399,7 @@ func (s *Server) nodeStatus(n *node, now time.Time) map[string]any {
 	swapUsed := swapTotal * clamp(0.03+0.02*wave(now, 12*time.Hour, n.phase), 0, 1)
 	return map[string]any{
 		"cpu":        cpu,
-		"wait":       0.002,
+		"wait":       s.ioWaitAt(n, now),
 		"loadavg":    []string{fmt.Sprintf("%.2f", load), fmt.Sprintf("%.2f", load*0.95), fmt.Sprintf("%.2f", load*0.9)},
 		"memory":     map[string]any{"total": int64(n.mem), "used": int64(n.mem * mem), "free": int64(n.mem * (1 - mem))},
 		"swap":       map[string]any{"total": int64(swapTotal), "used": int64(swapUsed), "free": int64(swapTotal - swapUsed)},

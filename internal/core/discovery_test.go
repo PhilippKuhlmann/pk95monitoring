@@ -210,3 +210,32 @@ func TestDiscoveryUnknownDevice(t *testing.T) {
 		t.Fatal("unknown device accepted")
 	}
 }
+
+func TestDiscoveryBaselineAfterUpdate(t *testing.T) {
+	e := newEnv(t, Options{})
+	id := e.discoveryAgent(t, "db01")
+	e.report(t, id, diskCheck(40))
+	e.c.persist(true)
+
+	// Same version: a new check is new. Another version: the next collection is the baseline.
+	for _, tc := range []struct {
+		version string
+		mode    string
+	}{{"1.2.0", model.ModeNew}, {"1.3.0", ""}} {
+		opt := e.c.Opt
+		opt.Version = tc.version
+		c2, err := New(e.st, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c2.Now = e.clk.Now
+		e.clk.Add(time.Minute)
+		if _, err := c2.IngestReport(id, model.AgentReport{OS: "linux", Version: "1.2.0", Time: e.clk.Now().Unix(),
+			Checks: []model.Check{diskCheck(40), diskAt("/new-"+tc.version, 10)}}); err != nil {
+			t.Fatal(err)
+		}
+		if cs := mustCheck(t, c2.Status(id), "disk:/new-"+tc.version); cs.Mode != tc.mode {
+			t.Errorf("version %s: mode %q, want %q", tc.version, cs.Mode, tc.mode)
+		}
+	}
+}

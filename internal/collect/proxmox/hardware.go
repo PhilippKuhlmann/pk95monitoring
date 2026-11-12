@@ -3,17 +3,16 @@ package proxmox
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"pk95monitoring/internal/model"
 )
 
-// wearoutWarn is the used life (percent) of an SSD from which its check warns.
-const wearoutWarn = 90
-
-func zfsChecks(node string, pools []zfsPool) []model.Check {
+func zfsChecks(node string, pools []zfsPool, details map[string]zfsDetail, now time.Time) []model.Check {
 	var checks []model.Check
 	for _, p := range pools {
 		health := strings.ToUpper(strings.TrimSpace(p.Health))
+		inst := node + "/" + p.Name
 		ch := model.Check{
 			Key:   "pve:zfs:" + node + ":" + p.Name,
 			Name:  "ZFS " + p.Name + " (" + node + ")",
@@ -30,24 +29,36 @@ func zfsChecks(node string, pools []zfsPool) []model.Check {
 		}
 		msg := []string{health}
 		if p.Size > 0 {
-			msg = append(msg, fmtPct(pct(float64(p.Alloc), float64(p.Size)))+" belegt")
+			u := pct(float64(p.Alloc), float64(p.Size))
+			msg = append(msg, fmtPct(u)+" belegt")
+			ch.Metrics = append(ch.Metrics, model.Metric{Name: "zfs.usage", Instance: inst, Value: round2(u), Unit: "%"})
+			ch.Facts["Frei"] = fmtBytes(float64(p.Free))
 		}
 		if p.Frag > 0 {
 			msg = append(msg, "Fragmentierung "+fmtPct(float64(p.Frag)))
 		}
+		ch.Metrics = append(ch.Metrics, model.Metric{Name: "zfs.frag", Instance: inst, Value: float64(p.Frag), Unit: "%"})
 		ch.Message = strings.Join(msg, " · ")
+		if d, ok := details[p.Name]; ok {
+			applyZFSDetail(&ch, inst, d, now)
+		}
 		checks = append(checks, ch)
 	}
 	return checks
 }
 
-func diskChecks(node string, disks []disk) []model.Check {
+// diskChecks reports every physical disk: SMART health from /disks/list and, when PVE
+// answers /disks/smart, its attributes (temperature, sector and media errors, spare, wear).
+// The thresholds of the disk.* metrics decide warn/crit; the native state covers SMART
+// FAILED, attributes failing now and NVMe critical warnings.
+func diskChecks(node string, disks []disk, smart map[string]smartEntry) []model.Check {
 	var checks []model.Check
 	for _, d := range disks {
 		dev := strings.TrimPrefix(d.DevPath, "/dev/")
 		if dev == "" {
 			continue
 		}
+		inst := node + "/" + dev
 		health := strings.ToUpper(strings.TrimSpace(d.Health))
 		ch := model.Check{
 			Key:   "pve:disk:" + node + ":" + dev,
@@ -78,13 +89,54 @@ func diskChecks(node string, disks []disk) []model.Check {
 			ch.State = model.StateWarn
 			msg = append(msg, "SMART "+health)
 		}
-		// PVE reports the remaining life (100 = new) for SSDs and NVMe.
+
+		sv := newSmartValues()
+		if e, ok := smart[d.DevPath]; ok && e.err == nil {
+			if len(e.info.Attributes) > 0 {
+				sv = ataSmart(e.info.Attributes)
+			} else if e.info.Text != "" {
+				sv = nvmeSmart(e.info.Text)
+			}
+		}
+		// PVE reports the remaining life (100 = new) for SSDs and NVMe; the metric is the used part.
 		if d.Wearout.OK && d.Type != "hdd" {
-			used := 100 - d.Wearout.V
-			ch.Facts["Verschleiß"] = fmtPct(used)
-			msg = append(msg, "Verschleiß "+fmtPct(used))
-			if used >= wearoutWarn {
-				ch.State = model.Worst(ch.State, model.StateWarn)
+			sv.v["disk.wearout"] = 100 - d.Wearout.V
+		}
+		if len(sv.failing) > 0 {
+			ch.State = model.StateCrit
+			msg = append(msg, "SMART-Wert unter Grenze: "+strings.Join(sv.failing, ", "))
+		}
+		if len(sv.critMsg) > 0 {
+			ch.State = model.StateCrit
+			msg = append(msg, "NVMe-Warnung: "+strings.Join(sv.critMsg, ", "))
+		}
+		if t, ok := sv.v["disk.temp"]; ok {
+			msg = append(msg, strconv.Itoa(int(t))+" °C")
+		}
+		if w, ok := sv.v["disk.wearout"]; ok {
+			ch.Facts["Verschleiß"] = fmtPct(w)
+			msg = append(msg, "Verschleiß "+fmtPct(w))
+		}
+		if sp, ok := sv.v["disk.spare"]; ok {
+			ch.Facts["Reserve"] = fmtPct(sp)
+		}
+		msg = append(msg, smartProblems(sv.v)...)
+		if n := sv.v["disk.crc_errors"]; n > 0 {
+			ch.Facts["CRC-Fehler (Kabel)"] = groupThousands(int64(n))
+		}
+		for k, v := range sv.facts {
+			ch.Facts[k] = v
+		}
+		for _, name := range []string{"disk.temp", "disk.wearout", "disk.spare", "disk.reallocated", "disk.pending", "disk.uncorrectable", "disk.media_errors", "disk.crc_errors"} {
+			if v, ok := sv.v[name]; ok {
+				m := model.Metric{Name: name, Instance: inst, Value: round2(v)}
+				switch name {
+				case "disk.temp":
+					m.Unit = "°C"
+				case "disk.wearout", "disk.spare":
+					m.Unit = "%"
+				}
+				ch.Metrics = append(ch.Metrics, m)
 			}
 		}
 		if d.Model != "" {

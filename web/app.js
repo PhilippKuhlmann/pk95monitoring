@@ -218,6 +218,20 @@ const METRIC_LABELS = {
   "disk.usage": ["Festplattenbelegung", "%"],
   "disk.used": ["Festplatte belegt", "B"],
   "disk.total": ["Festplatte gesamt", "B"],
+  "disk.temp": ["Plattentemperatur", "°C"],
+  "disk.wearout": ["Verschleiß", "%"],
+  "disk.spare": ["Reserve (NVMe)", "%"],
+  "disk.reallocated": ["Neu zugewiesene Sektoren", ""],
+  "disk.pending": ["Ausstehende Sektoren", ""],
+  "disk.uncorrectable": ["Nicht korrigierbare Fehler", ""],
+  "disk.media_errors": ["Medienfehler (NVMe)", ""],
+  "disk.crc_errors": ["CRC-Fehler (Kabel)", ""],
+  "zfs.usage": ["ZFS-Belegung", "%"],
+  "zfs.frag": ["ZFS-Fragmentierung", "%"],
+  "zfs.errors": ["ZFS-Fehler (Lesen, Schreiben, Prüfsumme)", ""],
+  "zfs.scrub_age": ["Letzter Scrub (Tage)", "d"],
+  "cpu.iowait": ["IO-Wartezeit", "%"],
+  "repl.age": ["Letzte Replikation vor", "min"],
   "net.rx": ["Netzwerk empfangen", "B/s"],
   "net.tx": ["Netzwerk gesendet", "B/s"],
   "uptime": ["Laufzeit", "s"],
@@ -1856,7 +1870,7 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 function tableKind(key) {
@@ -2034,6 +2048,16 @@ function cardValue(c) {
   if (has("ping.rtt")) return { text: fmtVal(v("ping.rtt"), "ms"), sub: has("ping.loss") ? `${fmtPct(v("ping.loss"))} Verlust` : "", spark: sp("ping.rtt") };
   if (has("tcp.time")) return { text: fmtVal(v("tcp.time"), "ms"), sub: "Verbindungsaufbau", spark: sp("tcp.time") };
   if (has("dns.time")) return { text: fmtVal(v("dns.time"), "ms"), sub: "Antwortzeit", spark: sp("dns.time") };
+  if (has("disk.temp") || has("disk.wearout")) {
+    // a physical disk (Proxmox): temperature first, wear and power-on hours below
+    const sub = [has("disk.temp") && has("disk.wearout") ? `Verschleiß ${fmtPct(v("disk.wearout"))}` : "", fa.Betriebsstunden ? fa.Betriebsstunden.replace(/\s*\(.*\)$/, "") + " Betrieb" : "", fa.Typ || ""].filter(Boolean).join(" · ");
+    return has("disk.temp") ? { text: fmtVal(v("disk.temp"), "°C"), sub, spark: sp("disk.temp") } : { text: `Verschleiß ${fmtPct(v("disk.wearout"))}`, sub, bar: v("disk.wearout"), spark: sp("disk.wearout") };
+  }
+  if (has("zfs.usage")) {
+    const sub = [has("zfs.frag") ? `Fragmentierung ${fmtPct(v("zfs.frag"))}` : "", has("zfs.scrub_age") ? `Scrub vor ${fmtNum(v("zfs.scrub_age"), 0)} Tagen` : "", v("zfs.errors") > 0 ? `${fmtNum(v("zfs.errors"), 0)} Fehler` : ""].filter(Boolean).join(" · ");
+    return { text: fmtPct(v("zfs.usage")), sub, bar: v("zfs.usage"), spark: sp("zfs.usage") };
+  }
+  if (has("repl.age")) return { word: true, text: cap1(String(c.msg || "").split(",")[0]), sub: fa.Zeitplan ? `Zeitplan ${fa.Zeitplan}` : "" };
   if (has("cert.days")) return { text: fmtVal(v("cert.days"), "d"), sub: "Zertifikat gültig", spark: sp("cert.days") };
   if (has("cpu.usage")) return { text: fmtPct(v("cpu.usage")), sub: has("cpu.load1") ? `Load ${fmtNum(v("cpu.load1"), 2)}` : "", spark: sp("cpu.usage") };
   if (has("mem.usage")) return { text: fmtPct(v("mem.usage")), sub: has("mem.used") && v("mem.total") > 0 ? ofTotal(v("mem.used"), v("mem.total")) : "", spark: sp("mem.usage") };
@@ -2196,7 +2220,7 @@ const KIND_VIEWS = {
     const mu = mval(c, "mem.used"), mtot = mval(c, "mem.total");
     const agf = (c.facts || {}).Agent;
     return `<tr class="row-link" ${rowLink(dv.id, c)}>${td("Knoten", `<div class="flex" style="gap:8px">${ckPill(c)}${ckLink(dv.id, c, `<b>${esc(c.name)}</b>`)}</div>${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}${agf ? `<div class="t-sub node-agent" title="Zugeordneter Agent">${icon("desktop", "sm")}<span>${esc(agf)}</span></div>` : ""}`)}
-      ${td("CPU", pctBar(mval(c, "cpu.usage")), "bar-cell")}
+      ${td("CPU", pctBar(mval(c, "cpu.usage")) + (isNum(mval(c, "cpu.iowait")) ? `<div class="t-sub" title="IO-Wartezeit: Anteil der Zeit, in der die CPUs auf Datenträger warten">IO-Wartezeit ${esc(fmtPct(mval(c, "cpu.iowait")))}</div>` : ""), "bar-cell")}
       ${td("Arbeitsspeicher", pctBar(mval(c, "mem.usage"), mtot ? `${fmtBytes(mu)} von ${fmtBytes(mtot)}` : "") + (mtot ? `<div class="t-sub">${fmtBytes(mu)} von ${fmtBytes(mtot)}</div>` : ""), "bar-cell")}
       ${td("Root-Platte", pctBar(mval(c, "disk.usage")), "bar-cell")}
       ${td("Laufzeit", esc(isNum(mval(c, "uptime")) ? fmtUptime(mval(c, "uptime")) : "—"), "small nowrap")}${sparkTd(dv.id, c, "cpu.usage")}${actTd(c)}</tr>`;
@@ -2368,6 +2392,9 @@ function svcSummary(c) {
     if (fa.Alias) parts.push(fa.Alias);
     if (has("poe.port") && v("poe.port") > 0) parts.push(`PoE ${fmtVal(v("poe.port"), "W")}`);
     if (fa.Nachbar) parts.push(`Nachbar ${fa.Nachbar}${fa["Nachbar-Port"] ? ` (${fa["Nachbar-Port"]})` : ""}`);
+  } else if (/^pve:(disk|zfs|repl|ha|ceph|cert):/.test(k + ":")) {
+    // the collector's message already lists the values ("SMART PASSED · 36 °C · Verschleiß 3 % · …")
+    parts.push(...String(c.msg || "").split(" · ").filter(Boolean));
   } else if (k.startsWith("pve:node:")) {
     // the node's message already holds CPU, RAM, load and uptime ("online · CPU 23 % · …")
     if (msgSegs.length) parts.push(...msgSegs);
@@ -2404,7 +2431,7 @@ function svcSummary(c) {
   const why = c.state !== "ok" || (isQuiet(c) && MUTED_TITLE[c.muted]) ? reasonText(c) : "";
   // unique parts (spaces normalised: values use a narrow space before the unit, messages a normal one)
   const norm = (x) => String(x).replace(/[\s\u202f\u00a0]+/g, " ").trim().toLowerCase();
-  const seen = new Set([why, why ? c.msg || "" : ""].flatMap((x) => String(x).split(" · ")).map(norm).filter(Boolean)), rest = [];
+  const seen = new Set(String(why).split(" · ").map(norm).filter(Boolean)), rest = [];
   for (const p of parts.filter(Boolean).map(String)) if (!seen.has(norm(p))) { seen.add(norm(p)); rest.push(p); }
   const tone = isQuiet(c) ? "quiet" : c.state;
   const html = [why ? `<span class="sv-why ${tone}">${reasonHTML(c)}</span>` : "", ...rest.map((p) => `<span>${esc(p)}</span>`)].filter(Boolean).join(`<span class="sv-dot" aria-hidden="true"> · </span>`);

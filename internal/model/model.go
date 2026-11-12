@@ -458,6 +458,18 @@ func DefaultThresholds() []Threshold {
 		{Metric: "printer.toner", Warn: f(10), Crit: f(2), Below: true},
 		{Metric: "poe.usage", Warn: f(85), Crit: f(95)},
 		{Metric: "updates.security", Warn: f(1)},
+		// Proxmox hardware and storage health
+		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
+		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},
+		{Metric: "disk.wearout", Warn: f(90), Crit: f(98)},
+		{Metric: "disk.spare", Warn: f(20), Crit: f(10), Below: true},
+		{Metric: "disk.pending", Warn: f(1), Crit: f(10)},
+		{Metric: "disk.reallocated", Warn: f(1)},
+		{Metric: "disk.uncorrectable", Warn: f(1)},
+		{Metric: "disk.media_errors", Warn: f(1)},
+		{Metric: "zfs.usage", Warn: f(80), Crit: f(90)},
+		{Metric: "zfs.errors", Warn: f(1)},
+		{Metric: "zfs.scrub_age", Warn: f(35)},
 	}
 }
 

@@ -111,8 +111,12 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | proxmox | `pve:node:<node>` | Knoten <node> | Knoten |
 | proxmox | `pve:vm:<vmid>` / `pve:ct:<vmid>` | VM <vmid> <name> / CT … | VMs / Container |
 | proxmox | `pve:storage:<node>:<storage>` | Speicher <storage> (<node>) | Speicher (shared storage once, under one node) |
-| proxmox | `pve:zfs:<node>:<pool>` | ZFS <pool> (<node>) | Speicher |
-| proxmox | `pve:disk:<node>:<dev>` | Platte <dev> (<node>) | Platten (SMART health, SSD wearout) |
+| proxmox | `pve:zfs:<node>:<pool>` | ZFS <pool> (<node>) | Speicher (health from `/disks/zfs`; `/disks/zfs/<pool>` adds vdevs not ONLINE, read/write/checksum errors, data errors = crit, resilver = warn, scrub progress/age/errors) |
+| proxmox | `pve:disk:<node>:<dev>` | Platte <dev> (<node>) | Platten (SMART health from `/disks/list`; `/disks/smart`, cached 30 min since smartctl may wake disks: ATA attributes 194/190 temp, 5 reallocated, 197 pending, 198+187 uncorrectable, 199 CRC, 9 hours, 12 cycles, FAILING_NOW = crit; NVMe health log: temp, spare, percentage used, media errors, critical warning bits = crit; warn/crit of the counters by the `disk.*` thresholds) |
+| proxmox | `pve:repl:<job>` | Replikation <vmid> <name> → <target> | Replikation (`/nodes/<n>/replication` of the source node: fail_count > 0 = crit with the error) |
+| proxmox | `pve:ha` | Hochverfügbarkeit | Cluster (only with HA resources: a resource in error = crit, fence/recovery = warn, no quorum = crit) |
+| proxmox | `pve:ceph` | Ceph | Speicher (only when Ceph answers `/cluster/ceph/status`: HEALTH_OK/WARN/ERR with the check summaries) |
+| proxmox | `pve:cert:<node>` | Zertifikat <node> | Zertifikate (`/certificates/info`, cached 6 h: pveproxy-ssl.pem, else pve-ssl.pem) |
 | proxmox | `pve:updates:<node>` | Updates <node> | Updates |
 | proxmox | `pve:backup` | Sicherungen | Sicherungen (failed vzdump tasks last 24 h = crit until a later run backed the guest up) |
 | snmp | `snmp:system` | System | System (facts: Name, Beschreibung, Standort, Kontakt, Profil, Laufzeit, plus Modell, Seriennummer (printer, UPS, NAS, UniFi), Firmware (UniFi), DSM-Version (Synology) from the profile; metric `uptime`) |
@@ -155,13 +159,23 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `guest.mem` | % | ditto | pve |
 | `guest.mem_used` | B | ditto | pve |
 | `guest.netin`, `guest.netout`, `guest.diskread`, `guest.diskwrite` | B/s | ditto | pve |
-| `storage.usage` | % | `<node>/<storage>` | pve |
+| `storage.usage` | % | `<node>/<storage>`, `ceph` | pve |
+| `cpu.iowait` | % | `<node>` | pve (IO delay of `/nodes/<n>/status` `wait`) |
+| `disk.temp` | °C | `<node>/<dev>` | pve SMART |
+| `disk.wearout` | % | ditto | pve (used life: 100 − PVE wearout, NVMe "Percentage Used") |
+| `disk.spare` | % | ditto | pve NVMe available spare |
+| `disk.reallocated`, `disk.pending`, `disk.uncorrectable`, `disk.crc_errors` | "" | ditto | pve ATA SMART raw values |
+| `disk.media_errors` | "" | ditto | pve NVMe |
+| `zfs.usage`, `zfs.frag` | % | `<node>/<pool>` | pve |
+| `zfs.errors` | "" | ditto | pve (sum of vdev read/write/checksum errors) |
+| `zfs.scrub_age` | d | ditto | pve (days since the last finished scrub) |
+| `repl.age` | min | `<job>` | pve (minutes since the last sync) |
 | `storage.used`, `storage.total` | B | ditto | pve |
 | `ping.rtt` | ms | | netcheck |
 | `ping.loss` | % | | netcheck |
 | `http.time` | ms | | netcheck |
 | `http.status` | "" | | netcheck |
-| `cert.days` | d | | netcheck http(s)/tls |
+| `cert.days` | d | (pve: `<node>`) | netcheck http(s)/tls, pve |
 | `tcp.time`, `dns.time` | ms | | netcheck |
 | `if.rx`, `if.tx` | B/s | ifName | snmp (ports that are up) |
 | `if.errors` | 1/s | ifName | snmp (in+out errors, ports that are up) |
@@ -186,6 +200,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 2. For each metric the matching threshold is chosen: device threshold with instance > device
    threshold by name > global (settings) with instance > global by name > `model.DefaultThresholds()`.
    `Disabled` switches it off. `Below` inverts the comparison (value ≤ warn → warn).
+   Proxmox health defaults: `cpu.iowait` 10/25 % (5×), `disk.temp` 60/70 °C (2×), `disk.wearout` 90/98 %,
+   `disk.spare` below 20/10 %, `disk.pending` 1/10, `disk.reallocated`, `disk.uncorrectable`, `disk.media_errors`
+   warn from 1, `zfs.usage` 80/90 %, `zfs.errors` warn from 1, `zfs.scrub_age` warn from 35 days.
 3. Threshold state needs `Count` consecutive bad values (`CheckStatus.Pending`), going back to ok
    is immediate. Native states (service stopped …) are immediate.
 4. Effective check state = worst(native, thresholds). `CheckStatus.Reason` e.g.
@@ -228,7 +245,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    accepted. A key missing from 2 successful collections in a row is vanished (`DeviceStatus.Vanished`
    `{key, name, group, last}`) until it comes back or is removed; a new key that vanishes before a decision is
    forgotten. `Core.Discovery(id, accept, remove)` accepts new keys and removes vanished ones (they count as
-   new when they return), re-applies the modes and re-evaluates the `discovery` check at once (events "Neue
+   new when they return), re-applies the modes and re-evaluates the `discovery` check at once. A new server
+   version (setting `version`) and a new agent version make the next collection the baseline as well (an update
+   brings new checks, it does not discover them) (events "Neue
    Dienste übernommen" / "Verschwundene Dienste entfernt"). Inventory ≤ 5000 keys per device.
 
 ## Attached agents (agent + API on one device)

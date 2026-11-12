@@ -34,6 +34,8 @@ type devState struct {
 	onboot   map[string]onbootEntry   // qemu/100 -> onboot
 	apt      map[string]aptEntry      // node -> update counts
 	taskLogs map[string]taskInfo      // logKey -> parsed vzdump log
+	smart    map[string]smartEntry    // node \x00 /dev/… -> SMART data
+	certs    map[string]certEntry     // node -> certificates
 }
 
 type counterSample struct {
@@ -89,7 +91,8 @@ func (c *Collector) clientFor(d model.Device) *client {
 func (c *Collector) dev(id string) *devState {
 	st := c.devs[id]
 	if st == nil {
-		st = &devState{counters: map[string]counterSample{}, onboot: map[string]onbootEntry{}, apt: map[string]aptEntry{}, taskLogs: map[string]taskInfo{}}
+		st = &devState{counters: map[string]counterSample{}, onboot: map[string]onbootEntry{}, apt: map[string]aptEntry{}, taskLogs: map[string]taskInfo{},
+			smart: map[string]smartEntry{}, certs: map[string]certEntry{}}
 		c.devs[id] = st
 	}
 	return st
@@ -181,6 +184,15 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 	details := c.nodeDetails(ctx, cl, d.ID, inv, now)
 
 	checks := []model.Check{clusterCheck(ver, cs, csErr, inv)}
+	// HA and Ceph only when used: an error (not configured, no permission) leaves them out.
+	if ha, err := cl.haStatus(ctx); err == nil {
+		if ch, ok := haCheck(ha); ok {
+			checks = append(checks, ch)
+		}
+	}
+	if ce, err := cl.ceph(ctx); err == nil && ce.Health.Status != "" {
+		checks = append(checks, cephCheck(ce))
+	}
 	for _, n := range inv.nodes {
 		checks = append(checks, nodeCheck(n, inv, details[n.Node]))
 	}
@@ -188,8 +200,12 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 	checks = append(checks, storageChecks(inv)...)
 	for _, n := range inv.nodes {
 		if det := details[n.Node]; det != nil {
-			checks = append(checks, zfsChecks(n.Node, det.zfs)...)
-			checks = append(checks, diskChecks(n.Node, det.disks)...)
+			checks = append(checks, zfsChecks(n.Node, det.zfs, det.zfsDetails, now)...)
+			checks = append(checks, diskChecks(n.Node, det.disks, det.smart)...)
+			checks = append(checks, replicationChecks(n.Node, det.repl, inv.names, now)...)
+			if ch, ok := certCheck(n.Node, det.certs.list, now); ok && det.certs.err == nil {
+				checks = append(checks, ch)
+			}
 			// Without Sys.Modify (PVEAuditor only) the check is left out and the node shows
 			// a hint, so the recommended read-only token does not leave the device unknown.
 			if !isStatus(det.apt.err, http.StatusForbidden) {
@@ -221,6 +237,16 @@ func (c *Collector) prune(devID string, inv inventory) {
 			delete(st.apt, node)
 		}
 	}
+	for node := range st.certs {
+		if _, ok := inv.online[node]; !ok {
+			delete(st.certs, node)
+		}
+	}
+	for key := range st.smart {
+		if _, ok := inv.online[strings.SplitN(key, "\x00", 2)[0]]; !ok {
+			delete(st.smart, key)
+		}
+	}
 }
 
 var errNoNodes = errors.New("Token ungültig oder ohne Rechte (keine Knoten sichtbar – Rolle PVEAuditor auf / vergeben?)")
@@ -236,6 +262,11 @@ type nodeDetail struct {
 	apt       aptEntry
 	tasks     []task // vzdump tasks of the backup window
 	tasksErr  error
+	// health details (errors leave them out: older PVE, no permission, not configured)
+	zfsDetails map[string]zfsDetail  // pool -> zpool status
+	smart      map[string]smartEntry // /dev/… -> SMART data
+	repl       []replJob
+	certs      certEntry
 }
 
 // nodeDetails queries all online nodes in parallel.
@@ -252,7 +283,23 @@ func (c *Collector) nodeDetails(ctx context.Context, cl *client, devID string, i
 		wg.Go(func() {
 			det.status, det.statusErr = cl.nodeStatus(ctx, n.Node)
 			det.zfs, det.zfsErr = cl.zfsPools(ctx, n.Node)
+			det.zfsDetails = map[string]zfsDetail{}
+			for _, p := range det.zfs {
+				if zd, err := cl.zfsDetail(ctx, n.Node, p.Name); err == nil {
+					det.zfsDetails[p.Name] = zd
+				}
+			}
 			det.disks, det.disksErr = cl.disks(ctx, n.Node)
+			det.smart = map[string]smartEntry{}
+			for _, d := range det.disks {
+				if d.DevPath != "" {
+					det.smart[d.DevPath] = c.smartFor(ctx, cl, devID, n.Node, d.DevPath, now)
+				}
+			}
+			if jobs, err := cl.replication(ctx, n.Node); err == nil {
+				det.repl = jobs
+			}
+			det.certs = c.certsFor(ctx, cl, devID, n.Node, now)
 			det.apt = c.aptFor(ctx, cl, devID, n.Node, now)
 			det.tasks, det.tasksErr = cl.backupTasks(ctx, n.Node, since)
 		})
@@ -349,6 +396,8 @@ func nodeCheck(n resource, inv inventory, det *nodeDetail) model.Check {
 		if s.Swap.Total > 0 {
 			extra = append(extra, model.Metric{Name: "swap.usage", Instance: n.Node, Value: round2(pct(float64(s.Swap.Used), float64(s.Swap.Total))), Unit: "%"})
 		}
+		// IO delay: share of time the CPUs waited for disks (slow or overloaded storage)
+		extra = append(extra, model.Metric{Name: "cpu.iowait", Instance: n.Node, Value: round2(float64(s.Wait) * 100), Unit: "%"})
 		nodeFacts(ch.Facts, s)
 	} else {
 		ch.Facts["Hinweis"] = permMessage(det.statusErr, "Sys.Audit auf /nodes")
@@ -377,6 +426,9 @@ func nodeCheck(n resource, inv inventory, det *nodeDetail) model.Check {
 	msg = append(msg, "CPU "+fmtPct(cpu*100), "RAM "+fmtPct(pct(memUsed, memTotal)))
 	if det.statusErr == nil && len(det.status.LoadAvg) > 0 {
 		msg = append(msg, "Last "+fmtFloat(float64(det.status.LoadAvg[0])))
+	}
+	if det.statusErr == nil && det.status.Wait >= 0.05 {
+		msg = append(msg, "IO-Wartezeit "+fmtPct(float64(det.status.Wait)*100))
 	}
 	if uptime > 0 {
 		msg = append(msg, fmtSince(uptime))
