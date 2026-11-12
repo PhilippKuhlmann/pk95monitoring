@@ -293,6 +293,7 @@ function checksSummary(c) {
   if (n.warn) parts.push(`<span class="cs-warn">${n.warn} ${n.warn === 1 ? "Warnung" : "Warnungen"}</span>`);
   if (n.unknown) parts.push(`<span class="cs-unk">${n.unknown} Unbekannt</span>`);
   parts.push(`<span class="cs-ok">${n.ok} OK</span>`);
+  if (int(c.acked)) parts.push(`<span class="cs-ack" title="Quittierte Probleme zählen als OK, bis sie schlimmer werden">${int(c.acked)} quittiert</span>`);
   return parts.join(" · ");
 }
 
@@ -576,6 +577,7 @@ async function loadOverview() {
   state.ov = r; state.ovAt = Date.now();
   if (r.groups) state.groups = r.groups;
   drawAlertInd();
+  document.dispatchEvent(new Event("pk95-overview")); // pages that show counts of it redraw them
   return r;
 }
 async function pollOverview() {
@@ -756,7 +758,13 @@ function alertRow(a) {
 function bindAck(root, after) {
   qsa("[data-ack]", root).forEach((b) => b.onclick = () => run(b, async () => {
     await POST(`/api/alerts/${enc(b.dataset.ack)}/ack`);
-    toast("Alarm quittiert.");
+    toast("Alarm quittiert – bis er schlimmer wird.");
+    state.ovAt = 0;
+    await Promise.all([after ? after() : null, loadOverview().catch(() => {})]);
+  }));
+  qsa("[data-unack]", root).forEach((b) => b.onclick = () => run(b, async () => {
+    await POST(`/api/alerts/${enc(b.dataset.unack)}/unack`);
+    toast("Quittierung aufgehoben – der Alarm ist wieder offen.");
     state.ovAt = 0;
     await Promise.all([after ? after() : null, loadOverview().catch(() => {})]);
   }));
@@ -822,8 +830,8 @@ PAGES["/"] = async (el, token) => {
       `<div class="dash-cols">
         <div class="dash-col">${groupPanels}</div>
         <div class="dash-col">
-          <div class="panel flush"><div class="panel-head"><div class="panel-title">Aktive Alarme</div><a class="btn gray sm" href="/alerts" data-go>Alle</a></div>
-            <div class="rows">${alerts.map(alertRow).join("") || `<div class="row muted">Keine aktiven Alarme.</div>`}</div></div>
+          <div class="panel flush"><div class="panel-head"><div class="panel-title">Offene Alarme</div><div class="actions">${alerts.some((a) => a.acked_by) ? `<a class="btn ghost sm" href="/alerts?tab=acked" data-go>${alerts.filter((a) => a.acked_by).length} quittiert</a>` : ""}<a class="btn gray sm" href="/alerts" data-go>Alle</a></div></div>
+            <div class="rows">${alerts.filter((a) => !a.acked_by).map(alertRow).join("") || `<div class="row muted">${alerts.length ? "Keine offenen Alarme – alle quittiert." : "Keine aktiven Alarme."}</div>`}</div></div>
           <div class="panel flush"><div class="panel-head"><div class="panel-title">Ereignisse</div><a class="btn gray sm" href="/events" data-go>Alle</a></div>
             <div class="rows">${(r.events || []).map(eventItem).join("") || `<div class="row muted">Noch keine Ereignisse.</div>`}</div></div>
         </div></div></div>`;
@@ -1804,7 +1812,7 @@ function projectStatus(st, rules) {
   }
   for (const h of out.hidden) h.pending = ruleMode(rules, h.key) !== "off"; // shown again with the next poll
   if (changed) {
-    const known = out.checks.filter((c) => c.state !== "unknown");
+    const known = out.checks.filter((c) => c.state !== "unknown").map((c) => (c.acked ? { ...c, state: "ok" } : c));
     out.state = known.length ? known.reduce((a, c) => (RANK[c.state] > RANK[a] ? c.state : a), "ok") : out.checks.length ? "unknown" : st.state;
   }
   return out;
@@ -1902,7 +1910,8 @@ const quietWord = (c) => (isNew(c) ? "Neu" : "Nur Anzeige");
 const MUTED_TITLE = { warn: "Wäre Warnung", crit: "Wäre kritisch" };
 // ckPill: state pill of a check; quiet checks show "Nur Anzeige" instead.
 const ckPill = (c, dot = true) => (isNew(c) ? `<span class="pill blue" title="Neu gefunden – noch nicht übernommen, löst keinen Alarm aus">Neu</span>`
-  : isQuiet(c) ? `<span class="pill" title="Nur Anzeige – dieser Check löst keinen Alarm aus">Nur Anzeige</span>` : statePill(c.state, dot));
+  : isQuiet(c) ? `<span class="pill" title="Nur Anzeige – dieser Check löst keinen Alarm aus">Nur Anzeige</span>`
+  : c.acked ? `<span class="pill green" title="${esc((STATES[c.state] || STATES.unknown)[0])} – quittiert: zählt als OK, bis es schlimmer wird">${dot ? '<span class="d"></span>' : ""}Quittiert</span>` : statePill(c.state, dot));
 // reasonHTML: the reason of a check; for a quiet check that would be warn/crit dimmed with a dot.
 function reasonHTML(c, fallback = "") {
   const t = reasonText(c) || fallback;
@@ -1916,7 +1925,7 @@ function modeBtn(c) {
   return `<button class="ib sm-ib ck-mode ${q ? "quiet" : ""}" type="button" data-mode-key="${esc(c.key)}" data-fk="m:${esc(c.key)}" aria-haspopup="menu" aria-expanded="false" title="Überwachung: ${isNew(c) ? "neu, noch nicht entschieden" : q ? "nur anzeigen" : "überwachen"}" aria-label="Überwachung von ${esc(c.name)} einstellen">${icon("eye")}</button>`;
 }
 // cardTone: colour of a check card, its left bar and its sparkline.
-const cardTone = (c) => (isQuiet(c) ? "quiet" : ["ok", "warn", "crit"].includes(c.state) ? c.state : "unknown");
+const cardTone = (c) => (isQuiet(c) ? "quiet" : c.acked ? "ok" : ["ok", "warn", "crit"].includes(c.state) ? c.state : "unknown");
 
 // checkPath is the URL of the check page; ":" stays readable, "/" is encoded.
 const checkPath = (devId, key) => `/devices/${enc(devId)}/checks/${enc(key).replace(/%3A/gi, ":")}`;
@@ -2117,7 +2126,7 @@ function thinBar(p, tone, low) {
 function svcCard(c, devId, { mode = true } = {}) {
   const v = cardValue(c), tone = cardTone(c);
   // a card whose value is only the state word ("Kritisch") shows no extra state pill
-  const pillH = isQuiet(c) ? ckPill(c) : c.state !== "ok" && !v.stateOnly ? statePill(c.state) : "";
+  const pillH = isQuiet(c) || c.acked ? ckPill(c) : c.state !== "ok" && !v.stateOnly ? statePill(c.state) : "";
   const stTxt = isQuiet(c) ? quietWord(c) : c.state !== "ok" && !v.stateOnly ? (STATES[c.state] || STATES.unknown)[0] : "";
   const aria = [c.name, v.text, v.sub, stTxt].filter(Boolean).join(", ");
   const val = v.rxtx ? `<span class="svc-rx" title="Empfangen"><span aria-hidden="true">↓</span> ${esc(fmtVal(v.rxtx[0], "B/s"))}</span><span class="svc-tx" title="Gesendet"><span aria-hidden="true">↑</span> ${esc(fmtVal(v.rxtx[1], "B/s"))}</span>` : esc(v.text);
@@ -2369,10 +2378,11 @@ function checksView(dv, st, att = []) {
 function ckSummary(st, att, view) {
   const checks = st.checks || [];
   const counts = { ok: 0, warn: 0, crit: 0, unknown: 0 };
-  checks.forEach((c) => { counts[c.state in counts ? c.state : "unknown"]++; });
+  checks.forEach((c) => { const s = c.acked ? "ok" : c.state; counts[s in counts ? s : "unknown"]++; });
+  const acked = checks.filter((c) => c.acked).length;
   const quiet = checks.filter((c) => c.mode === "quiet").length, fresh = checks.filter(isNew).length, gone = (st.vanished || []).length;
   const hidden = (st.hidden || []).filter((h) => !h.pending).length;
-  return `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${fresh ? ` · ${fresh} neu` : ""}${gone ? ` · ${gone} verschwunden` : ""}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span>${view === "cards" ? `<span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span>` : ""}${viewSeg(view)}</div>`;
+  return `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${acked ? ` · ${acked} quittiert` : ""}${fresh ? ` · ${fresh} neu` : ""}${gone ? ` · ${gone} verschwunden` : ""}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span>${view === "cards" ? `<span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span>` : ""}${viewSeg(view)}</div>`;
 }
 const dvNotes = (dv) => (dv.notes ? `<div class="panel tight dv-notes"><span class="muted small">Notizen</span><div>${esc(dv.notes)}</div></div>` : "");
 
@@ -2385,7 +2395,7 @@ const viewSeg = (cur) => `<div class="seg sv-view" role="group" aria-label="Dars
 const svcSel = new Map(); // device id → Set of checked check keys (kept across the 30-s refresh)
 const svcFilter = new Map(); // device id → {q, bad}
 // svcBad: a check that needs a look – warn, crit, unknown, or quiet but would be warn/crit.
-const svcBad = (c) => ["warn", "crit", "unknown"].includes(c.state) || (isQuiet(c) && !!MUTED_TITLE[c.muted]);
+const svcBad = (c) => (["warn", "crit", "unknown"].includes(c.state) && !c.acked) || (isQuiet(c) && !!MUTED_TITLE[c.muted]);
 const rxtxText = (rx, tx) => `↓ ${fmtVal(rx, "B/s")}  ↑ ${fmtVal(tx, "B/s")}`;
 // svcSummary: the current values of a check as one line ({html, text}); a problem's reason comes first.
 function svcSummary(c) {
@@ -2440,7 +2450,7 @@ function svcSummary(c) {
   const norm = (x) => String(x).replace(/[\s\u202f\u00a0]+/g, " ").trim().toLowerCase();
   const seen = new Set(String(why).split(" · ").map(norm).filter(Boolean)), rest = [];
   for (const p of parts.filter(Boolean).map(String)) if (!seen.has(norm(p))) { seen.add(norm(p)); rest.push(p); }
-  const tone = isQuiet(c) ? "quiet" : c.state;
+  const tone = isQuiet(c) ? "quiet" : c.acked ? "ok" : c.state;
   const html = [why ? `<span class="sv-why ${tone}">${reasonHTML(c)}</span>` : "", ...rest.map((p) => `<span>${esc(p)}</span>`)].filter(Boolean).join(`<span class="sv-dot" aria-hidden="true"> · </span>`);
   return { html: html || `<span class="muted">—</span>`, text: [why, ...rest].filter(Boolean).join(" · ") };
 }
@@ -2457,7 +2467,7 @@ function svcRow(c, devId, sel, mode, alert) {
   const ackable = alert && !alert.ended && !alert.acked_by ? ` data-ack-id="${esc(alert.id)}"` : "";
   const box = sel && c.key !== REACH_KEY ? selBox(`data-sel="${esc(c.key)}" data-fk="s:${esc(devId)}|${esc(c.key)}" ${on ? "checked" : ""}`, `${c.name} auswählen`) : "";
   return `<tr class="row-link sv-row st-${tone}${on ? " sel" : ""}" ${rowLink(devId, c)}${ackable} data-bad="${svcBad(c) ? 1 : ""}" data-q="${esc(lc([c.name, c.key, c.group, s.text].join(" ")))}">
-    <td class="sv-sel">${box}</td><td class="sv-st">${ckPill(c)}${ackTag(alert)}</td>
+    <td class="sv-sel">${box}</td><td class="sv-st">${ckPill(c)}${c.acked ? "" : ackTag(alert)}</td>
     <td class="sv-name">${ckLink(devId, c, esc(c.name))}${pendingTag(c)}</td>
     <td class="sv-sum">${s.html}</td>
     <td class="spark-cell">${cv.spark ? sparkBox(devId, c.key, cv.spark, tone, "tspark") : ""}</td>
@@ -2604,7 +2614,8 @@ function alertsTable(list, opts) {
       ${td("Beginn", `<span class="nowrap">${esc(fmtTime(a.started, true))}</span><div class="t-sub">${esc(fmtAgo(a.started))}</div>`)}
       ${td("Ende / Dauer", a.ended ? `<span class="nowrap">${esc(fmtTime(a.ended, true))}</span><div class="t-sub">Dauer ${esc(fmtUptime(a.ended - a.started))}</div>` : `${pill("aktiv", a.severity === "crit" ? "rose" : "amber", true, true)}<div class="t-sub">seit ${esc(fmtUptime(now - a.started))}</div>`)}
       ${td("Quittiert", a.acked_by ? `${esc(a.acked_by)}<div class="t-sub">${esc(fmtTime(a.acked_at, true))}</div>` : '<span class="muted">—</span>', "small")}
-      <td class="act">${!a.ended && !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}">${icon("check")} Quittieren</button>` : ""}</td></tr>`).join("")}
+      <td class="act">${a.ended ? "" : !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}">${icon("check")} Quittieren</button>`
+        : `<button class="btn ghost sm" type="button" data-unack="${esc(a.id)}" title="Der Alarm zählt wieder als offen und erinnert wieder">${icon("restore")} Aufheben</button>`}</td></tr>`).join("")}
   </tbody></table></div></div>`;
 }
 
@@ -3549,29 +3560,46 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
 };
 
 // ---------- alerts ----------
+// Alerts page: open (not acknowledged), acknowledged, history; the tab is ?tab=acked|history.
+const ATABS = [["open", "Offen", "open"], ["acked", "Quittiert", "acked"], ["all", "Verlauf", "history"]];
 PAGES["/alerts"] = async (el, token) => {
-  let tab = new URLSearchParams(location.search).get("tab") === "history" ? "all" : "active";
+  const t0 = new URLSearchParams(location.search).get("tab");
+  let tab = (ATABS.find(([, , u]) => u === t0) || ATABS[0])[0];
   let reload = null;
   const alive = () => token === pageToken;
-  el.innerHTML = pageHead("Alarme", "Ein Alarm entsteht, wenn ein Check auf Warnung oder Kritisch wechselt, und endet, wenn er wieder OK ist. Quittieren heißt: jemand kümmert sich – erneute Benachrichtigungen bleiben dann aus.",
-    `<div class="seg" role="group" aria-label="Ansicht"><button type="button" data-t="active" aria-pressed="${tab === "active"}">Aktiv</button><button type="button" data-t="all" aria-pressed="${tab === "all"}">Verlauf</button></div>
+  const segs = () => {
+    const all = (state.ov && state.ov.alerts) || [], acked = all.filter((x) => x.acked_by).length, n = { open: all.length - acked, acked };
+    return ATABS.map(([k, l]) => `<button type="button" data-t="${k}" aria-pressed="${tab === k}">${l}${k in n && state.ov ? ` <span class="seg-n">${n[k]}</span>` : ""}</button>`).join("");
+  };
+  el.innerHTML = pageHead("Alarme", "Ein Alarm entsteht, wenn ein Check auf Warnung oder Kritisch wechselt, und endet, wenn er wieder OK ist. Quittieren heißt: jemand kümmert sich – der Check zählt als OK und es kommen keine Erinnerungen, bis er schlimmer wird.",
+    `<div class="seg" role="group" aria-label="Ansicht" data-segs>${segs()}</div>
      <button class="btn gray" type="button" data-refresh>${icon("refresh")} Aktualisieren</button>`) + `<div data-list>${loadingPanel()}</div>`;
   const box = qs("[data-list]", el);
-  const load = async () => {
-    reload = await alertsBlock(box, `state=${tab}`, tab === "active"
-      ? { device: true, emptyTitle: "Keine aktiven Alarme", emptyText: "Alles im grünen Bereich." }
-      : { device: true, emptyTitle: "Noch keine Alarme", emptyText: "Hier steht später, wann welcher Check auffällig war." }, alive);
+  const opts = {
+    open: { device: true, emptyTitle: "Keine offenen Alarme", emptyText: "Alles im grünen Bereich – oder quittiert." },
+    acked: { device: true, emptyTitle: "Nichts quittiert", emptyText: "Hier stehen die offenen Alarme, um die sich schon jemand kümmert. „Aufheben“ macht sie wieder offen." },
+    all: { device: true, emptyTitle: "Noch keine Alarme", emptyText: "Hier steht später, wann welcher Check auffällig war." },
   };
-  qsa("[data-t]", el).forEach((b) => b.onclick = () => {
+  const bind = () => qsa("[data-t]", el).forEach((b) => b.onclick = () => {
     tab = b.dataset.t;
     qsa("[data-t]", el).forEach((x) => x.setAttribute("aria-pressed", x === b));
-    history.replaceState({}, "", "/alerts" + (tab === "all" ? "?tab=history" : ""));
+    const u = ATABS.find(([k]) => k === tab)[2];
+    history.replaceState({}, "", "/alerts" + (u === "open" ? "" : "?tab=" + u));
     box.innerHTML = loadingPanel();
     load().catch(toastErr);
   });
+  // the tab counts follow the overview (the bell's data)
+  const drawSegs = () => { const s0 = qs("[data-segs]", el); if (s0 && !s0.contains(document.activeElement)) { s0.innerHTML = segs(); bind(); } };
+  const load = async () => {
+    reload = await alertsBlock(box, `state=${tab}`, opts[tab], alive);
+    loadOverview().catch(() => {});
+  };
+  const onOverview = () => { if (alive()) drawSegs(); else document.removeEventListener("pk95-overview", onOverview); };
+  document.addEventListener("pk95-overview", onOverview);
+  bind();
   qs("[data-refresh]", el).onclick = (e) => run(e.currentTarget, () => (reload ? reload(false) : load()));
   await load();
-  every(30000, token, () => (tab === "active" && reload ? reload(false) : null));
+  every(30000, token, () => (tab !== "all" && reload ? reload(false).then(() => loadOverview().catch(() => {})) : null));
 };
 
 // ---------- events ----------

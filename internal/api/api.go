@@ -133,6 +133,7 @@ func (s *Server) routes() {
 	a("POST /api/test/netcheck", s.testNetCheck)
 	a("GET /api/alerts", s.alerts)
 	a("POST /api/alerts/{id}/ack", s.ackAlert)
+	a("POST /api/alerts/{id}/unack", s.unackAlert)
 	a("GET /api/events", s.events)
 	a("GET /api/agents", s.agents)
 	a("POST /api/agents/key", s.rotateKey)

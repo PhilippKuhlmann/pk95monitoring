@@ -480,8 +480,17 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := intParam(q.Get("limit"), 50, 1, 500)
 	before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
-	list, err := s.C.St.Alerts(r.Context(), store.AlertQuery{DeviceID: q.Get("device"), ActiveOnly: q.Get("state") == "active",
-		Before: before, Limit: limit + 1})
+	// state: active (all open), open (open, not acknowledged), acked (open, acknowledged), all
+	aq := store.AlertQuery{DeviceID: q.Get("device"), Before: before, Limit: limit + 1}
+	switch q.Get("state") {
+	case "active":
+		aq.ActiveOnly = true
+	case "open":
+		aq.ActiveOnly, aq.Acked = true, "no"
+	case "acked":
+		aq.ActiveOnly, aq.Acked = true, "yes"
+	}
+	list, err := s.C.St.Alerts(r.Context(), aq)
 	if err != nil {
 		fail(w, err)
 		return
@@ -500,6 +509,20 @@ func (s *Server) ackAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.C.AckAlert(id, currentUser(r).Username); err != nil {
+		fail(w, err)
+		return
+	}
+	ok(w)
+}
+
+// unackAlert removes the acknowledgement of an open alert.
+func (s *Server) unackAlert(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "Nicht gefunden.")
+		return
+	}
+	if err := s.C.UnackAlert(id, currentUser(r).Username); err != nil {
 		fail(w, err)
 		return
 	}

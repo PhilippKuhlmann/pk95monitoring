@@ -367,6 +367,9 @@ type CheckStatus struct {
 	Mode string `json:"mode,omitempty"`
 	// Muted is the state a quiet check would have (warn/crit); its State is then ok.
 	Muted string `json:"muted,omitempty"`
+	// Acked: the open alert of this warn/crit check is acknowledged. The check keeps its
+	// State, but counts as ok for the device until it gets worse (that clears the ack).
+	Acked bool `json:"acked,omitempty"`
 }
 
 // HiddenCheck is a check switched off by a rule (listed so the UI can show it again).

@@ -103,6 +103,7 @@ type CheckCounts struct {
 	Warn    int `json:"warn"`
 	Crit    int `json:"crit"`
 	Unknown int `json:"unknown"`
+	Acked   int `json:"acked,omitempty"` // acknowledged problems (counted as OK)
 }
 
 // DeviceRow is one device in lists (overview, devices, agents). See DESIGN.md.

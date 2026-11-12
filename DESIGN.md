@@ -387,7 +387,7 @@ Authenticated:
 - `POST /api/test/nut {id?, host, nut}` → `{ok, server, ups:[{name, desc, model, status}], message}` (empty
   `nut.password` with `id` = the stored password; `status` is German text)
 - `POST /api/test/netcheck {host, check}` → `Check`
-- `GET /api/alerts?state=active|all&before=&limit=&device=` (limit default 50, max 500) → `{alerts, more}`; `POST /api/alerts/{id}/ack` → `{ok}`
+- `GET /api/alerts?state=active|open|acked|all&before=&limit=&device=` (open = active and not acknowledged, acked = active and acknowledged; limit default 50, max 500) → `{alerts, more}`; `POST /api/alerts/{id}/ack` and `POST /api/alerts/{id}/unack` → `{ok}`
 - `GET /api/events?severity=&before=&limit=` (limit default 50, max 500) → `{events, more}` (Event as in ProxBackup: `{id, ts, severity, source, title, body, details}`)
 - `GET /api/agents[?device=<id>&node=<node>]` → `{enroll_key, server_url, fingerprint, version, auto_update, linux_cmd, windows_cmd, binaries:[{os, arch, file, size, sha256, available}], agents:[DeviceRow]}` (`linux_cmd`/`windows_cmd` empty when the binary is missing; see Agent → one-liners; with `device` the commands include `--device <id> [--node <node>]`, 404 for an unknown device, 400 for an agent; `agents` = all agent devices incl. attached ones)
 - `POST /api/agents/key` → `{enroll_key}` (rotate)
@@ -489,7 +489,12 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   line), in the device's service list (tag "quittiert", bulk bar "Quittieren" for checked checks with an open
   unacknowledged alert), on the alerts pages. An acknowledged alert gets no reminders (re-notify) until it gets
   worse: an escalation warn → crit clears the acknowledgement (`Store.UnackAlert`) and notifies. The bell counts
-  open alerts nobody acknowledged.
+  open alerts nobody acknowledged. The check keeps its state but gets `CheckStatus.Acked`: it counts as ok for the
+  device state, the device message and the check counts (`CheckCounts.Acked` = how many), and shows a green
+  "Quittiert" pill. `POST /api/alerts/{id}/unack` takes it back ("Aufheben"); both log an event ("Alarm
+  quittiert" / "Quittierung aufgehoben" with the user). Alerts page tabs: Offen (`?state=open`), Quittiert
+  (`?tab=acked`, `state=acked`, with who/when and "Aufheben"), Verlauf; the overview lists the open ones and
+  links the acknowledged ones.
 - Layout: `.wrap` max 1600 px, centred (as in ProxBackup).
 - Device list `/devices`: one compact row per device – state, name (+ attached agents) with address, type and
   group below and the first problem in one line (full text as tooltip), check counts with the last contact,

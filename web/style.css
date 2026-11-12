@@ -623,7 +623,7 @@ input[type="url"], input[type="datetime-local"], input[type="date"] {
 .dev-table td.bar-cell, .ck-table td.bar-cell { min-width: 120px; }
 .dev-table a.t-main, .resp a.t-main { text-decoration: none; }
 .dev-table a.t-main:hover, .resp a.t-main:hover { color: var(--accent-ink); text-decoration: underline; }
-.cs-ok { color: var(--muted); } .cs-unk { color: var(--muted); }
+.cs-ok { color: var(--muted); } .cs-unk { color: var(--muted); } .cs-ack { color: var(--blue-ink); }
 .cs-warn { color: #b45309; font-weight: 600; } .cs-crit { color: #dc2626; font-weight: 600; }
 :root[data-theme="dark"] .cs-warn { color: #fbbf24; } :root[data-theme="dark"] .cs-crit { color: #fb7185; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cs-warn { color: #fbbf24; } :root:not([data-theme="light"]) .cs-crit { color: #fb7185; } }
@@ -1101,3 +1101,5 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .ack-tag .icon { width: 11px; height: 11px; }
 .ckd-ack { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-2); }
 .ckd-ack .icon { width: 16px; height: 16px; color: var(--c600); flex: none; }
+.seg-n { display: inline-block; min-width: 18px; margin-left: 4px; padding: 0 5px; border-radius: 999px; font-size: 11px; line-height: 16px; background: var(--gray-bg); color: var(--gray-ink); }
+.seg button[aria-pressed="true"] .seg-n { background: rgba(255, 255, 255, 0.25); color: #fff; }

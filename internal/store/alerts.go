@@ -93,8 +93,9 @@ func (s *Store) ActiveAlerts() ([]model.Alert, error) {
 type AlertQuery struct {
 	DeviceID   string // empty = all devices
 	ActiveOnly bool
-	Before     int64 // only alerts with a smaller id (paging), 0 = newest
-	Limit      int   // default 100, at most 1000
+	Acked      string // "yes": only acknowledged, "no": only unacknowledged, "" = both
+	Before     int64  // only alerts with a smaller id (paging), 0 = newest
+	Limit      int    // default 100, at most 1000
 }
 
 // Alerts lists alerts newest first.
@@ -107,6 +108,12 @@ func (s *Store) Alerts(ctx context.Context, q AlertQuery) ([]model.Alert, error)
 	}
 	if q.ActiveOnly {
 		where += " AND ended = 0"
+	}
+	switch q.Acked {
+	case "yes":
+		where += " AND acked_by <> ''"
+	case "no":
+		where += " AND acked_by = ''"
 	}
 	if q.Before > 0 {
 		where += " AND id < ?"

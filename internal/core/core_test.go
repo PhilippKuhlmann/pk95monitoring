@@ -484,10 +484,21 @@ func TestAckHoldsUntilWorse(t *testing.T) {
 	if err := e.c.AckAlert(active[0].ID, "admin"); err != nil {
 		t.Fatal(err)
 	}
+	// Acknowledged: the check keeps its state, the device counts it as ok.
+	st := e.c.Status(id)
+	if cs := mustCheck(t, st, "disk:/"); cs.State != model.StateWarn || !cs.Acked || st.State != model.StateOK {
+		t.Fatalf("after ack: device %s, check %+v", st.State, cs)
+	}
+	if r, _ := rowOf(e.c.Rows(), id); r.State != model.StateOK || r.Checks.Warn != 0 || r.Checks.Acked != 1 {
+		t.Fatalf("row after ack: %+v", r)
+	}
 	// Still warn (other value): stays acknowledged.
 	e.report(t, id, diskCheck(92))
 	if a, _ := e.st.ActiveAlerts(); a[0].AckedBy != "admin" {
 		t.Fatalf("ack lost without escalation: %+v", a[0])
+	}
+	if st := e.c.Status(id); st.State != model.StateOK {
+		t.Fatalf("device after ack and new report: %s", st.State)
 	}
 	// Worse: the acknowledgement ends, the alert notifies and reminds again.
 	e.report(t, id, diskCheck(97))
@@ -495,6 +506,9 @@ func TestAckHoldsUntilWorse(t *testing.T) {
 	a, _ := e.st.ActiveAlerts()
 	if len(a) != 1 || a[0].Severity != model.StateCrit || a[0].AckedBy != "" || a[0].AckedAt != 0 {
 		t.Fatalf("after escalation: %+v", a)
+	}
+	if st := e.c.Status(id); st.State != model.StateCrit || mustCheck(t, st, "disk:/").Acked {
+		t.Fatalf("device after escalation: %s", st.State)
 	}
 	if got := e.rec.titles(); len(got) != 2 || !strings.HasPrefix(got[1], "Kritisch:") {
 		t.Fatalf("notifications %v", got)
@@ -505,5 +519,39 @@ func TestAckHoldsUntilWorse(t *testing.T) {
 	e.wait()
 	if got := e.rec.titles(); len(got) != 3 || !strings.HasPrefix(got[2], "Weiterhin Kritisch") {
 		t.Fatalf("renotify after escalation %v", got)
+	}
+}
+
+func TestUnackAlert(t *testing.T) {
+	e := newEnv(t, Options{})
+	id := e.agentDevice(t, "web01", nil)
+	e.report(t, id, diskCheck(91))
+	e.wait()
+	active, _ := e.st.ActiveAlerts()
+	if err := e.c.AckAlert(active[0].ID, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if l, _ := e.st.Alerts(ctx, store.AlertQuery{ActiveOnly: true, Acked: "yes"}); len(l) != 1 {
+		t.Fatalf("acked list %+v", l)
+	}
+	if l, _ := e.st.Alerts(ctx, store.AlertQuery{ActiveOnly: true, Acked: "no"}); len(l) != 0 {
+		t.Fatalf("open list %+v", l)
+	}
+	if err := e.c.UnackAlert(active[0].ID, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	st := e.c.Status(id)
+	if st.State != model.StateWarn || mustCheck(t, st, "disk:/").Acked {
+		t.Fatalf("after unack: %s", st.State)
+	}
+	if l, _ := e.st.Alerts(ctx, store.AlertQuery{ActiveOnly: true, Acked: "no"}); len(l) != 1 || l[0].AckedBy != "" {
+		t.Fatalf("open list after unack %+v", l)
+	}
+	if body := lastEventBody(t, e, "Quittierung aufgehoben: web01 – Festplatte /"); !strings.Contains(body, "admin") {
+		t.Fatalf("event %q", body)
+	}
+	if err := e.c.UnackAlert(999, "admin"); err == nil {
+		t.Fatal("unknown alert unacked")
 	}
 }

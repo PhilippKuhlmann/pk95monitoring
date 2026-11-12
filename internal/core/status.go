@@ -103,7 +103,19 @@ func orderChecks(list []model.CheckStatus) []model.CheckStatus {
 
 // deviceState is the worst state of all checks that are not unknown (unknown only when no
 // check has data) and a short German reason.
+// devState is the state a check contributes to its device: an acknowledged problem counts as ok.
+func devStateOf(cs model.CheckStatus) string {
+	if cs.Acked {
+		return model.StateOK
+	}
+	return cs.State
+}
+
 func deviceState(checks []model.CheckStatus) (string, string) {
+	checks = slices.Clone(checks)
+	for i := range checks {
+		checks[i].State = devStateOf(checks[i])
+	}
 	worst := ""
 	for _, cs := range checks {
 		if cs.State == model.StateUnknown {
@@ -185,13 +197,20 @@ func (c *Core) finish(d model.Device, rt *devState, checks []model.CheckStatus, 
 			delete(rt.detail, k)
 		}
 	}
-	state, msg := deviceState(checks)
+	rt.st.DeviceID, rt.st.Checks = d.ID, checks
+	rt.dirty = true
+	c.syncAlerts(d, rt, now)
+	// after the alerts: an acknowledged problem does not colour the device
+	for i := range rt.st.Checks {
+		cs := &rt.st.Checks[i]
+		oa := c.open[alertKey(d.ID, cs.Key)]
+		cs.Acked = oa != nil && oa.a.AckedBy != "" && (cs.State == model.StateWarn || cs.State == model.StateCrit)
+	}
+	state, msg := deviceState(rt.st.Checks)
 	if state != rt.st.State || rt.st.Since == 0 {
 		rt.st.Since = now
 	}
-	rt.st.DeviceID, rt.st.State, rt.st.Message, rt.st.Checks = d.ID, state, msg, checks
-	rt.dirty = true
-	c.syncAlerts(d, rt, now)
+	rt.st.State, rt.st.Message = state, msg
 }
 
 // ---- alerts ----

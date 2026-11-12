@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"slices"
 	"strings"
@@ -29,7 +30,10 @@ func (c *Core) Status(id string) model.DeviceStatus {
 func countChecks(checks []model.CheckStatus) CheckCounts {
 	var n CheckCounts
 	for _, cs := range checks {
-		switch cs.State {
+		if cs.Acked {
+			n.Acked++
+		}
+		switch devStateOf(cs) {
 		case model.StateOK:
 			n.OK++
 		case model.StateWarn:
@@ -273,18 +277,49 @@ func (c *Core) DeviceSummary(id string) (model.DeviceSummary, error) {
 	return c.deviceSummary(d, c.childrenOf(d.ID), c.Now().Unix()), nil
 }
 
-// AckAlert acknowledges an alert.
+// AckAlert acknowledges an alert: no reminders, the check counts as ok for its device until
+// the alert gets worse.
 func (c *Core) AckAlert(id int64, user string) error {
 	now := c.Now().Unix()
 	if err := c.St.AckAlert(id, user, now); err != nil {
 		return err
 	}
+	c.setAck(id, user, now, user)
+	return nil
+}
+
+// UnackAlert removes the acknowledgement of an alert (store.ErrNotFound when unknown).
+func (c *Core) UnackAlert(id int64, user string) error {
+	if err := c.St.UnackAlert(id); err != nil {
+		return err
+	}
+	c.setAck(id, "", 0, user)
+	return nil
+}
+
+// setAck updates an open alert in memory, re-derives its device state (an acknowledged
+// problem counts as ok) and logs the change.
+func (c *Core) setAck(id int64, ackedBy string, at int64, actor string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := c.Now().Unix()
 	for _, oa := range c.open {
-		if oa.a.ID == id {
-			oa.a.AckedBy, oa.a.AckedAt = user, now
+		if oa.a.ID != id {
+			continue
 		}
+		oa.a.AckedBy, oa.a.AckedAt = ackedBy, at
+		d, ok := c.devices[oa.a.DeviceID]
+		if !ok || c.rt[d.ID] == nil {
+			break
+		}
+		rt := c.rt[d.ID]
+		c.finish(d, rt, rt.st.Checks, now)
+		name := c.displayName(d)
+		if ackedBy != "" {
+			c.Event("info", name, fmt.Sprintf("Alarm quittiert: %s – %s", name, oa.a.CheckName), "Quittiert von "+actor+". Keine Erinnerungen, bis es schlimmer wird.", nil, false)
+		} else {
+			c.Event("info", name, fmt.Sprintf("Quittierung aufgehoben: %s – %s", name, oa.a.CheckName), "Aufgehoben von "+actor+". Der Alarm zählt wieder als offen.", nil, false)
+		}
+		break
 	}
-	return nil
 }
