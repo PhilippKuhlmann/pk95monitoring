@@ -1305,14 +1305,16 @@ PAGES["/devices/:id"] = async (el, token) => {
     saveQ = p.catch(() => {});
     return p.finally(() => { busy--; });
   };
-  const saveRules = (btn, fn) => {
+  // saveRules changes the rules with fn(rules); done runs after a successful save, before the redraw.
+  const saveRules = (btn, fn, done, okText = "Gespeichert.") => {
     wantFocus = btn && btn.dataset.fk ? btn.dataset.fk : null;
     return run(btn, async () => {
       let rules = null;
       const r = await saveDevice((cur) => { cur.rules = rules = fn(cur.rules || []); });
       data.device.rules = (r && Array.isArray(r.rules)) ? r.rules : rules;
+      if (done) done();
       await reload();
-    }, "Gespeichert.");
+    }, okText);
   };
 
   const drawHead = () => {
@@ -1396,11 +1398,20 @@ PAGES["/devices/:id"] = async (el, token) => {
     const open = Object.fromEntries(qsa("details[data-keep]", body).map((x) => [x.dataset.keep, x.open]));
     const st = view();
     const att = attachedViews();
-    body.innerHTML = checksView(data.device, st, att);
+    const list = ckViewMode() === "list";
+    body.innerHTML = list ? svcList(data.device, st, att) : checksView(data.device, st, att);
     bindCopy(body);
     qsa("[data-keep-scroll]", body).forEach((x) => { if (scroll[x.dataset.keepScroll]) x.scrollTop = scroll[x.dataset.keepScroll]; });
-    qsa("details[data-keep]", body).forEach((x) => { if (open[x.dataset.keep]) x.open = true; });
-    if (fk) { const n = qs(`[data-fk="${CSS.escape(fk)}"]`, body); if (n) n.focus({ preventScroll: true }); }
+    // panels keep the state the user gave them (open by default or closed by default)
+    qsa("details[data-keep]", body).forEach((x) => { if (x.dataset.keep in open) x.open = open[x.dataset.keep]; });
+    if (list) { applySvFilter(body, svcFilter.get(id) || { q: "", bad: false }); syncSel(body, svcSel.get(id) || new Set()); }
+    if (fk) {
+      const n = qs(`[data-fk="${CSS.escape(fk)}"]`, body);
+      if (n && !n.closest("[hidden]")) {
+        n.focus({ preventScroll: true });
+        if (n.type === "search") n.setSelectionRange(n.value.length, n.value.length);
+      }
+    }
     if (scrollAgent) {
       const sec = qs(`[data-att="${CSS.escape(scrollAgent)}"]`, body);
       scrollAgent = "";
@@ -1442,6 +1453,46 @@ PAGES["/devices/:id"] = async (el, token) => {
         return out;
       });
     });
+    // list or cards
+    qsa("[data-ckview]", body).forEach((b) => b.onclick = () => {
+      if (b.getAttribute("aria-pressed") === "true") return;
+      lsSet(VIEW_KEY, b.dataset.ckview);
+      wantFocus = b.dataset.fk;
+      drawOverview();
+    });
+    // service list: filter, checkboxes and the actions for the checked checks
+    const sel = svcSel.get(dv.id);
+    if (sel && qs(".sv-sec", body)) {
+      const f = svcFilter.get(dv.id) || { q: "", bad: false };
+      svcFilter.set(dv.id, f);
+      const refilter = () => { applySvFilter(body, f); syncSel(body, sel); };
+      const q = qs("[data-svq]", body);
+      if (q) q.oninput = () => { f.q = q.value; refilter(); };
+      qsa("[data-svb]", body).forEach((b) => b.onclick = () => {
+        f.bad = !!b.dataset.svb;
+        qsa("[data-svb]", body).forEach((x) => x.setAttribute("aria-pressed", x === b));
+        refilter();
+      });
+      qsa("input[data-sel]", body).forEach((cb) => cb.onchange = () => { if (cb.checked) sel.add(cb.dataset.sel); else sel.delete(cb.dataset.sel); syncSel(body, sel); });
+      const setRows = (rows, on) => rows.filter((tr) => !tr.hidden).forEach((tr) => { const b = qs("input[data-sel]", tr); if (b) { if (on) sel.add(b.dataset.sel); else sel.delete(b.dataset.sel); } });
+      qsa("input[data-selg]", body).forEach((cb) => cb.onchange = () => { setRows(groupRowsOf(cb.closest("tr")), cb.checked); syncSel(body, sel); });
+      qsa("input[data-sela]", body).forEach((cb) => cb.onchange = () => { setRows(qsa("tr.sv-row", cb.closest("table")), cb.checked); syncSel(body, sel); });
+      const clear = qs("[data-bulk-clear]", body);
+      if (clear) clear.onclick = () => { sel.clear(); syncSel(body, sel); const n = qs("[data-svq]", body); if (n) n.focus(); };
+      // a mode for the checked checks: pattern rules where they cover a whole family ("snmp:if:*"),
+      // exact rules for the rest, so every checked check gets the mode
+      qsa("[data-bulk]", body).forEach((b) => b.onclick = () => {
+        const mode = b.dataset.bulk, keys = [...sel];
+        if (!keys.length) return;
+        const all = [...(st.checks || []), ...(st.hidden || [])].map((c) => c.key).filter((k) => k !== REACH_KEY);
+        const outside = all.filter((k) => !sel.has(k));
+        saveRules(b, (rs) => {
+          let out = applyGroupMode(rs, groupPlan(keys, outside), mode);
+          for (const k of keys) if (ruleMode(out, k) !== mode) out = setExactRule(out, k, mode);
+          return out;
+        }, () => { sel.clear(); wantFocus = "svq"; }, `${keys.length} ${keys.length === 1 ? "Dienst" : "Dienste"}: ${RULE_MODE_SHORT[mode]}.`);
+      });
+    }
     // switch ports: filter and "Alarm bei Link-Ausfall"
     qsa("[data-pf]", body).forEach((b) => b.onclick = () => {
       const f = b.dataset.pf, sec = b.closest(".ck-group");
@@ -2242,13 +2293,10 @@ function checksView(dv, st, att = []) {
       empty("Noch keine Werte", dv.enabled === false ? "Das Gerät ist deaktiviert." : dv.type === "agent" ? "Sobald der Agent seinen ersten Bericht schickt, erscheinen hier die Checks." : "Die erste Abfrage läuft gleich. „Jetzt prüfen“ startet sie sofort.", "", "clock");
     return att.length ? base + `<div class="ck-groups">${att.map(attSection).join("")}</div>` : base;
   }
-  const counts = { ok: 0, warn: 0, crit: 0, unknown: 0 };
-  checks.forEach((c) => { counts[c.state in counts ? c.state : "unknown"]++; });
-  const quiet = checks.filter(isQuiet).length, hidden = (st.hidden || []).filter((h) => !h.pending).length;
   const groups = groupBy(checks, (c) => c.group || "Weitere");
   groups.sort(([a], [b]) => groupIndex(a) - groupIndex(b) || a.localeCompare(b, "de"));
-  const summary = `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span><span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span></div>`;
-  const notes = dv.notes ? `<div class="panel tight dv-notes"><span class="muted small">Notizen</span><div>${esc(dv.notes)}</div></div>` : "";
+  const summary = ckSummary(st, att, "cards");
+  const notes = dvNotes(dv);
   const order = ["node", "storage", "guest", "port", "card", "toner"];
   return summary + notes + `<div class="ck-groups">` + groups.map(([g, list]) => {
     const bad = list.filter((c) => c.state === "crit" || c.state === "warn").length;
@@ -2262,6 +2310,207 @@ function checksView(dv, st, att = []) {
     return `<section class="panel flush ck-group ${wide ? "wide" : ""}" data-group="${esc(g)}"><div class="panel-head"><div class="panel-title">${esc(g)} <span class="muted small">${list.length}</span></div>${bad || gb ? `<div class="actions">${bad ? pill(`${bad} auffällig`, list.some((c) => c.state === "crit") ? "rose" : "amber") : ""}${gb}</div>` : ""}</div>${inner}</section>` +
       (g === nodeGroup ? underNode.map(attSection).join("") : "");
   }).join("") + rest.map(attSection).join("") + `</div>` + hiddenPanel(st);
+}
+
+// ckSummary: the counts line above the checks with the switch between list and cards.
+function ckSummary(st, att, view) {
+  const checks = st.checks || [];
+  const counts = { ok: 0, warn: 0, crit: 0, unknown: 0 };
+  checks.forEach((c) => { counts[c.state in counts ? c.state : "unknown"]++; });
+  const quiet = checks.filter(isQuiet).length, hidden = (st.hidden || []).filter((h) => !h.pending).length;
+  return `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span>${view === "cards" ? `<span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span>` : ""}${viewSeg(view)}</div>`;
+}
+const dvNotes = (dv) => (dv.notes ? `<div class="panel tight dv-notes"><span class="muted small">Notizen</span><div>${esc(dv.notes)}</div></div>` : "");
+
+// ---------- service list (device overview, list view) ----------
+// One row per check: state, name, a summary line with the current values, sparkline, since. Sections
+// by monitoring mode (Überwacht / Nur Anzeige / Ausgeblendet); checked rows get a mode at once.
+const VIEW_KEY = "pk95mon-ckview";
+const ckViewMode = () => (lsGet(VIEW_KEY) === "cards" ? "cards" : "list");
+const viewSeg = (cur) => `<div class="seg sv-view" role="group" aria-label="Darstellung">${[["list", "Liste", "list"], ["cards", "Kacheln", "apps"]].map(([k, l, ic]) => `<button type="button" data-ckview="${k}" data-fk="v:${k}" aria-pressed="${k === cur}">${icon(ic)}${l}</button>`).join("")}</div>`;
+const svcSel = new Map(); // device id → Set of checked check keys (kept across the 30-s refresh)
+const svcFilter = new Map(); // device id → {q, bad}
+// svcBad: a check that needs a look – warn, crit, unknown, or quiet but would be warn/crit.
+const svcBad = (c) => ["warn", "crit", "unknown"].includes(c.state) || (isQuiet(c) && !!MUTED_TITLE[c.muted]);
+const rxtxText = (rx, tx) => `↓ ${fmtVal(rx, "B/s")}  ↑ ${fmtVal(tx, "B/s")}`;
+// svcSummary: the current values of a check as one line ({html, text}); a problem's reason comes first.
+function svcSummary(c) {
+  const k = c.key, fa = c.facts || {}, v = (n) => mval(c, n), has = (n) => isNum(v(n));
+  const parts = [], msgSegs = c.msg && c.state === "ok" ? String(c.msg).split(" · ").filter(Boolean) : [];
+  if (k.startsWith("snmp:if:")) {
+    parts.push(PORT_ST[portState(c)][0]);
+    if (fa.Geschwindigkeit) parts.push(fa.Geschwindigkeit);
+    if (has("if.rx") || has("if.tx")) parts.push(rxtxText(v("if.rx"), v("if.tx")));
+    if (has("if.errors") && v("if.errors") > 0) parts.push(`Fehler ${fmtVal(v("if.errors"), "1/s")}`);
+    if (fa.Alias) parts.push(fa.Alias);
+    if (has("poe.port") && v("poe.port") > 0) parts.push(`PoE ${fmtVal(v("poe.port"), "W")}`);
+    if (fa.Nachbar) parts.push(`Nachbar ${fa.Nachbar}${fa["Nachbar-Port"] ? ` (${fa["Nachbar-Port"]})` : ""}`);
+  } else if (k.startsWith("pve:node:")) {
+    // the node's message already holds CPU, RAM, load and uptime ("online · CPU 23 % · …")
+    if (msgSegs.length) parts.push(...msgSegs);
+    else {
+      if (has("cpu.usage")) parts.push(`CPU ${fmtPct(v("cpu.usage"))}`);
+      if (has("mem.usage")) parts.push(`RAM ${fmtPct(v("mem.usage"))}`);
+      if (has("uptime")) parts.push(`Laufzeit ${fmtUptime(v("uptime"))}`);
+    }
+    if (v("mem.total") > 0) parts.push(`RAM ${ofTotal(v("mem.used"), v("mem.total"))}`);
+    if (has("disk.usage")) parts.push(`Root ${fmtPct(v("disk.usage"))}`);
+  } else if (/^pve:(vm|ct):/.test(k)) {
+    if (msgSegs.length) parts.push(...msgSegs);
+    else {
+      if (has("guest.cpu")) parts.push(`CPU ${fmtPct(v("guest.cpu"))}`);
+      if (has("guest.mem")) parts.push(`RAM ${fmtPct(v("guest.mem"))}`);
+    }
+    if (has("guest.netin") || has("guest.netout")) parts.push(`Netz ${rxtxText(v("guest.netin"), v("guest.netout"))}`);
+  } else {
+    const cv = cardValue(c);
+    if (cv.rxtx) parts.push(rxtxText(cv.rxtx[0], cv.rxtx[1]));
+    else if (cv.generic && !cv.word) {
+      // generic checks list their values ("Spannung 230 V · Frequenz 50 Hz")
+      for (const m of (c.metrics || []).filter((x) => isNum(x.v)).slice(0, 5)) parts.push(`${instLabel(m.n, m.i)} ${fmtVal(m.v, mUnit(m))}`);
+    } else if (cv.sub && cv.sub.startsWith("Laufzeit")) parts.push(`Laufzeit ${cv.text}`, ...cv.sub.split(" · ").slice(1));
+    else if (!cv.stateOnly) {
+      // "1 % belegt", "Drehzahl 3.631 U/min", "63 % · 5,9 TiB frei von 16,0 TiB"
+      const sub = cv.sub || "";
+      if (/^[a-zäöü]/.test(sub)) parts.push(`${cv.text} ${sub}`);
+      else if (sub && !/\d/.test(sub)) parts.push(`${sub} ${cv.text}`);
+      else parts.push(cv.text, sub);
+    }
+    if ((cv.generic || cv.stateOnly) && !cv.fromMsg) parts.push(...msgSegs);
+  }
+  const why = c.state !== "ok" || (isQuiet(c) && MUTED_TITLE[c.muted]) ? reasonText(c) : "";
+  // unique parts (spaces normalised: values use a narrow space before the unit, messages a normal one)
+  const norm = (x) => String(x).replace(/[\s\u202f\u00a0]+/g, " ").trim().toLowerCase();
+  const seen = new Set([why, why ? c.msg || "" : ""].flatMap((x) => String(x).split(" · ")).map(norm).filter(Boolean)), rest = [];
+  for (const p of parts.filter(Boolean).map(String)) if (!seen.has(norm(p))) { seen.add(norm(p)); rest.push(p); }
+  const tone = isQuiet(c) ? "quiet" : c.state;
+  const html = [why ? `<span class="sv-why ${tone}">${reasonHTML(c)}</span>` : "", ...rest.map((p) => `<span>${esc(p)}</span>`)].filter(Boolean).join(`<span class="sv-dot" aria-hidden="true"> · </span>`);
+  return { html: html || `<span class="muted">—</span>`, text: [why, ...rest].filter(Boolean).join(" · ") };
+}
+const svcSort = (list) => [...list].sort((a, b) => {
+  const ga = a.group || "Weitere", gb = b.group || "Weitere";
+  return groupIndex(ga) - groupIndex(gb) || ga.localeCompare(gb, "de") || byName(a, b);
+});
+const selBox = (attrs, label) => `<label class="sv-cb"><input type="checkbox" ${attrs} aria-label="${esc(label)}"></label>`;
+// svcRow: one check; sel = the checked keys (null: no checkbox), mode: with the mode button.
+function svcRow(c, devId, sel, mode) {
+  const tone = cardTone(c), s = svcSummary(c), cv = cardValue(c), on = !!sel && sel.has(c.key);
+  const box = sel && c.key !== REACH_KEY ? selBox(`data-sel="${esc(c.key)}" data-fk="s:${esc(devId)}|${esc(c.key)}" ${on ? "checked" : ""}`, `${c.name} auswählen`) : "";
+  return `<tr class="row-link sv-row st-${tone}${on ? " sel" : ""}" ${rowLink(devId, c)} data-bad="${svcBad(c) ? 1 : ""}" data-q="${esc(lc([c.name, c.key, c.group, s.text].join(" ")))}">
+    <td class="sv-sel">${box}</td><td class="sv-st">${ckPill(c)}</td>
+    <td class="sv-name">${ckLink(devId, c, esc(c.name))}${pendingTag(c)}</td>
+    <td class="sv-sum">${s.html}</td>
+    <td class="spark-cell">${cv.spark ? sparkBox(devId, c.key, cv.spark, tone, "tspark") : ""}</td>
+    <td class="sv-since">${sinceCell(c)}</td>
+    <td class="act ck-act">${mode ? modeBtn(c) : ""}</td></tr>`;
+}
+// svcHiddenRow: a check switched off by a rule (no values, so no link).
+function svcHiddenRow(h, sel) {
+  const on = !h.pending && sel.has(h.key);
+  return `<tr class="sv-row st-quiet sv-hid${on ? " sel" : ""}" data-bad="" data-q="${esc(lc([h.name, h.key, h.group].join(" ")))}">
+    <td class="sv-sel">${h.pending ? "" : selBox(`data-sel="${esc(h.key)}" data-fk="s:|${esc(h.key)}" ${on ? "checked" : ""}`, `${h.name || h.key} auswählen`)}</td>
+    <td class="sv-st">${pill("Ausgeblendet")}</td>
+    <td class="sv-name">${esc(h.name || h.key)}</td>
+    <td class="sv-sum"><span class="mono t-sub">${esc(h.key)}</span>${h.pending ? `<span class="sv-dot"> · </span><span>Erscheint mit der nächsten Abfrage wieder</span>` : ""}</td>
+    <td class="spark-cell"></td><td class="sv-since"></td>
+    <td class="act">${h.pending ? "" : `<button class="btn gray sm" type="button" data-unhide="${esc(h.key)}" data-fk="u:${esc(h.key)}" aria-label="${esc(h.name || h.key)} wieder anzeigen">${icon("eye")} Wieder anzeigen</button>`}</td></tr>`;
+}
+// svcRows: the rows of a section under group headings ("System 5"), each heading with a checkbox for its group.
+function svcRows(list, rowFn, selectable) {
+  return groupBy(svcSort(list), (c) => c.group || "Weitere").map(([g, cs]) => {
+    const bad = cs.filter((c) => c.state === "crit" || c.state === "warn").length;
+    return `<tr class="sv-gh"><td class="sv-sel">${selectable ? selBox("data-selg", `Alle in ${g} auswählen`) : ""}</td><td colspan="6"><span class="sv-gname">${esc(g)}</span> <span class="muted">${cs.length}</span>${bad ? " " + pill(`${bad} auffällig`, cs.some((c) => c.state === "crit") ? "rose" : "amber") : ""}</td></tr>` + cs.map(rowFn).join("");
+  }).join("");
+}
+function svcSection({ id, title, ic, count, sub = "", rows, open = true, selectable = true, extra = "", cls = "", attrs = "" }) {
+  return `<details class="panel flush sp sv-sec ${cls}" data-keep="sv:${esc(id)}" ${attrs} ${open ? "open" : ""}><summary><span class="sp-title">${icon(ic)}<span>${title}</span> <span class="sv-n">(${count})</span></span>${sub ? `<span class="muted small sv-sub">${sub}</span>` : ""}${icon("chevron-down", "sp-chev")}</summary>${extra}
+    <div class="table-wrap"><table class="sv-table"><thead><tr><th class="sv-sel">${selectable ? selBox("data-sela", `Alle in ${title} auswählen`) : ""}</th><th>Zustand</th><th>Dienst</th><th>Zusammenfassung</th><th class="spark-h" title="Verlauf der letzten 6 Stunden">6 Std.</th><th>Seit</th><th><span class="sr-only">Aktionen</span></th></tr></thead>
+    <tbody>${rows}<tr class="sv-none" hidden><td colspan="7" class="muted small">Keine Treffer.</td></tr></tbody></table></div></details>`;
+}
+// svcAgentSection: an attached agent with its checks (they open the agent's own check pages; its
+// rules are changed on the agent's page, so the rows have no checkbox and no mode button).
+function svcAgentSection(a) {
+  const dv = a.device, st = a.status || {}, ag = dv.agent || {}, checks = st.checks || [];
+  const s = devState({ ...dv, state: st.state });
+  const meta = [
+    dv.node && dv.name !== dv.node ? `<b>${esc(dv.name)}</b>` : "",
+    ag.platform ? esc([ag.platform, ag.platform_version].filter(Boolean).join(" ")) : "",
+    ag.version ? `Agent <span class="mono">${esc(ag.version)}</span>` : "",
+    `letzter Kontakt <span title="${esc(fmtTime(st.last_poll, true))}">${esc(fmtAgo(st.last_poll))}</span>`,
+    `<a href="/devices/${enc(dv.id)}" data-go>Details und Einstellungen</a>`,
+  ].filter(Boolean).join(" · ");
+  const extra = `<div class="att-meta t-sub">${meta}</div>${st.message && s !== "ok" ? `<div class="att-msg">${esc(st.message)}</div>` : ""}` +
+    (checks.length ? "" : `<div class="att-empty muted small">${dv.enabled === false ? "Der Agent ist deaktiviert." : "Noch kein Bericht vom Agent – läuft der Dienst pk95agent auf dem Server?"}</div>`);
+  return svcSection({ id: "att:" + dv.id, title: `Host ${esc(attLabel(dv))} · Agent ${statePill(s)}`, ic: "desktop", count: checks.length, rows: svcRows(checks, (c) => svcRow(c, dv.id, null, false), false),
+    selectable: false, extra, cls: `att-group st-${s}`, attrs: `data-att="${esc(dv.id)}"` });
+}
+// svcList renders the device overview as a service list.
+function svcList(dv, st, att = []) {
+  const checks = st.checks || [], hid = st.hidden || [];
+  if (!checks.length && !hid.length) return checksView(dv, st, att);
+  const sel = svcSel.get(dv.id) || new Set();
+  const known = new Set([...checks.map((c) => c.key), ...hid.filter((h) => !h.pending).map((h) => h.key)]);
+  for (const k of [...sel]) if (!known.has(k)) sel.delete(k);
+  svcSel.set(dv.id, sel);
+  const f = svcFilter.get(dv.id) || { q: "", bad: false };
+  const mon = checks.filter((c) => !isQuiet(c)), qu = checks.filter(isQuiet), off = hid.filter((h) => !h.pending).length;
+  const nBad = checks.filter(svcBad).length + att.reduce((n, a) => n + ((a.status || {}).checks || []).filter(svcBad).length, 0);
+  const row = (c) => svcRow(c, dv.id, sel, true);
+  const tools = `<div class="sv-tools"><input type="search" data-svq data-fk="svq" value="${esc(f.q)}" placeholder="Dienste filtern …" aria-label="Dienste filtern" autocomplete="off">
+    <div class="seg" role="group" aria-label="Nach Zustand filtern"><button type="button" data-svb="" data-fk="svb:0" aria-pressed="${!f.bad}">Alle</button><button type="button" data-svb="1" data-fk="svb:1" aria-pressed="${!!f.bad}">Auffällig${nBad ? ` (${nBad})` : ""}</button></div></div>`;
+  const secs = [
+    mon.length ? svcSection({ id: "alert", title: "Überwachte Dienste", ic: "bell", count: mon.length, sub: "lösen bei Problemen Alarme aus", rows: svcRows(mon, row, true) }) : "",
+    qu.length ? svcSection({ id: "quiet", title: "Nur Anzeige", ic: "eye", count: qu.length, sub: "werden aufgezeichnet, lösen aber keinen Alarm aus", rows: svcRows(qu, row, true) }) : "",
+    ...att.map(svcAgentSection),
+    hid.length ? svcSection({ id: "off", title: "Ausgeblendet", ic: "eye-off", count: off, sub: "werden nicht angezeigt und nicht aufgezeichnet", rows: svcRows(hid, (h) => svcHiddenRow(h, sel), true), open: false }) : "",
+  ].join("");
+  const bulk = `<div class="sv-bulk" data-sv-bulk role="region" aria-label="Ausgewählte Dienste" hidden><span class="sv-bulk-n" data-sv-n aria-live="polite"></span>
+    ${RULE_MODES.map(([m, , ic, sub]) => `<button class="btn ${m === "alert" ? "" : "gray"} sm" type="button" data-bulk="${m}" data-fk="b:${m}" title="${esc(sub)}">${icon(ic)} ${esc(RULE_MODE_SHORT[m])}</button>`).join("")}
+    <button class="btn ghost sm" type="button" data-bulk-clear data-fk="b:clear">Auswahl aufheben</button></div>`;
+  return ckSummary(st, att, "list") + dvNotes(dv) + tools + secs + bulk;
+}
+// applySvFilter shows the rows matching the search words (all of them, in name, key, group or
+// summary) and, with "Auffällig", only the checks that need a look; empty group headings hide.
+function applySvFilter(root, f) {
+  const words = lc(f.q).trim().split(/\s+/).filter(Boolean);
+  qsa(".sv-sec", root).forEach((sec) => {
+    let any = 0, gh = null, n = 0;
+    const close = () => { if (gh) gh.hidden = n === 0; };
+    qsa("tbody > tr", sec).forEach((tr) => {
+      if (tr.classList.contains("sv-gh")) { close(); gh = tr; n = 0; return; }
+      if (!tr.classList.contains("sv-row")) return;
+      const show = words.every((w) => tr.dataset.q.includes(w)) && (!f.bad || tr.dataset.bad === "1");
+      tr.hidden = !show;
+      if (show) { n++; any++; }
+    });
+    close();
+    const none = qs("tr.sv-none", sec);
+    if (none) none.hidden = any > 0;
+  });
+}
+// groupRowsOf: the check rows under a group heading (up to the next heading).
+function groupRowsOf(gh) {
+  const out = [];
+  for (let tr = gh.nextElementSibling; tr && tr.classList.contains("sv-row"); tr = tr.nextElementSibling) out.push(tr);
+  return out;
+}
+// syncSel brings checkboxes, headings and the action bar in line with the checked keys.
+function syncSel(root, sel) {
+  const boxOf = (tr) => qs("input[data-sel]", tr);
+  qsa("tr.sv-row", root).forEach((tr) => { const b = boxOf(tr); if (b) { b.checked = sel.has(b.dataset.sel); tr.classList.toggle("sel", b.checked); } });
+  const mark = (box, rows) => {
+    const bs = rows.filter((tr) => !tr.hidden).map(boxOf).filter(Boolean), on = bs.filter((b) => b.checked).length;
+    box.checked = bs.length > 0 && on === bs.length;
+    box.indeterminate = on > 0 && on < bs.length;
+    box.disabled = bs.length === 0;
+  };
+  qsa("input[data-selg]", root).forEach((b) => mark(b, groupRowsOf(b.closest("tr"))));
+  qsa("input[data-sela]", root).forEach((b) => mark(b, qsa("tr.sv-row", b.closest("table"))));
+  const bar = qs("[data-sv-bulk]", root);
+  if (bar) {
+    bar.hidden = sel.size === 0;
+    qs("[data-sv-n]", bar).textContent = `${sel.size} ${sel.size === 1 ? "Dienst" : "Dienste"} ausgewählt:`;
+  }
 }
 
 // ---------- alerts table (alerts page and device tab) ----------

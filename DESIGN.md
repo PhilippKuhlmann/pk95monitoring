@@ -428,7 +428,13 @@ starts) is back-filled for 7 days so charts show data.
 
 ## Web UI notes
 
-- Device page, tab "Übersicht": every check as a card (name, primary value, second line, usage bar, 6 h
+- Device page, tab "Übersicht", view "Liste" (default; the choice is kept in localStorage `pk95mon-ckview`):
+  one table row per check (checkbox, state, name, one-line summary built from metrics/facts/message, 6 h
+  sparkline, since, mode button) in sections by mode – "Überwachte Dienste", "Nur Anzeige", each attached
+  agent, "Ausgeblendet" – with group headings. A search field and "Auffällig" filter rows client-side; the
+  checkboxes (row, group, section) feed a sticky bar that sets Überwachen / Nur anzeigen / Ausblenden for all
+  checked checks (pattern rules where a whole key family is checked, exact rules otherwise).
+- Device page, tab "Übersicht", view "Kacheln": every check as a card (name, primary value, second line, usage bar, 6 h
   sparkline from `GET /api/devices/{id}/sparks`, reason), grouped as before; attached agents get their own
   card section (sparks requested with the agent's id). Proxmox nodes, guests and storage, switch ports and
   toner stay tables/lists with a sparkline column. Sparks are cached per device for about a minute (one
