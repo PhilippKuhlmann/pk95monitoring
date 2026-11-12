@@ -616,10 +616,7 @@ input[type="url"], input[type="datetime-local"], input[type="date"] {
 @media (max-width: 560px) { .al-row { flex-wrap: wrap !important; } }
 
 /* device list */
-.dev-table td.dt-name { min-width: 190px; }
 .dev-table td.dt-name .t-sub.mono { overflow-wrap: normal; }
-.dev-table td.dt-type { min-width: 120px; max-width: 200px; }
-@media (max-width: 720px) { .dev-table td.dt-name, .dev-table td.dt-type { min-width: 0; max-width: none; } }
 .toolbar { margin: 8px 12px 0; }
 .toolbar input[type="search"] { flex: 1 1 220px; max-width: 360px; }
 @media (max-width: 560px) { .filters select, .filters input { min-width: 0; flex: 1 1 140px; max-width: none; } }
@@ -1037,3 +1034,45 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .set-grid { grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); }
 @media (max-width: 1100px) { .set-grid { grid-template-columns: minmax(0, 1fr); } }
 .form-grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+/* device list: one compact line per device */
+.dev-table td { vertical-align: middle; padding: 10px 12px; }
+.dev-table th { padding-left: 12px; padding-right: 12px; }
+.dev-table td.bar-cell { min-width: 96px; }
+.dev-table td.dt-state { width: 1%; }
+.dev-table td.dt-name { min-width: 220px; max-width: 360px; }
+.dt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.dt-meta .mono { font-size: 12px; }
+.dt-type { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.dt-type .icon { width: 13px; height: 13px; }
+.dt-dot { color: var(--faint); }
+.dt-msg { margin-top: 2px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.dt-msg.st-crit { color: var(--rose-ink); } .dt-msg.st-warn { color: var(--amber-ink); } .dt-msg.st-unknown { color: var(--muted); }
+.dt-row > td:first-child { box-shadow: inset 3px 0 0 var(--faint); }
+.dt-row.st-ok > td:first-child { box-shadow: inset 3px 0 0 var(--green-dot); }
+.dt-row.st-warn > td:first-child { box-shadow: inset 3px 0 0 var(--amber-dot); }
+.dt-row.st-crit > td:first-child { box-shadow: inset 3px 0 0 var(--rose-dot); }
+.dt-row.st-maintenance > td:first-child { box-shadow: inset 3px 0 0 var(--c500); }
+.dt-row:hover > td { background: var(--hover); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .dt-msg.st-crit { color: #fb7185; } :root:not([data-theme="light"]) .dt-msg.st-warn { color: #fbbf24; } }
+:root[data-theme="dark"] .dt-msg.st-crit { color: #fb7185; } :root[data-theme="dark"] .dt-msg.st-warn { color: #fbbf24; }
+/* phones: a compact card per device – name and state, checks, three small bars */
+@media (max-width: 720px) {
+  .resp.dev-table tr.dt-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 6px 12px; align-items: center;
+    grid-template-areas: "name name name state" "chk chk chk act" "cpu ram disk act"; padding: 12px 14px 12px 16px; box-shadow: inset 3px 0 0 var(--faint); }
+  .resp.dev-table tr.dt-row.st-ok { box-shadow: inset 3px 0 0 var(--green-dot); }
+  .resp.dev-table tr.dt-row.st-warn { box-shadow: inset 3px 0 0 var(--amber-dot); }
+  .resp.dev-table tr.dt-row.st-crit { box-shadow: inset 3px 0 0 var(--rose-dot); }
+  .resp.dev-table tr.dt-row.st-maintenance { box-shadow: inset 3px 0 0 var(--c500); }
+  .resp.dev-table tr.dt-row > td { padding: 0; box-shadow: none; min-width: 0; max-width: none; background: none; }
+  .resp.dev-table td.dt-name { grid-area: name; }
+  .resp.dev-table td.dt-state { grid-area: state; width: auto; justify-self: end; align-self: start; }
+  .resp.dev-table td.dt-checks { grid-area: chk; white-space: normal; }
+  .resp.dev-table td.dt-cpu { grid-area: cpu; } .resp.dev-table td.dt-ram { grid-area: ram; } .resp.dev-table td.dt-disk { grid-area: disk; }
+  .resp.dev-table td.dt-act { grid-area: act; margin: 0; align-self: center; }
+  .resp.dev-table td.dt-name::before, .resp.dev-table td.dt-state::before, .resp.dev-table td.dt-checks::before { content: none; }
+  .resp.dev-table td.bar-cell::before { content: attr(data-l); display: block; font-size: 11px; }
+  .resp.dev-table td.bar-cell .usage { gap: 6px; }
+  .resp.dev-table td.bar-cell .usage .track { min-width: 24px; }
+  .dt-msg { max-width: none; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+}

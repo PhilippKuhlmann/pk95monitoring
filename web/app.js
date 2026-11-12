@@ -857,21 +857,21 @@ PAGES["/devices"] = async (el, token) => {
       return true;
     }).sort((a, b) => RANK[devState(b)] - RANK[devState(a)] || byName(a, b));
     const box = qs("[data-list]", el);
-    box.innerHTML = list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp dev-table"><thead><tr><th>Zustand</th><th>Gerät</th><th>Typ</th><th>Gruppe</th><th>Checks</th><th>CPU</th><th>RAM</th><th>Disk</th><th>Kontakt</th><th></th></tr></thead><tbody>
-      ${list.map((d) => { const st = devState(d); return `<tr class="${st === "disabled" ? "off" : ""}">
-        <td data-l="Zustand">${statePill(st)}</td>
-        <td data-l="Gerät" class="dt-name"><a class="t-main" href="/devices/${enc(d.id)}" data-go>${esc(d.name)}</a>${attTag(d)}<div class="t-sub mono">${esc(d.host || "—")}</div>${d.message && st !== "ok" ? `<div class="t-sub">${esc(d.message)}</div>` : ""}</td>
-        <td data-l="Typ" class="dt-type"><span class="flex nowrap" style="gap:6px;flex-wrap:nowrap">${icon(TYPE_ICONS[d.type] || "box", "sm muted")}${esc(TYPE_LABELS[d.type] || d.type)}</span>${d.platform ? `<div class="t-sub">${esc(d.platform)}</div>` : ""}</td>
-        <td data-l="Gruppe" class="small">${esc(d.group || "—")}</td>
-        <td data-l="Checks" class="small nowrap">${checksSummary(d.checks)}</td>
-        <td data-l="CPU" class="bar-cell">${isNum(d.cpu) ? pctBar(d.cpu) : '<span class="muted">—</span>'}</td>
-        <td data-l="RAM" class="bar-cell">${isNum(d.mem) ? pctBar(d.mem) : '<span class="muted">—</span>'}</td>
-        <td data-l="Disk" class="bar-cell">${isNum(d.disk) ? pctBar(d.disk) : '<span class="muted">—</span>'}</td>
-        <td data-l="Kontakt" class="small nowrap" title="${esc(fmtTime(d.last_poll, true))}">${esc(fmtAgo(d.last_poll))}</td>
-        <td class="act"><div class="row-actions">
-          <button class="ib" type="button" title="Jetzt prüfen" aria-label="${esc(d.name)} jetzt prüfen" data-poll="${esc(d.id)}" ${d.enabled === false ? "disabled" : ""}>${icon("refresh")}</button>
-          <button class="ib" type="button" title="Bearbeiten" aria-label="${esc(d.name)} bearbeiten" data-edit="${esc(d.id)}">${icon("pencil")}</button>
-          <button class="ib red" type="button" title="Löschen" aria-label="${esc(d.name)} löschen" data-del="${esc(d.id)}">${icon("trash")}</button></div></td></tr>`; }).join("")}
+    // One compact line per device: name with address, type and group below; the first problem
+    // in one line (full text as tooltip); the whole row opens the device.
+    box.innerHTML = list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp dev-table"><thead><tr><th>Zustand</th><th>Gerät</th><th>Checks</th><th>CPU</th><th>RAM</th><th>Disk</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
+      ${list.map((d) => {
+        const st = devState(d);
+        const meta = [d.host ? `<span class="mono">${esc(d.host)}</span>` : "", `<span class="dt-type"${d.platform ? ` title="${esc(d.platform)}"` : ""}>${icon(TYPE_ICONS[d.type] || "box", "sm")}${esc(TYPE_LABELS[d.type] || d.type)}</span>`, d.group ? esc(d.group) : ""].filter(Boolean).join(`<span class="dt-dot" aria-hidden="true">·</span>`);
+        const msg = d.message && st !== "ok" && st !== "disabled" ? `<div class="dt-msg st-${esc(st)}" title="${esc(d.message)}">${esc(d.message)}</div>` : "";
+        return `<tr class="row-link dt-row st-${esc(st)}${st === "disabled" ? " off" : ""}" data-href="/devices/${enc(d.id)}">
+        <td data-l="Zustand" class="dt-state">${statePill(st)}</td>
+        <td data-l="Gerät" class="dt-name"><a class="t-main row-main" href="/devices/${enc(d.id)}" data-go>${esc(d.name)}</a>${attTag(d)}<div class="dt-meta">${meta}</div>${msg}</td>
+        <td data-l="Checks" class="small nowrap dt-checks">${checksSummary(d.checks)}<div class="t-sub" title="Letzter Kontakt ${esc(fmtTime(d.last_poll, true))}">Kontakt ${esc(fmtAgo(d.last_poll))}</div></td>
+        <td data-l="CPU" class="bar-cell dt-cpu">${isNum(d.cpu) ? pctBar(d.cpu) : '<span class="muted">—</span>'}</td>
+        <td data-l="RAM" class="bar-cell dt-ram">${isNum(d.mem) ? pctBar(d.mem) : '<span class="muted">—</span>'}</td>
+        <td data-l="Disk" class="bar-cell dt-disk">${isNum(d.disk) ? pctBar(d.disk) : '<span class="muted">—</span>'}</td>
+        <td class="act dt-act"><button class="ib sm-ib" type="button" title="Jetzt prüfen" aria-label="${esc(d.name)} jetzt prüfen" data-poll="${esc(d.id)}" ${d.enabled === false ? "disabled" : ""}>${icon("refresh")}</button></td></tr>`; }).join("")}
       </tbody></table></div></div><p class="muted small" style="margin:0 12px">${list.length} von ${all.length} Geräten</p>` :
       (all.length ? empty("Nichts gefunden", "Kein Gerät passt zu den Filtern.", `<button class="btn gray" type="button" data-reset>Filter zurücksetzen</button>`, "search") :
         empty("Noch keine Geräte", "Proxmox VE, SNMP-Geräte und Netzwerk-Checks fügst du hier hinzu, Linux- und Windows-Server mit dem Agent.", `<div class="flex" style="justify-content:center"><button class="btn" type="button" data-add2>${icon("plus")} Gerät hinzufügen</button><a class="btn gray" href="/agents" data-go>Agent installieren</a></div>`, "server"));
@@ -882,8 +882,7 @@ PAGES["/devices"] = async (el, token) => {
       toast(`${find(b.dataset.poll)?.name || "Gerät"} geprüft${st ? ": " + (STATES[st] || STATES.unknown)[0] : ""}.`);
       await load();
     }));
-    qsa("[data-edit]", box).forEach((b) => b.onclick = () => run(b, () => editDevice(b.dataset.edit, load)));
-    qsa("[data-del]", box).forEach((b) => b.onclick = () => deleteDevice(find(b.dataset.del), load));
+    bindRowLinks(box);
     const reset = qs("[data-reset]", box);
     if (reset) reset.onclick = () => { f.q = f.state = f.type = f.group = ""; syncUrl(); drawToolbar(); drawList(); };
     const add2 = qs("[data-add2]", box);
@@ -940,11 +939,6 @@ function addDevice(done) {
       setTimeout(() => deviceForm(null, v.type || "proxmox", done), 0);
     },
   });
-}
-
-async function editDevice(id, done) {
-  const r = await GET(`/api/devices/${enc(id)}`);
-  deviceForm(r.device, r.device.type, done);
 }
 
 const NC_TYPES = [["ping", "Ping"], ["http", "HTTP(S)"], ["tcp", "TCP-Port"], ["dns", "DNS"], ["tls", "TLS-Zertifikat"]];
