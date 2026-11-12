@@ -95,6 +95,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | Source | Key | Name (German) | Group |
 |---|---|---|---|
 | all | `reach` | Erreichbarkeit | Status – synthesized by core when a poll fails / agent silent |
+| all except net | `discovery` | Dienste-Inventur | Status – synthesized by core from the inventory: warn while there are new or vanished checks ("2 neue Dienste: …; 1 Dienst verschwunden: …"), else ok ("42 Dienste bekannt, nichts zu entscheiden"); no metrics |
 | agent | `system` | System | System (facts: Betriebssystem, Kernel, Hostname, Architektur, CPU, Kerne, Arbeitsspeicher, IP-Adressen, Agent-Version, Laufzeit; metrics `uptime`, `procs`) |
 | agent | `cpu` | CPU | System |
 | agent | `mem` | Arbeitsspeicher | System |
@@ -216,6 +217,18 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    ausgeblendet."); quiet → alert opens it again at once when the check is still bad.
    Validation (`rules.N.match` / `rules.N.mode`): match required, ≤ 200 characters, no duplicates, no rule that
    only matches `reach`; mode `alert` (default when empty), `quiet` or `off`; at most 200 rules.
+8. Discovery (`core/discovery.go`): the first successful collection (poll of proxmox/snmp/nut, fresh agent
+   report) records every check key it reports (before rules switch any off; not `reach`, `discovery`, `net:*`)
+   in `DeviceStatus.Inventory` (`{key, name, group, first, last, new, missing}`, persisted with the status, left
+   out of API responses). Keys reported later are new (`new: true`) unless a rule matches them, the device has
+   `auto_accept`, or the device's collect settings changed just before (host, proxmox/snmp/nut config, agent
+   service selection: the next collection's unseen keys are expected). A new check runs in mode `new`
+   (like quiet: stored and shown, `muted` holds warn/crit, never alerts) until a rule matches it or it is
+   accepted. A key missing from 2 successful collections in a row is vanished (`DeviceStatus.Vanished`
+   `{key, name, group, last}`) until it comes back or is removed; a new key that vanishes before a decision is
+   forgotten. `Core.Discovery(id, accept, remove)` accepts new keys and removes vanished ones (they count as
+   new when they return), re-applies the modes and re-evaluates the `discovery` check at once (events "Neue
+   Dienste übernommen" / "Verschwundene Dienste entfernt"). Inventory ≤ 5000 keys per device.
 
 ## Attached agents (agent + API on one device)
 
@@ -331,6 +344,9 @@ Authenticated:
   for checks switched off by a rule, omitted when empty)
 - `POST /api/devices/{id}/poll` → `{status}`
 - `POST /api/devices/{id}/maintenance {until, note}` (until 0 = end) → Device
+- `POST /api/devices/{id}/discovery {accept:[key], remove:[key]}` → `{accepted, removed, status}` (unknown keys
+  ignored; only new keys are accepted, only vanished keys removed). `status.checks[].mode` "new" marks new
+  checks, `status.vanished: [{key, name, group, last}]` the vanished ones; Device has `auto_accept`.
 - `GET /api/devices/{id}/series` → `{series:[{id, device_id, name, instance, unit, check_key, last_value, last_ts}]}`
 - `GET /api/devices/{id}/metrics?series=1,2&range=1h|6h|24h|7d|30d|1y` (default 24h, at most 16 series; step ≥ poll interval) → `{from, to, step, series:[{id, name, instance, unit, points:[[ts, avg, min, max], …]}]}`
 - `GET /api/devices/{id}/sparks?range=1h|6h|24h` (default 6h; other ranges 400) → `{from, to, step, capped,
@@ -424,10 +440,15 @@ usage, one with a stopped service; rules: `updates` quiet on db01, `disk:/boot*`
 `core.IngestReport` every 30 s, and a net device "Webseite" with HTTP, TLS, TCP and ping checks against local
 httptest servers. Existing demo databases get new demo devices (keep/import logic keeps user changes). Values
 move realistically (sine + noise). Every demo device without history (all on the first start, new ones on later
-starts) is back-filled for 7 days so charts show data.
+starts) is back-filled for 7 days so charts show data. `fake.DiscoveryAfter` (3 min) after the start the cluster
+gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections have something to show.
 
 ## Web UI notes
 
+- Discovery on the device page (list view): sections "Neu gefunden" (new checks, "Alle übernehmen", checkboxes
+  with the bulk bar – Überwachen accepts, Nur anzeigen / Ausblenden set rules and accept) and "Verschwunden"
+  ("Entfernen" / "Alle entfernen") come first. The mode menu of a new check has no current mode; a pick also
+  accepts it. The device form has "Neue Dienste automatisch überwachen" (`auto_accept`).
 - Device page, tab "Übersicht", view "Liste" (default; the choice is kept in localStorage `pk95mon-ckview`):
   one table row per check (checkbox, state, name, one-line summary built from metrics/facts/message, 6 h
   sparkline, since, mode button) in sections by mode – "Überwachte Dienste", "Nur Anzeige", each attached

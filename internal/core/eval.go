@@ -216,7 +216,7 @@ func (c *Core) evaluate(d model.Device, rt *devState, prev map[string]model.Chec
 		delete(rt.detail, ch.Key)
 	}
 	// Quiet checks keep the verdict (and the hysteresis above) but show ok.
-	cs = applyMode(cs, d.CheckMode(ch.Key))
+	cs = applyMode(cs, modeOf(d, rt, ch.Key))
 	cs.Since = now
 	if had && p.State == cs.State {
 		cs.Since = p.Since

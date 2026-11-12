@@ -209,6 +209,12 @@ func (c *Core) applyPoll(id string, collected []model.Check, cerr error, nets []
 	if !ok || rt == nil {
 		return nil, false
 	}
+	if cerr == nil && d.Type != model.TypeNet && d.Type != model.TypeAgent {
+		discover(d, rt, collected, now)
+		if dc, ok := discoveryCheck(rt); ok {
+			collected = append(slices.Clip(collected), dc)
+		}
+	}
 	collected, hidden := splitOff(d, collected)
 	nets, hiddenNets := splitOff(d, nets)
 	prev := map[string]model.CheckStatus{}

@@ -181,6 +181,28 @@ func (s *Server) maintenance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, redactDevice(d))
 }
 
+// discovery accepts new checks and removes vanished ones from the device's inventory.
+func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Accept []string `json:"accept"`
+		Remove []string `json:"remove"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.Accept)+len(req.Remove) > 10000 {
+		writeErr(w, http.StatusBadRequest, "Zu viele Dienste auf einmal.")
+		return
+	}
+	id := r.PathValue("id")
+	acc, rm, err := s.C.Discovery(id, req.Accept, req.Remove)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": acc, "removed": rm, "status": s.C.Status(id)})
+}
+
 func (s *Server) series(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := s.C.Device(id); err != nil {

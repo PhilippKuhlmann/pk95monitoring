@@ -19,6 +19,7 @@ func (c *Core) Status(id string) model.DeviceStatus {
 	defer c.mu.Unlock()
 	if rt := c.rt[id]; rt != nil {
 		st := cloneStatus(rt.st)
+		st.Inventory = nil // internal; new checks are in Checks (mode "new"), vanished ones in Vanished
 		c.agentFacts(c.devices[id], &st)
 		return st
 	}

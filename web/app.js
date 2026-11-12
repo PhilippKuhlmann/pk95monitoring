@@ -1077,6 +1077,7 @@ function deviceForm(dev, type, done) {
     { name: "notes", label: "Notizen", type: "textarea", value: d0.notes, wide: true, rows: 2, placeholder: "z. B. Standort, Ansprechpartner, Besonderheiten" },
     { name: "enabled", label: "Aktiv", type: "checkbox", value: d0.enabled !== false, hint: "Ausgeschaltet wird nichts abgefragt." },
     { name: "no_alerts", label: "Keine Alarme", type: "checkbox", value: d0.no_alerts, hint: "Zustände werden angezeigt, aber es gibt keine Alarme und Benachrichtigungen." },
+    { name: "auto_accept", label: "Neue Dienste automatisch überwachen", type: "checkbox", value: d0.auto_accept, hint: "Sonst erscheinen später gefundene Dienste unter „Neu gefunden“ und lösen erst nach dem Übernehmen Alarme aus." },
   ];
   let extra = `<datalist id="dl-groups">${groups.map((g) => `<option value="${esc(g)}"></option>`).join("")}</datalist>`;
   if (type === "proxmox") {
@@ -1250,6 +1251,7 @@ function deviceForm(dev, type, done) {
       out.interval = Number(v.interval) || 0;
       out.enabled = !!v.enabled;
       out.no_alerts = !!v.no_alerts;
+      out.auto_accept = !!v.auto_accept;
       out.checks = nc.read();
       out.thresholds = out.thresholds || [];
       if (type === "proxmox") out.proxmox = pxValues(v);
@@ -1305,6 +1307,8 @@ PAGES["/devices/:id"] = async (el, token) => {
     saveQ = p.catch(() => {});
     return p.finally(() => { busy--; });
   };
+  // acceptKeys takes new checks into monitoring (their rules decide the mode).
+  const acceptKeys = (keys) => POST(`/api/devices/${enc(id)}/discovery`, { accept: keys });
   // saveRules changes the rules with fn(rules); done runs after a successful save, before the redraw.
   const saveRules = (btn, fn, done, okText = "Gespeichert.") => {
     wantFocus = btn && btn.dataset.fk ? btn.dataset.fk : null;
@@ -1312,7 +1316,7 @@ PAGES["/devices/:id"] = async (el, token) => {
       let rules = null;
       const r = await saveDevice((cur) => { cur.rules = rules = fn(cur.rules || []); });
       data.device.rules = (r && Array.isArray(r.rules)) ? r.rules : rules;
-      if (done) done();
+      if (done) await done();
       await reload();
     }, okText);
   };
@@ -1427,9 +1431,10 @@ PAGES["/devices/:id"] = async (el, token) => {
     // per check
     qsa("[data-mode-key]", body).forEach((b) => b.onclick = () => {
       const key = b.dataset.modeKey, c = byKey.get(key) || { name: key };
-      const rules = dv.rules || [], r = ruleFor(rules, key);
-      const hint = !r ? "" : r.match === key ? "Eigene Einstellung für diesen Check." : `Zurzeit durch die Regel <code>${esc(r.match)}</code>.`;
-      modeMenu(b, { title: c.name || key, current: ruleMode(rules, key), hint, onPick: (m) => saveRules(b, (rs) => setExactRule(rs, key, m)) });
+      const rules = dv.rules || [], r = ruleFor(rules, key), nw = isNew(c);
+      const hint = nw ? "Neu gefunden – noch nicht entschieden." : !r ? "" : r.match === key ? "Eigene Einstellung für diesen Check." : `Zurzeit durch die Regel <code>${esc(r.match)}</code>.`;
+      modeMenu(b, { title: c.name || key, current: nw ? "" : ruleMode(rules, key), hint,
+        onPick: (m) => saveRules(b, (rs) => setExactRule(rs, key, m), nw ? () => acceptKeys([key]) : null) });
     });
     // per group
     qsa("[data-mode-group]", body).forEach((b) => b.onclick = () => {
@@ -1486,11 +1491,23 @@ PAGES["/devices/:id"] = async (el, token) => {
         if (!keys.length) return;
         const all = [...(st.checks || []), ...(st.hidden || [])].map((c) => c.key).filter((k) => k !== REACH_KEY);
         const outside = all.filter((k) => !sel.has(k));
+        const fresh = keys.filter((k) => isNew(byKey.get(k) || {}));
         saveRules(b, (rs) => {
           let out = applyGroupMode(rs, groupPlan(keys, outside), mode);
           for (const k of keys) if (ruleMode(out, k) !== mode) out = setExactRule(out, k, mode);
           return out;
-        }, () => { sel.clear(); wantFocus = "svq"; }, `${keys.length} ${keys.length === 1 ? "Dienst" : "Dienste"}: ${RULE_MODE_SHORT[mode]}.`);
+        }, async () => { if (fresh.length) await acceptKeys(fresh); sel.clear(); wantFocus = "svq"; }, `${keys.length} ${keys.length === 1 ? "Dienst" : "Dienste"}: ${RULE_MODE_SHORT[mode]}.`);
+      });
+      // discovery: accept all new checks, remove vanished ones
+      const discoveryRun = (btn, body, okText) => run(btn, async () => { await POST(`/api/devices/${enc(dv.id)}/discovery`, body); wantFocus = "svq"; await reload(); }, okText);
+      qsa("[data-accept-all]", body).forEach((b) => b.onclick = () => {
+        const keys = (st.checks || []).filter(isNew).map((c) => c.key);
+        discoveryRun(b, { accept: keys }, `${keys.length} ${keys.length === 1 ? "Dienst wird" : "Dienste werden"} jetzt überwacht.`);
+      });
+      qsa("[data-remove]", body).forEach((b) => b.onclick = () => discoveryRun(b, { remove: [b.dataset.remove] }, "Aus der Inventur entfernt."));
+      qsa("[data-remove-all]", body).forEach((b) => b.onclick = () => {
+        const keys = (st.vanished || []).map((v) => v.key);
+        discoveryRun(b, { remove: keys }, `${keys.length} ${keys.length === 1 ? "Dienst" : "Dienste"} aus der Inventur entfernt.`);
       });
     }
     // switch ports: filter and "Alarm bei Link-Ausfall"
@@ -1750,15 +1767,16 @@ function projectStatus(st, rules) {
   const hk = new Set(out.hidden.map((h) => h.key));
   let changed = false;
   for (const c of st.checks || []) {
+    if (isNew(c) && !ruleFor(rules, c.key)) { out.checks.push(c); continue; } // a rule decides a new check
     const m = ruleMode(rules, c.key);
     if (m === "off") {
       changed = true;
       if (!hk.has(c.key)) { out.hidden.push({ key: c.key, name: c.name, group: c.group }); hk.add(c.key); }
     } else if (m === "quiet" && c.mode !== "quiet") {
       changed = true;
-      const bad = c.state === "warn" || c.state === "crit";
-      out.checks.push({ ...c, mode: "quiet", muted: bad ? c.state : "", state: bad ? "ok" : c.state, pending: 0 });
-    } else if (m === "alert" && c.mode === "quiet") {
+      const v = c.muted || c.state, bad = v === "warn" || v === "crit";
+      out.checks.push({ ...c, mode: "quiet", muted: bad ? v : "", state: bad ? "ok" : v, pending: 0 });
+    } else if (m === "alert" && isQuiet(c)) {
       changed = true;
       out.checks.push({ ...c, mode: "", state: c.muted || c.state, muted: "" });
     } else out.checks.push(c);
@@ -1856,10 +1874,14 @@ const metricChip = (m) => `<span class="mchip"><span class="muted">${esc(instLab
 const sinceCell = (c) => (c.since ? `<span title="Zustand seit ${esc(fmtTime(c.since, true))}">${esc(fmtSince(c.since))}</span>` : "");
 const pendingTag = (c) => (c.pending ? ` <span class="tag" title="Grenze überschritten – wird noch bestätigt">${esc(c.pending)}× auffällig</span>` : "");
 const reasonText = (c) => c.reason || c.msg || "";
-const isQuiet = (c) => c.mode === "quiet";
+// isQuiet: checks that never alert – "Nur anzeigen" and new (found, not decided yet) ones.
+const isQuiet = (c) => c.mode === "quiet" || c.mode === "new";
+const isNew = (c) => c.mode === "new";
+const quietWord = (c) => (isNew(c) ? "Neu" : "Nur Anzeige");
 const MUTED_TITLE = { warn: "Wäre Warnung", crit: "Wäre kritisch" };
 // ckPill: state pill of a check; quiet checks show "Nur Anzeige" instead.
-const ckPill = (c, dot = true) => (isQuiet(c) ? `<span class="pill" title="Nur Anzeige – dieser Check löst keinen Alarm aus">Nur Anzeige</span>` : statePill(c.state, dot));
+const ckPill = (c, dot = true) => (isNew(c) ? `<span class="pill blue" title="Neu gefunden – noch nicht übernommen, löst keinen Alarm aus">Neu</span>`
+  : isQuiet(c) ? `<span class="pill" title="Nur Anzeige – dieser Check löst keinen Alarm aus">Nur Anzeige</span>` : statePill(c.state, dot));
 // reasonHTML: the reason of a check; for a quiet check that would be warn/crit dimmed with a dot.
 function reasonHTML(c, fallback = "") {
   const t = reasonText(c) || fallback;
@@ -1870,7 +1892,7 @@ function reasonHTML(c, fallback = "") {
 function modeBtn(c) {
   if (c.key === REACH_KEY) return "";
   const q = isQuiet(c);
-  return `<button class="ib sm-ib ck-mode ${q ? "quiet" : ""}" type="button" data-mode-key="${esc(c.key)}" data-fk="m:${esc(c.key)}" aria-haspopup="menu" aria-expanded="false" title="Überwachung: ${q ? "nur anzeigen" : "überwachen"}" aria-label="Überwachung von ${esc(c.name)} einstellen">${icon("eye")}</button>`;
+  return `<button class="ib sm-ib ck-mode ${q ? "quiet" : ""}" type="button" data-mode-key="${esc(c.key)}" data-fk="m:${esc(c.key)}" aria-haspopup="menu" aria-expanded="false" title="Überwachung: ${isNew(c) ? "neu, noch nicht entschieden" : q ? "nur anzeigen" : "überwachen"}" aria-label="Überwachung von ${esc(c.name)} einstellen">${icon("eye")}</button>`;
 }
 // cardTone: colour of a check card, its left bar and its sparkline.
 const cardTone = (c) => (isQuiet(c) ? "quiet" : ["ok", "warn", "crit"].includes(c.state) ? c.state : "unknown");
@@ -2065,7 +2087,7 @@ function svcCard(c, devId, { mode = true } = {}) {
   const v = cardValue(c), tone = cardTone(c);
   // a card whose value is only the state word ("Kritisch") shows no extra state pill
   const pillH = isQuiet(c) ? ckPill(c) : c.state !== "ok" && !v.stateOnly ? statePill(c.state) : "";
-  const stTxt = isQuiet(c) ? "Nur Anzeige" : c.state !== "ok" && !v.stateOnly ? (STATES[c.state] || STATES.unknown)[0] : "";
+  const stTxt = isQuiet(c) ? quietWord(c) : c.state !== "ok" && !v.stateOnly ? (STATES[c.state] || STATES.unknown)[0] : "";
   const aria = [c.name, v.text, v.sub, stTxt].filter(Boolean).join(", ");
   const val = v.rxtx ? `<span class="svc-rx" title="Empfangen"><span aria-hidden="true">↓</span> ${esc(fmtVal(v.rxtx[0], "B/s"))}</span><span class="svc-tx" title="Gesendet"><span aria-hidden="true">↑</span> ${esc(fmtVal(v.rxtx[1], "B/s"))}</span>` : esc(v.text);
   const msg = cardMsg(c, v);
@@ -2138,7 +2160,7 @@ function portView(list, dv) {
     const hasTraffic = isNum(rx) || isNum(tx);
     return `<tr data-pst="${ps}" ${rowLink(dv.id, c)} ${portShown(ps, f) ? "" : "hidden"} class="row-link ${ps === "up" ? "" : "pt-off"}">
       ${td("Port", `<a class="row-main" href="${checkPath(dv.id, c.key)}" data-go data-fk="r:${esc(c.key)}" aria-label="${esc(portTitle(name))} – Verlauf anzeigen"><b>${esc(name)}</b></a>${pendingTag(c)}${fa.Beschreibung && fa.Beschreibung !== name ? `<div class="t-sub" title="${esc(fa.Beschreibung)}">${esc(fa.Beschreibung)}</div>` : ""}`, "pt-port")}
-      ${td("Status", `<span class="flex pt-stl">${pill(pl, tone, !!tone && ps !== "up")}${isQuiet(c) ? `<span class="tag" title="Nur Anzeige – kein Alarm">Nur Anzeige</span>` : ""}</span>${extra || MUTED_TITLE[c.muted] && isQuiet(c) ? `<div class="t-sub">${reasonHTML({ ...c, reason: extra, msg: "" })}</div>` : ""}${isNum(er) && er > 0 ? `<div class="t-sub">Fehler ${esc(fmtVal(er, "1/s"))}</div>` : ""}`, "pt-st")}
+      ${td("Status", `<span class="flex pt-stl">${pill(pl, tone, !!tone && ps !== "up")}${isQuiet(c) ? `<span class="tag" title="${quietWord(c)} – kein Alarm">${quietWord(c)}</span>` : ""}</span>${extra || MUTED_TITLE[c.muted] && isQuiet(c) ? `<div class="t-sub">${reasonHTML({ ...c, reason: extra, msg: "" })}</div>` : ""}${isNum(er) && er > 0 ? `<div class="t-sub">Fehler ${esc(fmtVal(er, "1/s"))}</div>` : ""}`, "pt-st")}
       ${td("Geschwindigkeit", esc(fa.Geschwindigkeit || "—"), "small nowrap pt-meta" + (fa.Geschwindigkeit ? "" : " pt-empty"))}
       ${td("Alias", fa.Alias ? esc(fa.Alias) : '<span class="muted">—</span>', "small pt-meta pt-alias" + (fa.Alias ? "" : " pt-empty"))}
       ${hasPoe ? td("PoE", poe || '<span class="muted">—</span>', "small nowrap pt-meta pt-poe" + (poe ? "" : " pt-empty")) : ""}
@@ -2317,8 +2339,9 @@ function ckSummary(st, att, view) {
   const checks = st.checks || [];
   const counts = { ok: 0, warn: 0, crit: 0, unknown: 0 };
   checks.forEach((c) => { counts[c.state in counts ? c.state : "unknown"]++; });
-  const quiet = checks.filter(isQuiet).length, hidden = (st.hidden || []).filter((h) => !h.pending).length;
-  return `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span>${view === "cards" ? `<span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span>` : ""}${viewSeg(view)}</div>`;
+  const quiet = checks.filter((c) => c.mode === "quiet").length, fresh = checks.filter(isNew).length, gone = (st.vanished || []).length;
+  const hidden = (st.hidden || []).filter((h) => !h.pending).length;
+  return `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${fresh ? ` · ${fresh} neu` : ""}${gone ? ` · ${gone} verschwunden` : ""}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span>${view === "cards" ? `<span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span>` : ""}${viewSeg(view)}</div>`;
 }
 const dvNotes = (dv) => (dv.notes ? `<div class="panel tight dv-notes"><span class="muted small">Notizen</span><div>${esc(dv.notes)}</div></div>` : "");
 
@@ -2415,6 +2438,15 @@ function svcHiddenRow(h, sel) {
     <td class="spark-cell"></td><td class="sv-since"></td>
     <td class="act">${h.pending ? "" : `<button class="btn gray sm" type="button" data-unhide="${esc(h.key)}" data-fk="u:${esc(h.key)}" aria-label="${esc(h.name || h.key)} wieder anzeigen">${icon("eye")} Wieder anzeigen</button>`}</td></tr>`;
 }
+// svcVanishedRow: a check of the inventory the device no longer reports (its history stays).
+function svcVanishedRow(v, devId) {
+  return `<tr class="row-link sv-row st-unknown sv-gone" data-href="${checkPath(devId, v.key)}" data-bad="1" data-q="${esc(lc([v.name, v.key, v.group].join(" ")))}">
+    <td class="sv-sel"></td><td class="sv-st">${pill("Verschwunden", "amber")}</td>
+    <td class="sv-name"><a class="row-main" href="${checkPath(devId, v.key)}" data-go data-fk="r:${esc(v.key)}">${esc(v.name || v.key)}</a></td>
+    <td class="sv-sum"><span>zuletzt gesehen <span title="${esc(fmtTime(v.last, true))}">${esc(fmtAgo(v.last))}</span></span><span class="sv-dot"> · </span><span class="mono t-sub">${esc(v.key)}</span></td>
+    <td class="spark-cell"></td><td class="sv-since"></td>
+    <td class="act"><button class="btn gray sm" type="button" data-remove="${esc(v.key)}" data-fk="rm:${esc(v.key)}" aria-label="${esc(v.name || v.key)} aus der Inventur entfernen">${icon("trash")} Entfernen</button></td></tr>`;
+}
 // svcRows: the rows of a section under group headings ("System 5"), each heading with a checkbox for its group.
 function svcRows(list, rowFn, selectable) {
   return groupBy(svcSort(list), (c) => c.group || "Weitere").map(([g, cs]) => {
@@ -2447,18 +2479,23 @@ function svcAgentSection(a) {
 // svcList renders the device overview as a service list.
 function svcList(dv, st, att = []) {
   const checks = st.checks || [], hid = st.hidden || [];
-  if (!checks.length && !hid.length) return checksView(dv, st, att);
+  if (!checks.length && !hid.length && !(st.vanished || []).length) return checksView(dv, st, att);
   const sel = svcSel.get(dv.id) || new Set();
   const known = new Set([...checks.map((c) => c.key), ...hid.filter((h) => !h.pending).map((h) => h.key)]);
   for (const k of [...sel]) if (!known.has(k)) sel.delete(k);
   svcSel.set(dv.id, sel);
   const f = svcFilter.get(dv.id) || { q: "", bad: false };
-  const mon = checks.filter((c) => !isQuiet(c)), qu = checks.filter(isQuiet), off = hid.filter((h) => !h.pending).length;
+  const mon = checks.filter((c) => !isQuiet(c)), qu = checks.filter((c) => c.mode === "quiet"), nw = checks.filter(isNew);
+  const van = st.vanished || [], off = hid.filter((h) => !h.pending).length;
   const nBad = checks.filter(svcBad).length + att.reduce((n, a) => n + ((a.status || {}).checks || []).filter(svcBad).length, 0);
   const row = (c) => svcRow(c, dv.id, sel, true);
   const tools = `<div class="sv-tools"><input type="search" data-svq data-fk="svq" value="${esc(f.q)}" placeholder="Dienste filtern …" aria-label="Dienste filtern" autocomplete="off">
     <div class="seg" role="group" aria-label="Nach Zustand filtern"><button type="button" data-svb="" data-fk="svb:0" aria-pressed="${!f.bad}">Alle</button><button type="button" data-svb="1" data-fk="svb:1" aria-pressed="${!!f.bad}">Auffällig${nBad ? ` (${nBad})` : ""}</button></div></div>`;
   const secs = [
+    nw.length ? svcSection({ id: "new", title: "Neu gefunden", ic: "sparkles", count: nw.length, sub: "noch nicht übernommen – lösen keinen Alarm aus", rows: svcRows(nw, row, true), cls: "sv-new",
+      extra: `<div class="sv-sec-act"><button class="btn sm" type="button" data-accept-all data-fk="acc-all">${icon("check")} Alle übernehmen</button><span class="muted small">Oder einzelne anhaken und „Nur anzeigen“ oder „Ausblenden“ wählen.</span></div>` }) : "",
+    van.length ? svcSection({ id: "vanished", title: "Verschwunden", ic: "warn", count: van.length, sub: "meldet das Gerät nicht mehr", rows: svcRows(van, (v) => svcVanishedRow(v, dv.id), false), selectable: false, cls: "sv-van",
+      extra: `<div class="sv-sec-act"><button class="btn gray sm" type="button" data-remove-all data-fk="rm-all">${icon("trash")} Alle entfernen</button><span class="muted small">Entfernte Dienste gelten als neu, wenn sie wieder auftauchen.</span></div>` }) : "",
     mon.length ? svcSection({ id: "alert", title: "Überwachte Dienste", ic: "bell", count: mon.length, sub: "lösen bei Problemen Alarme aus", rows: svcRows(mon, row, true) }) : "",
     qu.length ? svcSection({ id: "quiet", title: "Nur Anzeige", ic: "eye", count: qu.length, sub: "werden aufgezeichnet, lösen aber keinen Alarm aus", rows: svcRows(qu, row, true) }) : "",
     ...att.map(svcAgentSection),
@@ -3104,13 +3141,14 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     drawHead(); drawFacts(); drawThr();
   };
   // saveRules changes the device's rules: fresh GET, mutate, PUT (as on the device page)
-  const saveRules = (btn, fn) => run(btn, async () => {
+  const saveRules = (btn, fn, accept) => run(btn, async () => {
     busy++;
     try {
       const cur = (await GET(`/api/devices/${enc(id)}`)).device;
       cur.rules = fn(cur.rules || []);
       const r = await PUT(`/api/devices/${enc(id)}`, cur);
       data.device.rules = r && Array.isArray(r.rules) ? r.rules : cur.rules;
+      if (accept) await POST(`/api/devices/${enc(id)}/discovery`, { accept: [key] });
       await reload();
     } finally { busy--; }
   }, "Gespeichert.");
@@ -3122,7 +3160,8 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     const group = (c && c.group) || hGroup || "";
     const sub = [par ? esc(dv.name) : "", group ? esc(group) : "", c && c.since ? `Zustand ${sinceCell(c)}` : "", `<span class="mono">${esc(key)}</span>`].filter(Boolean).join(" · ");
     const mode = ruleMode(dv.rules || [], key);
-    const modeB = c && key !== REACH_KEY ? `<button class="btn gray ck-mode${isQuiet(c) ? " quiet" : ""}" type="button" data-ck-mode data-fk="mode" aria-haspopup="menu" aria-expanded="false" aria-label="Überwachung: ${esc(RULE_MODE_SHORT[mode])} – ändern">${icon(mode === "quiet" ? "eye" : "bell")} ${esc(RULE_MODE_SHORT[mode])}</button>` : "";
+    const modeL = c && isNew(c) ? "Neu – entscheiden" : RULE_MODE_SHORT[mode];
+    const modeB = c && key !== REACH_KEY ? `<button class="btn gray ck-mode${isQuiet(c) ? " quiet" : ""}" type="button" data-ck-mode data-fk="mode" aria-haspopup="menu" aria-expanded="false" aria-label="Überwachung: ${esc(modeL)} – ändern">${icon(c && isNew(c) ? "sparkles" : mode === "quiet" ? "eye" : "bell")} ${esc(modeL)}</button>` : "";
     const pillH = c ? ckPill(c) : hidden ? pill("Ausgeblendet") : pill("Nicht vorhanden");
     let top = "";
     if (c) {
@@ -3130,7 +3169,7 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
       const val = v.rxtx ? `<span class="svc-rx"><span aria-hidden="true">↓</span> ${esc(fmtVal(v.rxtx[0], "B/s"))}<span class="sr-only"> empfangen</span></span><span class="svc-tx"><span aria-hidden="true">↑</span> ${esc(fmtVal(v.rxtx[1], "B/s"))}<span class="sr-only"> gesendet</span></span>` : esc(v.text);
       top = `<div class="panel ckd-now st-${tone}"><div class="ckd-main"><div class="svc-val${v.rxtx ? " rxtx" : v.word ? " word" : ""}">${val}</div>${v.sub ? `<div class="svc-sec">${esc(v.sub)}</div>` : ""}</div>
         ${msg || (isQuiet(c) && MUTED_TITLE[c.muted]) || c.pending ? `<div class="ckd-msg">${reasonHTML(c)}${pendingTag(c)}${c.reason && c.msg && c.reason !== c.msg ? `<div class="t-sub">${esc(c.msg)}</div>` : ""}</div>` : ""}
-        ${isQuiet(c) ? `<div class="t-sub">Nur Anzeige: Werte werden aufgezeichnet, der Check löst keinen Alarm aus.</div>` : ""}</div>`;
+        ${isNew(c) ? `<div class="t-sub">Neu gefunden: Werte werden aufgezeichnet, Alarme gibt es erst, wenn der Check übernommen ist.</div>` : isQuiet(c) ? `<div class="t-sub">Nur Anzeige: Werte werden aufgezeichnet, der Check löst keinen Alarm aus.</div>` : ""}</div>`;
     } else if (hidden) {
       top = callout("", "Ausgeblendet", pending ? "Der Check erscheint mit der nächsten Abfrage wieder." : "Dieser Check wird durch eine Regel verworfen – es werden keine neuen Werte gespeichert. Der bisherige Verlauf steht unten.",
         pending ? "" : `<button class="btn gray sm" type="button" data-unhide data-fk="unhide">${icon("eye")} Wieder anzeigen</button>`);
@@ -3151,9 +3190,9 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     });
     const mb = qs("[data-ck-mode]", head);
     if (mb) mb.onclick = () => {
-      const rules = data.device.rules || [], r = ruleFor(rules, key);
-      const hint = !r ? "" : r.match === key ? "Eigene Einstellung für diesen Check." : `Zurzeit durch die Regel <code>${esc(r.match)}</code>.`;
-      modeMenu(mb, { title: name, current: ruleMode(rules, key), hint, onPick: (mo) => saveRules(mb, (rs) => setExactRule(rs, key, mo)) });
+      const rules = data.device.rules || [], r = ruleFor(rules, key), nw = isNew(check().c || {});
+      const hint = nw ? "Neu gefunden – noch nicht entschieden." : !r ? "" : r.match === key ? "Eigene Einstellung für diesen Check." : `Zurzeit durch die Regel <code>${esc(r.match)}</code>.`;
+      modeMenu(mb, { title: name, current: nw ? "" : ruleMode(rules, key), hint, onPick: (mo) => saveRules(mb, (rs) => setExactRule(rs, key, mo), nw) });
     };
     const ub = qs("[data-unhide]", head);
     if (ub) ub.onclick = () => saveRules(ub, (rs) => setExactRule(rs, key, "alert"));

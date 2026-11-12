@@ -120,6 +120,7 @@ func (s *Server) routes() {
 	a("DELETE /api/devices/{id}", s.deleteDevice)
 	a("POST /api/devices/{id}/poll", s.pollDevice)
 	a("POST /api/devices/{id}/maintenance", s.maintenance)
+	a("POST /api/devices/{id}/discovery", s.discovery)
 	a("POST /api/devices/{id}/attach", s.attach)
 	a("POST /api/devices/{id}/detach", s.detach)
 	a("GET /api/devices/{id}/series", s.series)

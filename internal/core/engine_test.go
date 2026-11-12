@@ -407,7 +407,7 @@ func TestSummaryOverviewCounts(t *testing.T) {
 		len(ov.Events) == 0 || len(ov.Events) > 10 || strings.Join(ov.Groups, ",") != "A,B" {
 		t.Fatalf("overview: %+v", ov)
 	}
-	if r := ov.Devices[0]; r.State != model.StateCrit || r.Checks.Crit != 1 || r.Checks.OK != 1 || r.Disk == nil {
+	if r := ov.Devices[0]; r.State != model.StateCrit || r.Checks.Crit != 1 || r.Checks.OK != 2 || r.Disk == nil { // reach and discovery ok
 		t.Fatalf("row: %+v", r)
 	}
 	// Values older than 10 minutes are not shown.

@@ -59,6 +59,9 @@ type Device struct {
 	Enabled  bool   `json:"enabled"`
 	Interval int    `json:"interval"`  // seconds between polls; 0 = default of the type (see PollInterval)
 	NoAlerts bool   `json:"no_alerts"` // states are shown, but no alerts/notifications are raised
+	// AutoAccept monitors checks found after the first inventory at once instead of listing
+	// them as new (undecided) checks.
+	AutoAccept bool `json:"auto_accept,omitempty"`
 
 	// ParentID attaches an agent device to another device (Proxmox, SNMP, net): the agent's
 	// data complements the parent's API/SNMP data. Attached agents are shown inside the parent
@@ -122,7 +125,15 @@ const (
 	ModeAlert = "alert" // default: the state counts and raises alerts
 	ModeQuiet = "quiet" // collected, stored and shown, but never warn/crit and never alerts
 	ModeOff   = "off"   // hidden: no check, no metrics stored
+	// ModeNew is not a rule mode: it is the mode of a check found after the device's first
+	// inventory that was not decided yet (no rule matches, not accepted). It behaves like
+	// ModeQuiet: collected, stored and shown, never warn/crit, never alerts.
+	ModeNew = "new"
 )
+
+// DiscoveryKey is the check core synthesizes for the inventory: warn while there are new or
+// vanished checks.
+const DiscoveryKey = "discovery"
 
 // ReachKey is the check core synthesizes for reachability; rules never apply to it.
 const ReachKey = "reach"
@@ -159,6 +170,16 @@ func normMode(m string) string {
 		return m
 	}
 	return ModeAlert
+}
+
+// HasRule reports whether a rule decides the mode of a check key (exact or pattern).
+func (d Device) HasRule(key string) bool {
+	for _, r := range d.Rules {
+		if r.Match == key || (strings.Contains(r.Match, "*") && GlobMatch(r.Match, key)) {
+			return true
+		}
+	}
+	return false
 }
 
 // GlobMatch reports whether s matches pattern, where * matches any sequence (also ":" and "/").
@@ -364,6 +385,33 @@ type DeviceStatus struct {
 	Error    string        `json:"error,omitempty"`
 	Checks   []CheckStatus `json:"checks"`
 	Hidden   []HiddenCheck `json:"hidden,omitempty"` // checks switched off by a rule (last poll)
+	// Vanished are checks of the inventory missing from the last collections.
+	Vanished []VanishedCheck `json:"vanished,omitempty"`
+	// Inventory is every check key the device has reported (discovery). It is persisted with
+	// the status but left out of API responses.
+	Inventory []InventoryItem `json:"inventory,omitempty"`
+}
+
+// InventoryItem is one check the device has reported since its first inventory.
+type InventoryItem struct {
+	Key   string `json:"key"`
+	Name  string `json:"name"`
+	Group string `json:"group,omitempty"`
+	First int64  `json:"first"` // first seen
+	Last  int64  `json:"last"`  // last seen
+	// New marks a check found after the first inventory without a decision yet (no rule
+	// matched, not accepted): it runs in ModeNew.
+	New bool `json:"new,omitempty"`
+	// Missing counts the successful collections in a row without this check.
+	Missing int `json:"missing,omitempty"`
+}
+
+// VanishedCheck is a check of the inventory missing from the last collections.
+type VanishedCheck struct {
+	Key   string `json:"key"`
+	Name  string `json:"name"`
+	Group string `json:"group,omitempty"`
+	Last  int64  `json:"last"` // last seen
 }
 
 // Threshold turns a metric value into a state.

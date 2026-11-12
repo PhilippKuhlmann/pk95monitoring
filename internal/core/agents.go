@@ -227,6 +227,12 @@ func (c *Core) IngestReport(deviceID string, rep model.AgentReport) (model.Agent
 		c.mu.Unlock()
 		return model.AgentReply{}, fmt.Errorf("Gerät %s ist kein Agent", d.Name)
 	}
+	if !rep.Buffered && ts >= rt.lastEval {
+		discover(d, rt, checks, now)
+		if dc, ok := discoveryCheck(rt); ok {
+			checks = append(checks, dc)
+		}
+	}
 	// Checks switched off by a rule are dropped with their metrics, buffered ones too.
 	checks, hidden := splitOff(d, checks)
 	a := model.AgentConfig{}

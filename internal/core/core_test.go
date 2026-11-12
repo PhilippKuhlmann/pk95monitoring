@@ -115,8 +115,10 @@ func findCheck(st model.DeviceStatus, key string) (model.CheckStatus, bool) {
 // agentDevice imports an agent device and returns its id.
 func (e *env) agentDevice(t *testing.T, id string, mut func(*model.Device)) string {
 	t.Helper()
+	// AutoAccept: tests report changing check sets; discovery has its own tests.
 	d := model.Device{ID: id, Name: id, Type: model.TypeAgent, Host: "10.0.0.9", Enabled: true,
-		Created: e.clk.Now().Unix(), Agent: &model.AgentConfig{AgentID: id + "-m", OS: "linux", Arch: "amd64"}}
+		AutoAccept: true,
+		Created:    e.clk.Now().Unix(), Agent: &model.AgentConfig{AgentID: id + "-m", OS: "linux", Arch: "amd64"}}
 	if mut != nil {
 		mut(&d)
 	}

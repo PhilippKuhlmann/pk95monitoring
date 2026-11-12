@@ -91,7 +91,7 @@ func TestRuleOffDropsCheckAndMetrics(t *testing.T) {
 	if got := seriesInstances(e, id, "disk.usage"); !slices.Equal(got, []string{"/"}) {
 		t.Fatalf("series: %v", got)
 	}
-	if n := countChecks(st.Checks); n.OK != 2 || n.Warn+n.Crit+n.Unknown != 0 {
+	if n := countChecks(st.Checks); n.OK != 3 || n.Warn+n.Crit+n.Unknown != 0 { // reach, disk:/, discovery
 		t.Fatalf("counts: %+v", n)
 	}
 
@@ -149,10 +149,10 @@ func TestRuleQuiet(t *testing.T) {
 		t.Fatal("quiet metrics not stored")
 	}
 	rows := e.c.Rows()
-	if rows[0].State != model.StateOK || rows[0].Checks.OK != 4 || rows[0].Checks.Warn+rows[0].Checks.Crit != 0 {
+	if rows[0].State != model.StateOK || rows[0].Checks.OK != 5 || rows[0].Checks.Warn+rows[0].Checks.Crit != 0 {
 		t.Fatalf("row: %+v", rows[0])
 	}
-	if sum := e.c.Summary(); sum.State != model.StateOK || sum.Devices[0].Checks["ok"] != 4 {
+	if sum := e.c.Summary(); sum.State != model.StateOK || sum.Devices[0].Checks["ok"] != 5 {
 		t.Fatalf("summary: %+v", sum)
 	}
 

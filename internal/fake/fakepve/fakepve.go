@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,6 +133,27 @@ func (s *Server) SetGuestStatus(vmid int, status string) {
 			}
 		}
 	}
+}
+
+// AddGuest adds a running guest ("qemu" or "lxc") on a node; an existing vmid is replaced.
+func (s *Server) AddGuest(vmid int, name, nodeName, typ string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.removeGuest(vmid)
+	now := s.now()
+	s.guests = append(s.guests, &guest{vmid: vmid, name: name, node: nodeName, typ: typ, onboot: true, status: "running", cores: 2,
+		maxmem: 4 * gib, maxdisk: 64 * gib, cpuBase: 0.08, memBase: 0.45, net: 120e3, io: 200e3, startedAt: now, phase: float64(vmid%17) * 0.37})
+}
+
+// RemoveGuest deletes a guest.
+func (s *Server) RemoveGuest(vmid int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.removeGuest(vmid)
+}
+
+func (s *Server) removeGuest(vmid int) {
+	s.guests = slices.DeleteFunc(s.guests, func(g *guest) bool { return g.vmid == vmid })
 }
 
 // SetBackupFailed makes the nightly backup job of pve2 fail (default) or succeed.

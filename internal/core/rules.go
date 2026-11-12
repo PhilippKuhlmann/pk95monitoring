@@ -26,10 +26,10 @@ func applyMode(cs model.CheckStatus, mode string) model.CheckStatus {
 		eff = cs.Muted
 	}
 	cs.State, cs.Mode, cs.Muted = eff, "", ""
-	if mode != model.ModeQuiet || cs.Key == reachKey {
+	if (mode != model.ModeQuiet && mode != model.ModeNew) || cs.Key == reachKey {
 		return cs
 	}
-	cs.Mode = model.ModeQuiet
+	cs.Mode = mode
 	if eff == model.StateWarn || eff == model.StateCrit {
 		cs.State, cs.Muted = model.StateOK, eff
 	}
@@ -112,7 +112,7 @@ func reapplyRules(d model.Device, rt *devState, checks []model.CheckStatus, now 
 	var hidden []model.HiddenCheck
 	seen := map[string]bool{}
 	for _, cs := range checks {
-		mode := d.CheckMode(cs.Key)
+		mode := modeOf(d, rt, cs.Key)
 		if mode == model.ModeOff {
 			hidden = append(hidden, model.HiddenCheck{Key: cs.Key, Name: cs.Name, Group: cs.Group})
 			seen[cs.Key] = true

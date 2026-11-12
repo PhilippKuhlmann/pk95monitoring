@@ -47,6 +47,9 @@ const (
 // BackfillDays is the history written on the first start (tests shorten it).
 var BackfillDays = 7
 
+// DiscoveryAfter is when the simulated cluster gets a new VM and loses a container.
+var DiscoveryAfter = 3 * time.Minute
+
 // ReportEvery is the report interval of the simulated agents.
 var ReportEvery = 30 * time.Second
 
@@ -118,6 +121,16 @@ func Setup(c *core.Core) (stop func(), err error) {
 			case <-t.C:
 				report()
 			}
+		}
+	})
+	// Discovery: a few minutes in, a new VM appears and a container is deleted, so the
+	// device page shows "Neu gefunden" and "Verschwunden".
+	wg.Go(func() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(DiscoveryAfter):
+			pve.AddGuest(108, "build01", "pve2", "qemu")
+			pve.RemoveGuest(203)
 		}
 	})
 	var once sync.Once

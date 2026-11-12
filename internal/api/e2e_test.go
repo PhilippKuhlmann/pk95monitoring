@@ -255,6 +255,25 @@ func TestEndToEnd(t *testing.T) {
 	}
 	ui.must("POST", "/api/devices/"+netDev.ID+"/maintenance", map[string]any{"until": 0}, nil)
 
+	// Discovery: unknown keys are ignored, unknown devices are 404, the inventory stays internal.
+	var disc struct {
+		Accepted int             `json:"accepted"`
+		Removed  int             `json:"removed"`
+		Status   json.RawMessage `json:"status"`
+	}
+	ui.must("POST", "/api/devices/"+pxID+"/discovery", map[string]any{"accept": []string{"nope"}, "remove": []string{"gone"}}, &disc)
+	if disc.Accepted != 0 || disc.Removed != 0 || len(disc.Status) == 0 || strings.Contains(string(disc.Status), `"inventory"`) {
+		t.Errorf("discovery %+v %s", disc, disc.Status)
+	}
+	if code := ui.do("POST", "/api/devices/nope/discovery", map[string]any{"accept": []string{"x"}}, nil); code != 404 {
+		t.Errorf("discovery unknown device: %d", code)
+	}
+	var got map[string]json.RawMessage
+	ui.must("GET", "/api/devices/"+pxID, nil, &got)
+	if strings.Contains(string(got["status"]), `"inventory"`) {
+		t.Error("device status exposes the inventory")
+	}
+
 	var ov struct {
 		Counts  map[string]int    `json:"counts"`
 		Devices []core.DeviceRow  `json:"devices"`

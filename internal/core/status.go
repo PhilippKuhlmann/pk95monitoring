@@ -30,6 +30,10 @@ type devState struct {
 	dirty    bool                 // status changed since it was persisted
 	pollMu   sync.Mutex           // serializes polls of this device
 	offer    updateOffer          // agents: the last update offered
+	newKeys  map[string]bool      // keys of new (undecided) checks, from st.Inventory
+	// acceptUnseen accepts the keys the next collection reports for the first time (the
+	// device's configuration changed, so new checks are expected, not discovered).
+	acceptUnseen bool
 }
 
 // updateOffer remembers an update offered to an agent, so an agent that keeps reporting its
@@ -44,7 +48,7 @@ type updateOffer struct {
 func newDevState(id string) *devState {
 	return &devState{
 		st:  model.DeviceStatus{DeviceID: id, State: model.StateUnknown, Checks: []model.CheckStatus{}},
-		thr: map[string]string{}, detail: map[string][2]string{},
+		thr: map[string]string{}, detail: map[string][2]string{}, newKeys: map[string]bool{},
 	}
 }
 
@@ -63,6 +67,8 @@ func cloneStatus(s model.DeviceStatus) model.DeviceStatus {
 		s.Checks = []model.CheckStatus{}
 	}
 	s.Hidden = slices.Clone(s.Hidden)
+	s.Vanished = slices.Clone(s.Vanished)
+	s.Inventory = slices.Clone(s.Inventory)
 	return s
 }
 
@@ -250,7 +256,7 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 	}
 	if muted == "" {
 		for _, cs := range rt.st.Checks {
-			if (cs.State != model.StateWarn && cs.State != model.StateCrit) || cs.Mode == model.ModeQuiet {
+			if (cs.State != model.StateWarn && cs.State != model.StateCrit) || cs.Mode != "" {
 				continue
 			}
 			k := alertKey(d.ID, cs.Key)
@@ -297,7 +303,7 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 			continue
 		}
 		cs, exists := byKey[oa.a.CheckKey]
-		quiet := exists && cs.Mode == model.ModeQuiet
+		quiet := exists && cs.Mode != "" // quiet or new: never alerts
 		if muted == "" && exists && !quiet && (cs.State == model.StateWarn || cs.State == model.StateCrit || cs.State == model.StateUnknown) {
 			continue // still bad, or no current data: keep the alert as it is
 		}
@@ -320,6 +326,8 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 		why := muted
 		switch {
 		case why != "":
+		case quiet && cs.Mode == model.ModeNew:
+			why = "Neuer Dienst, noch nicht übernommen."
 		case quiet:
 			why = "Der Check wird nicht mehr alarmiert (nur anzeigen)."
 		case d.CheckMode(oa.a.CheckKey) == model.ModeOff:

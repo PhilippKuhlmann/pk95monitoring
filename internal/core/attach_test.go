@@ -154,7 +154,7 @@ func TestAttachedState(t *testing.T) {
 		!strings.Contains(r.Message, "; pve1: Festplatte /: Festplattenbelegung / 97 % ≥ 95 %") {
 		t.Errorf("parent row %s %q (own %s %q)", r.State, r.Message, parentOwn.State, parentOwn.Message)
 	}
-	if r.Checks.Crit != before.Checks.Crit+1 || r.Checks.OK != before.Checks.OK+1 { // disk crit, reach ok
+	if r.Checks.Crit != before.Checks.Crit+1 || r.Checks.OK != before.Checks.OK+2 { // disk crit, reach and discovery ok
 		t.Errorf("check counts %+v, before %+v", r.Checks, before.Checks)
 	}
 	ov, err := e.c.Overview(context.Background())

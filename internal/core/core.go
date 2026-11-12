@@ -94,6 +94,7 @@ func New(st *store.Store, opt Options) (*Core, error) {
 		rt := newDevState(d.ID)
 		if s, ok := statuses[d.ID]; ok {
 			rt.st = s
+			rt.reindex()
 			if rt.st.Checks == nil {
 				rt.st.Checks = []model.CheckStatus{}
 			}

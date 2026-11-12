@@ -1026,3 +1026,8 @@ tr.row-link, .toner.row-link { cursor: pointer; }
   .sv-tools input[type="search"] { max-width: none; }
   .sv-view { margin-left: 0; }
 }
+/* discovery: new and vanished checks */
+.sv-sec-act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 0 16px 12px; }
+.sv-sec.sv-new { border-left: 3px solid var(--c500); }
+.sv-sec.sv-van { border-left: 3px solid var(--amber-dot); }
+.sv-gone .sv-name a { color: var(--muted); }

@@ -141,7 +141,14 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 	})
 	// Rules apply at once: quiet/alert from the stored verdict, switched-off checks move to
 	// Hidden (alerts of both close silently); checks shown again return with the next poll.
+	// Inventory: rules decide new checks at once; after a change of what is collected the
+	// next collection's unseen checks are expected, not discovered.
+	if old != nil && collectChanged(*old, d) {
+		rt.acceptUnseen = true
+	}
+	acceptRuled(d, rt)
 	checks = reapplyRules(d, rt, checks, now)
+	checks = c.refreshDiscovery(d, rt, checks, now)
 	if len(rt.st.Checks) > 0 || old != nil {
 		c.finish(d, rt, checks, now)
 	}
@@ -154,6 +161,26 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 	}
 	c.wakeUp()
 	return d, nil, nil
+}
+
+// collectChanged reports whether the settings that choose the collected checks changed.
+// Values are compared as printed, so a nil and an empty list are the same.
+func collectChanged(a, b model.Device) bool {
+	show := func(d model.Device) string {
+		s := fmt.Sprintf("%s|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT))
+		if d.Agent != nil {
+			s += fmt.Sprintf("|%v|%v|%v", d.Agent.Services, d.Agent.WatchAutoServices, d.Agent.IgnoreServices)
+		}
+		return s
+	}
+	return show(a) != show(b)
+}
+
+func deref[T any](p *T) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 func typeLabel(t string) string {
