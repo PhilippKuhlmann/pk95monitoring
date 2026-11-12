@@ -1,0 +1,9 @@
+/pk95monitoring
+/pk95agent
+/pk95agent.exe
+/dist/
+/data/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

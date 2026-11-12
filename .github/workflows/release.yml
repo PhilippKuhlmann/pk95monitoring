@@ -1,0 +1,96 @@
+# Checks every push and pull request (gofmt, go vet incl. the agent's Linux/Windows files,
+# node --check, tests, agent cross-build, image build). On a tag v* it pushes the multi-arch
+# image ghcr.io/<owner>/pk95monitoring:<version>, :<major>.<minor> and :latest and creates a
+# GitHub release with the agent binaries (pk95agent-linux-amd64, pk95agent-linux-arm64,
+# pk95agent-windows-amd64.exe) and SHA256SUMS.
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: gofmt, go vet, node --check
+        run: make check
+      - run: go test -race ./...
+      - name: Agent cross-build
+        run: make agents
+
+  # Builds the image on every run, so a broken Dockerfile shows up before a release; logs in and
+  # pushes only for a version tag.
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image name
+        id: image
+        # ghcr.io needs a lower-case repository name.
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pk95monitoring" >> "$GITHUB_OUTPUT"
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: env.PUSH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.meta.outputs.version || 'dev' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build agents
+        run: |
+          make agents VERSION="${GITHUB_REF_NAME#v}"
+          (cd dist/agents && sha256sum pk95agent-* > SHA256SUMS)
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/agents/* --title "PK95 Monitoring $GITHUB_REF_NAME" --generate-notes

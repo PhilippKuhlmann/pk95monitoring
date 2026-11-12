@@ -1,0 +1,90 @@
+# PK95 Monitoring - agent installer for Windows (Windows PowerShell 5.1 and PowerShell 7).
+# The web UI shows the complete command (with key and checksum) under "Agents".
+# Agent version on the server: {{.Version}}
+param(
+    [string]$Key = '',
+    [string]$Fingerprint = {{psq .Fingerprint}},
+    [string]$Sha256 = '',
+    # Optional: attach the agent to an existing device (e.g. a Proxmox cluster) and its node.
+    [string]$Device = {{psq .DeviceID}},
+    [string]$Node = {{psq .Node}}
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+$Server = {{psq .ServerURL}}
+$Url = "$Server/agent/download/windows/amd64"
+$Dir = Join-Path $env:ProgramFiles 'PK95Agent'
+$Exe = Join-Path $Dir 'pk95agent.exe'
+
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Bitte PowerShell oder die Eingabeaufforderung "Als Administrator ausfuehren".'
+}
+if (-not [Environment]::Is64BitOperatingSystem) {
+    throw 'Der Agent benoetigt ein 64-Bit-Windows.'
+}
+if (-not $Key) {
+    throw 'Parameter -Key fehlt (Registrierungsschluessel aus der Weboberflaeche).'
+}
+if ($Sha256 -notmatch '^[0-9a-fA-F]{64}$') {
+    throw 'SHA-256-Pruefsumme fehlt oder ist ungueltig - bitte den Befehl aus der Weboberflaeche verwenden.'
+}
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+if ($Fingerprint) {
+    # Self-signed server certificate: accept only the certificate with this SHA-256
+    # fingerprint. The download is also verified by its SHA-256 below, and the agent pins the
+    # certificate afterwards.
+    $pin = ($Fingerprint -replace '[^0-9a-fA-F]', '').ToLower()
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = {
+        param($src, $cert, $chain, $policyErrors)
+        $sha = [Security.Cryptography.SHA256]::Create()
+        $hex = ([BitConverter]::ToString($sha.ComputeHash($cert.GetRawCertData())) -replace '-', '').ToLower()
+        return $hex -eq $pin
+    }.GetNewClosure()
+}
+
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ('pk95agent-' + [Guid]::NewGuid().ToString('N') + '.exe')
+try {
+    Write-Host "Lade pk95agent von $Url ..."
+    (New-Object Net.WebClient).DownloadFile($Url, $tmp)
+    $hash = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
+    if ($hash -ne $Sha256) {
+        throw "Pruefsumme stimmt nicht (erwartet $Sha256, erhalten $hash). Abbruch."
+    }
+    Write-Host 'Pruefsumme in Ordnung.'
+
+    $svc = Get-Service -Name 'pk95agent' -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -ne 'Stopped') {
+        Write-Host 'Vorhandener Dienst wird gestoppt ...'
+        Stop-Service -Name 'pk95agent' -Force
+        $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+    }
+    New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    if (Test-Path $Exe) {
+        # A running or locked exe can be renamed but not overwritten.
+        Remove-Item "$Exe.old" -Force -ErrorAction SilentlyContinue
+        Move-Item -Path $Exe -Destination "$Exe.old" -Force
+    }
+    Copy-Item -Path $tmp -Destination $Exe -Force
+}
+finally {
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+}
+
+$installArgs = @('install', '--server', $Server, '--key', $Key)
+if ($Fingerprint) {
+    $installArgs += @('--fingerprint', $Fingerprint)
+}
+if ($Device) {
+    $installArgs += @('--device', $Device)
+    if ($Node) {
+        $installArgs += @('--node', $Node)
+    }
+}
+& $Exe @installArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "Installation fehlgeschlagen (Exit-Code $LASTEXITCODE)."
+}

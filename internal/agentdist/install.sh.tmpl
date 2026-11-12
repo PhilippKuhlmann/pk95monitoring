@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# PK95 Monitoring - agent installer for Linux (amd64, arm64) with systemd.
+# The web UI shows the complete command (with key, checksums and pin) under "Agents":
+#   curl -fsSL {{.ServerURL}}/agent/install.sh | $(command -v sudo) bash -s -- --key KEY --sha256-amd64 ... --sha256-arm64 ...
+# Agent version on the server: {{.Version}}
+set -euo pipefail
+
+die() {
+	echo "Fehler: $*" >&2
+	exit 1
+}
+
+need_value() {
+	[ "$1" -ge 2 ] || die "Wert für $2 fehlt."
+}
+
+main() {
+	local server={{shq .ServerURL}}
+	local fingerprint={{shq .Fingerprint}}
+	# base64 SHA-256 of the server's public key: curl accepts only this server (--pinnedpubkey).
+	local pin={{shq .PubKeyPin}}
+	local key="" sha_amd64="" sha_arm64=""
+	# Optional: attach the agent to an existing device (e.g. a Proxmox cluster) and its node.
+	local device={{shq .DeviceID}} node={{shq .Node}}
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--key) need_value $# "$1"; key="$2"; shift 2 ;;
+		--fingerprint) need_value $# "$1"; fingerprint="$2"; shift 2 ;;
+		--sha256-amd64) need_value $# "$1"; sha_amd64="$2"; shift 2 ;;
+		--sha256-arm64) need_value $# "$1"; sha_arm64="$2"; shift 2 ;;
+		--device) need_value $# "$1"; device="$2"; shift 2 ;;
+		--node) need_value $# "$1"; node="$2"; shift 2 ;;
+		*) die "Unbekannte Option: $1" ;;
+		esac
+	done
+
+	[ "$(id -u)" -eq 0 ] || die "Bitte als root ausführen (… | sudo bash -s -- …)."
+	[ -n "$key" ] || die "--key fehlt (Registrierungsschlüssel aus der Weboberfläche)."
+	command -v systemctl >/dev/null 2>&1 || die "Der Agent benötigt systemd."
+	command -v sha256sum >/dev/null 2>&1 || die "sha256sum fehlt (Paket coreutils)."
+
+	local machine arch sha
+	machine="$(uname -m)"
+	case "$machine" in
+	x86_64 | amd64) arch=amd64; sha="$sha_amd64" ;;
+	aarch64 | arm64) arch=arm64; sha="$sha_arm64" ;;
+	*) die "Architektur $machine wird nicht unterstützt (nur x86_64 und aarch64)." ;;
+	esac
+	[ -n "$sha" ] || die "Keine SHA-256-Prüfsumme für $arch übergeben – ist der Agent für $arch auf dem Server vorhanden?"
+	sha="$(printf '%s' "$sha" | tr 'A-F' 'a-f')"
+	case "$sha" in
+	*[!0-9a-f]*) die "Ungültige SHA-256-Prüfsumme: $sha" ;;
+	esac
+	[ "${#sha}" -eq 64 ] || die "Ungültige SHA-256-Prüfsumme: $sha"
+
+	local url="$server/agent/download/linux/$arch"
+	tmp="$(mktemp)"
+	trap 'rm -f "$tmp"' EXIT
+	echo "Lade pk95agent ($arch) von $server …"
+	if command -v curl >/dev/null 2>&1; then
+		local opts=(-fsSL)
+		if [ -n "$fingerprint" ]; then
+			opts+=(-k) # self-signed certificate: the download is verified by its SHA-256 below
+		fi
+		if [ -n "$pin" ]; then
+			opts+=(--pinnedpubkey "sha256//$pin")
+		fi
+		curl "${opts[@]}" -o "$tmp" "$url" || die "Download fehlgeschlagen: $url"
+	elif command -v wget >/dev/null 2>&1; then
+		if [ -n "$fingerprint" ]; then
+			wget -q --no-check-certificate -O "$tmp" "$url" || die "Download fehlgeschlagen: $url"
+		else
+			wget -q -O "$tmp" "$url" || die "Download fehlgeschlagen: $url"
+		fi
+	else
+		die "Weder curl noch wget gefunden."
+	fi
+
+	local got
+	got="$(sha256sum "$tmp" | cut -d' ' -f1)"
+	[ "$got" = "$sha" ] || die "Prüfsumme stimmt nicht (erwartet $sha, erhalten $got). Abbruch."
+	echo "Prüfsumme in Ordnung."
+
+	install -d -m 0755 /usr/local/bin
+	install -m 0755 "$tmp" /usr/local/bin/pk95agent.new
+	mv -f /usr/local/bin/pk95agent.new /usr/local/bin/pk95agent
+
+	local args=(install --server "$server" --key "$key")
+	if [ -n "$fingerprint" ]; then
+		args+=(--fingerprint "$fingerprint")
+	fi
+	if [ -n "$device" ]; then
+		args+=(--device "$device")
+		if [ -n "$node" ]; then
+			args+=(--node "$node")
+		fi
+	fi
+	/usr/local/bin/pk95agent "${args[@]}"
+}
+
+# Everything runs inside main, so a partially downloaded script never executes.
+main "$@"

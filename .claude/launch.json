@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "go build -o pk95monitoring . && mkdir -p data/demo && PK95MON_DEMO=1 PK95MON_NO_TLS=1 PK95MON_LISTEN=127.0.0.1:18096 PK95MON_DATA_DIR=data/demo PK95MON_AGENT_DIR=dist/agents ./pk95monitoring"],
+      "port": 18096
+    }
+  ]
+}

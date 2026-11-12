@@ -1,0 +1,102 @@
+# PK95 Monitoring – one container per customer.
+#
+#   docker compose up -d
+#   docker compose logs pk95monitoring     # setup code for the first login
+#   https://<host>:8443
+#
+# "up" pulls the image from ghcr.io; to build it from this checkout instead run
+# "docker compose up -d --build" (needs BuildKit: on Debian's docker.io also install docker-buildx).
+#
+# The image runs as uid/gid 10001. The named volume below takes over the ownership of /data
+# from the image. With a bind mount (./data:/data) create the directory first:
+#   mkdir -p data && sudo chown 10001:10001 data
+services:
+  pk95monitoring:
+    image: ghcr.io/philippkuhlmann/pk95monitoring:latest
+    build: .
+    container_name: pk95monitoring
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - pk95mon-data:/data
+      # - ./data:/data
+    environment:
+      TZ: Europe/Berlin
+      PK95MON_INSTANCE: "Kunde Muster GmbH"
+      # Address the agents use to reach this server (default: the setting, else the browser request).
+      # PK95MON_PUBLIC_URL: "https://monitor.example.de:8443"
+    # Unprivileged ICMP sockets for the ping checks (the non-root user of the image needs them).
+    # "0 65535" covers every group in the container and also works inside an unprivileged LXC
+    # (e.g. Docker in a Proxmox container), where only 65536 IDs are mapped: the wider range
+    # "0 2147483647" (Docker's default on a normal host) cannot be written there, the container
+    # would not start ("write … ping_group_range: invalid argument").
+    # Not allowed with network_mode: host – set it on the host then.
+    sysctls:
+      net.ipv4.ping_group_range: "0 65535"
+    # Raw ICMP sockets are only a fallback when the container runs as root (user: "0:0");
+    # the non-root default relies on the sysctl above.
+    cap_add:
+      - NET_RAW
+
+  # ---------------------------------------------------------------------------------------------
+  # Several customers on one host: one service, one volume and one port per customer.
+  #
+  # kunde-a:
+  #   image: ghcr.io/philippkuhlmann/pk95monitoring:latest
+  #   container_name: pk95mon-kunde-a
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8444:8443"
+  #   volumes:
+  #     - kunde-a-data:/data
+  #   environment:
+  #     TZ: Europe/Berlin
+  #     PK95MON_INSTANCE: "Kunde A GmbH"
+  #     PK95MON_PUBLIC_URL: "https://monitor.example.de:8444"
+  #   sysctls:
+  #     net.ipv4.ping_group_range: "0 65535"
+  #
+  # kunde-b:
+  #   image: ghcr.io/philippkuhlmann/pk95monitoring:latest
+  #   container_name: pk95mon-kunde-b
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8445:8443"
+  #   volumes:
+  #     - kunde-b-data:/data
+  #   environment:
+  #     TZ: Europe/Berlin
+  #     PK95MON_INSTANCE: "Kunde B KG"
+  #     PK95MON_PUBLIC_URL: "https://monitor.example.de:8445"
+  #   sysctls:
+  #     net.ipv4.ping_group_range: "0 65535"
+  #
+  # ---------------------------------------------------------------------------------------------
+  # Recommended when a reverse proxy (Caddy, Traefik, nginx …) terminates TLS: plain HTTP on
+  # port 8080 inside, published on localhost only. PK95MON_PUBLIC_URL is the address agents and
+  # browsers use; the proxy must forward everything, including /agent/ (install and reports).
+  # Caddyfile:  kunde-c.monitor.example.de { reverse_proxy 127.0.0.1:8080 }
+  #
+  # kunde-c:
+  #   image: ghcr.io/philippkuhlmann/pk95monitoring:latest
+  #   container_name: pk95mon-kunde-c
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:8080:8080"
+  #   volumes:
+  #     - kunde-c-data:/data
+  #   environment:
+  #     TZ: Europe/Berlin
+  #     PK95MON_INSTANCE: "Kunde C AG"
+  #     PK95MON_NO_TLS: "1"
+  #     PK95MON_LISTEN: ":8080"
+  #     PK95MON_PUBLIC_URL: "https://kunde-c.monitor.example.de"
+  #   sysctls:
+  #     net.ipv4.ping_group_range: "0 65535"
+
+volumes:
+  pk95mon-data:
+  # kunde-a-data:
+  # kunde-b-data:
+  # kunde-c-data:
