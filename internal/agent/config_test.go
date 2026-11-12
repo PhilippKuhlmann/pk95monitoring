@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"slices"
 	"testing"
+
+	"pk95monitoring/internal/model"
 )
 
 func TestConfigRoundTrip(t *testing.T) {
@@ -71,19 +73,21 @@ func TestIntervalSeconds(t *testing.T) {
 
 func TestApplyReply(t *testing.T) {
 	c := Config{Interval: 60}
-	if c.applyReply(0, nil, false, []string{}) {
+	if c.applyReply(model.AgentReply{IgnoreServices: []string{}}) {
 		t.Error("empty reply reported a change")
 	}
-	if !c.applyReply(30, []string{"sshd"}, true, []string{"x"}) {
+	full := model.AgentReply{Interval: 30, Services: []string{"sshd"}, WatchAutoServices: true, IgnoreServices: []string{"x"}, CentralServices: []string{"veeam*"}}
+	if !c.applyReply(full) {
 		t.Fatal("change not detected")
 	}
-	if c.Interval != 30 || !slices.Equal(c.Services, []string{"sshd"}) || !c.WatchAutoServices || !slices.Equal(c.IgnoreServices, []string{"x"}) {
+	if c.Interval != 30 || !slices.Equal(c.Services, []string{"sshd"}) || !c.WatchAutoServices || !slices.Equal(c.IgnoreServices, []string{"x"}) ||
+		!slices.Equal(c.CentralServices, []string{"veeam*"}) {
 		t.Errorf("not applied: %+v", c)
 	}
-	if c.applyReply(30, []string{"sshd"}, true, []string{"x"}) {
+	if c.applyReply(full) {
 		t.Error("identical reply reported a change")
 	}
-	if !c.applyReply(30, nil, true, []string{"x"}) || c.Services != nil {
+	if !c.applyReply(model.AgentReply{Interval: 30, WatchAutoServices: true, IgnoreServices: []string{"x"}}) || c.Services != nil || c.CentralServices != nil {
 		t.Error("removing all services not applied")
 	}
 }

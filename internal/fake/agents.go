@@ -2,6 +2,7 @@ package fake
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -68,7 +69,8 @@ func demoAgents(now time.Time) []*simAgent {
 			disks: []simDisk{{mount: "C:", fs: "NTFS", total: 120 * gib, pct: 46, amp: 0.4}},
 			iface: "Ethernet0", rxBase: 180e3, txBase: 95e3,
 			known: map[string]simService{"NTDS": {"Active Directory-Domänendienste", true}, "DNS": {"DNS-Server", true},
-				"W32Time": {"Windows-Zeitgeber", true}, "Spooler": {"Druckwarteschlange", true}},
+				"W32Time": {"Windows-Zeitgeber", true}, "Spooler": {"Druckwarteschlange", true},
+				"VeeamEndpointBackupSvc": {"Veeam Agent for Microsoft Windows", true}},
 			pending: 2, eventErrors: 3, boot: t - 23*day - 4*3600, seed: 1.3},
 		{id: "demo-fs01", name: "fs01", group: groupServer, ip: "10.0.0.12", os: "windows",
 			platform: "Microsoft Windows Server 2019 Standard", ver: "10.0.17763 Build 17763", kernel: "10.0.17763 Build 17763",
@@ -78,7 +80,8 @@ func demoAgents(now time.Time) []*simAgent {
 				{mount: "E:", fs: "NTFS", total: 2048 * gib, pct: 72, amp: 1.5}},
 			iface: "Ethernet0", rxBase: 1.2e6, txBase: 2.8e6, services: []string{"Spooler"},
 			known: map[string]simService{"Spooler": {"Druckwarteschlange", false}, "LanmanServer": {"Server", true},
-				"W32Time": {"Windows-Zeitgeber", true}},
+				"W32Time": {"Windows-Zeitgeber", true}, "VeeamBackupSvc": {"Veeam Backup Service", true},
+				"VeeamTransportSvc": {"Veeam Data Mover Service", true}, "VeeamDeploySvc": {"Veeam Installer Service", false}},
 			eventErrors: 11, boot: t - 41*day - 9*3600, seed: 2.7},
 		{id: "demo-web01", name: "web01", group: groupWeb, ip: "10.0.0.21", os: "linux",
 			platform: "debian", ver: "13.1", kernel: "6.12.48+deb13-amd64",
@@ -118,6 +121,39 @@ func demoAgents(now time.Time) []*simAgent {
 	}
 }
 
+// selectServices mirrors the agent's selection: listed names, plus the known services a
+// pattern of the device's list or an entry of the central list matches (by name or display
+// name) that run (the simulation treats running as "starts automatically"), minus ignored ones.
+func (a *simAgent) selectServices(listed, central, ignore []string) []string {
+	match := func(p, n string) bool {
+		return model.GlobMatch(strings.ToLower(strings.TrimSpace(p)), strings.ToLower(n))
+	}
+	var out, patterns []string
+	seen := map[string]bool{}
+	for _, s := range listed {
+		switch s = strings.TrimSpace(s); {
+		case s == "":
+		case strings.Contains(s, "*"):
+			patterns = append(patterns, s)
+		case !seen[strings.ToLower(s)]:
+			seen[strings.ToLower(s)] = true
+			out = append(out, s)
+		}
+	}
+	patterns = append(patterns, central...)
+	names := slices.Sorted(maps.Keys(a.known))
+	for _, n := range names {
+		sv := a.known[n]
+		hit := func(p string) bool { return strings.TrimSpace(p) != "" && (match(p, n) || match(p, sv.display)) }
+		if seen[strings.ToLower(n)] || !sv.running || !slices.ContainsFunc(patterns, hit) || slices.ContainsFunc(ignore, hit) {
+			continue
+		}
+		seen[strings.ToLower(n)] = true
+		out = append(out, n)
+	}
+	return out
+}
+
 // device is the demo device of the agent (as registration would create it).
 func (a *simAgent) device(ts int64) model.Device {
 	return model.Device{ID: a.id, Name: a.name, Type: model.TypeAgent, Host: a.ip, Group: a.group, Enabled: true,
@@ -130,10 +166,15 @@ func (a *simAgent) device(ts int64) model.Device {
 
 // report is the agent report at time t; services follow the device configuration.
 func (a *simAgent) report(c *core.Core, t time.Time) model.AgentReport {
-	services := a.services
+	services, ignore := a.services, []string(nil)
 	if d, err := c.Device(a.id); err == nil && d.Agent != nil {
-		services = d.Agent.Services
+		services, ignore = d.Agent.Services, d.Agent.IgnoreServices
 	}
+	central := c.Settings().Agent.LinuxServices
+	if a.os == "windows" {
+		central = c.Settings().Agent.WindowsServices
+	}
+	services = a.selectServices(services, central, ignore)
 	return model.AgentReport{AgentID: a.id + "-machine", Hostname: a.name, OS: a.os, Platform: a.platform,
 		PlatformVersion: a.ver, Kernel: a.kernel, Arch: "amd64", Version: agentVersion(c), IPs: []string{a.ip},
 		Uptime: t.Unix() - a.boot, Time: t.Unix(), Checks: a.checks(c, t.Unix(), services)}
@@ -238,10 +279,6 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 			Message: "Keine fehlgeschlagenen Units", Metrics: []model.Metric{{Name: "services.failed", Value: 0}}})
 	}
 	for _, name := range services {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
 		s, ok := a.known[name]
 		ch := model.Check{Key: "svc:" + name, Name: "Dienst " + name, Group: agServices}
 		switch {

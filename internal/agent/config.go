@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+
+	"pk95monitoring/internal/model"
 )
 
 // Version of the agent. cmd/pk95agent sets it from main.version (-ldflags "-X main.version=…").
@@ -41,11 +43,15 @@ type Config struct {
 	Fingerprint string `json:"fingerprint,omitempty"` // SHA-256 of the server certificate (pinning)
 	Insecure    bool   `json:"insecure,omitempty"`    // skip certificate verification without pinning
 	Interval    int    `json:"interval"`              // seconds between reports
-	// Services must be running (systemd units or Windows service names).
+	// Services must be running (systemd units or Windows service names); entries with "*"
+	// are patterns: every matching service that runs or starts automatically.
 	Services []string `json:"services"`
 	// WatchAutoServices (Windows): every automatic-start service must run.
 	WatchAutoServices bool     `json:"watch_auto_services"`
 	IgnoreServices    []string `json:"ignore_services"`
+	// CentralServices come from the server's central setting: names or patterns, monitored
+	// where present (like patterns).
+	CentralServices []string `json:"central_services,omitempty"`
 }
 
 // IntervalSeconds returns the report interval clamped to sane bounds.
@@ -136,20 +142,22 @@ func sameDir(a, b string) bool {
 }
 
 // applyReply merges the server's configuration into c and reports whether anything changed.
-func (c *Config) applyReply(interval int, services []string, watchAuto bool, ignore []string) bool {
+func (c *Config) applyReply(r model.AgentReply) bool {
 	changed := false
-	if interval > 0 && interval != c.Interval {
-		c.Interval, changed = interval, true
+	if r.Interval > 0 && r.Interval != c.Interval {
+		c.Interval, changed = r.Interval, true
 	}
-	if !slices.Equal(services, c.Services) && !(len(services) == 0 && len(c.Services) == 0) {
-		c.Services, changed = slices.Clone(services), true
+	list := func(dst *[]string, src []string) {
+		if !slices.Equal(src, *dst) && !(len(src) == 0 && len(*dst) == 0) {
+			*dst, changed = slices.Clone(src), true
+		}
 	}
-	if watchAuto != c.WatchAutoServices {
-		c.WatchAutoServices, changed = watchAuto, true
+	list(&c.Services, r.Services)
+	if r.WatchAutoServices != c.WatchAutoServices {
+		c.WatchAutoServices, changed = r.WatchAutoServices, true
 	}
-	if !slices.Equal(ignore, c.IgnoreServices) && !(len(ignore) == 0 && len(c.IgnoreServices) == 0) {
-		c.IgnoreServices, changed = slices.Clone(ignore), true
-	}
+	list(&c.IgnoreServices, r.IgnoreServices)
+	list(&c.CentralServices, r.CentralServices)
 	return changed
 }
 

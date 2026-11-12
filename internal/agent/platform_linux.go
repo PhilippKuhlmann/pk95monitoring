@@ -30,11 +30,12 @@ func platformMachineID() string {
 	return ""
 }
 
-func (c *Collector) platformChecks(ctx context.Context, cfg Config, _ HostInfo) []model.Check {
+func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) []model.Check {
 	var out []model.Check
 	if systemdBooted() {
 		out = append(out, systemdCheck(ctx))
 		out = append(out, serviceChecks(ctx, cfg.Services)...)
+		out = append(out, patternServiceChecks(ctx, cfg, h.Uptime)...)
 	}
 	if c.plat.updates == nil {
 		c.plat.updates = newPeriodic(6*time.Hour, 30*time.Minute, 5*time.Minute, linuxUpdates)
@@ -88,11 +89,11 @@ func systemdCheck(ctx context.Context) model.Check {
 	return ch
 }
 
-// serviceChecks reports every configured unit; it must be active.
+// serviceChecks reports every configured unit name (not the patterns); it must be active.
 func serviceChecks(ctx context.Context, services []string) []model.Check {
 	var units []string
 	for _, s := range services {
-		if s = strings.TrimSpace(s); s != "" {
+		if s = strings.TrimSpace(s); s != "" && !isPattern(s) {
 			units = append(units, s)
 		}
 	}
@@ -121,6 +122,69 @@ func serviceChecks(ctx context.Context, services []string) []model.Check {
 		checks = append(checks, ch)
 	}
 	return checks
+}
+
+// patternServiceChecks reports the units matched by the patterns of the device's list and by
+// the central list: every matching unit that is active or enabled, except ignored ones and
+// units the device lists by name (serviceChecks reports those).
+func patternServiceChecks(ctx context.Context, cfg Config, uptime uint64) []model.Check {
+	var patterns []string
+	named := map[string]bool{}
+	for _, s := range cfg.Services {
+		if s = strings.TrimSpace(s); isPattern(s) {
+			patterns = append(patterns, s)
+		} else if s != "" {
+			named[strings.ToLower(svcBase(s))] = true
+		}
+	}
+	patterns = append(patterns, cfg.CentralServices...)
+	if len(patterns) == 0 {
+		return nil
+	}
+	lu, err := run(ctx, 30*time.Second, "systemctl", "list-units", "--type=service", "--all", "--no-legend", "--plain", "--no-pager")
+	if err != nil {
+		return []model.Check{{Key: "services", Name: "Dienste", Group: groupServices, State: model.StateUnknown, Message: "systemctl: " + err.Error()}}
+	}
+	uf, err := run(ctx, 30*time.Second, "systemctl", "list-unit-files", "--type=service", "--no-legend", "--no-pager")
+	if err != nil {
+		uf = "" // without the unit files only active units match
+	}
+	units, enabled := parseListUnits(lu), parseEnabledUnits(uf)
+	entries := make([]svcEntry, 0, len(units)+len(enabled))
+	for name, u := range units {
+		entries = append(entries, svcEntry{Name: name, Display: u.Description, Active: u.Active == "active"})
+	}
+	for name := range enabled {
+		if _, ok := units[name]; !ok {
+			entries = append(entries, svcEntry{Name: name}) // enabled but not loaded: not running
+		}
+	}
+	var out []model.Check
+	for _, p := range pickServices(entries, nil, patterns, cfg.IgnoreServices, func(e svcEntry) bool { return enabled[e.Name] }) {
+		if named[strings.ToLower(svcBase(p.Entry.Name))] {
+			continue
+		}
+		st := units[p.Entry.Name].Active
+		if st == "" {
+			st = "inactive"
+		}
+		ch := model.Check{Key: p.Key, Name: "Dienst " + svcBase(p.Entry.Name), Group: groupServices, Message: unitStateText(st)}
+		if d := units[p.Entry.Name].Description; d != "" {
+			ch.Facts = map[string]string{"Beschreibung": d, "Unit": p.Entry.Name}
+		}
+		switch {
+		case st == "active":
+			ch.State = model.StateOK
+		case uptime < bootGrace:
+			ch.State, ch.Message = model.StateUnknown, "startet nach dem Systemstart noch ("+ch.Message+")"
+		case st == "activating" || st == "reloading":
+			ch.State = model.StateWarn
+		default:
+			ch.State = model.StateCrit
+		}
+		out = append(out, ch)
+	}
+	return out
 }
 
 // linuxUpdates counts pending updates with apt (Debian, Ubuntu, Proxmox) or dnf.

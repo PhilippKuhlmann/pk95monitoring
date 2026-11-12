@@ -221,8 +221,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    report) records every check key it reports (before rules switch any off; not `reach`, `discovery`, `net:*`)
    in `DeviceStatus.Inventory` (`{key, name, group, first, last, new, missing}`, persisted with the status, left
    out of API responses). Keys reported later are new (`new: true`) unless a rule matches them, the device has
-   `auto_accept`, or the device's collect settings changed just before (host, proxmox/snmp/nut config, agent
-   service selection: the next collection's unseen keys are expected). A new check runs in mode `new`
+   `auto_accept`, or the selection changed just before (host, proxmox/snmp/nut config, the agent's service
+   lists, the central service lists in `settings.agent`): then the next collection is the new baseline – its
+   unseen keys are accepted and the keys it misses are dropped (deselected, not vanished). A new check runs in mode `new`
    (like quiet: stored and shown, `muted` holds warn/crit, never alerts) until a rule matches it or it is
    accepted. A key missing from 2 successful collections in a row is vanished (`DeviceStatus.Vanished`
    `{key, name, group, last}`) until it comes back or is removed; a new key that vanishes before a decision is
@@ -371,7 +372,7 @@ Authenticated:
 - `GET /api/events?severity=&before=&limit=` (limit default 50, max 500) → `{events, more}` (Event as in ProxBackup: `{id, ts, severity, source, title, body, details}`)
 - `GET /api/agents[?device=<id>&node=<node>]` → `{enroll_key, server_url, fingerprint, version, auto_update, linux_cmd, windows_cmd, binaries:[{os, arch, file, size, sha256, available}], agents:[DeviceRow]}` (`linux_cmd`/`windows_cmd` empty when the binary is missing; see Agent → one-liners; with `device` the commands include `--device <id> [--node <node>]`, 404 for an unknown device, 400 for an agent; `agents` = all agent devices incl. attached ones)
 - `POST /api/agents/key` → `{enroll_key}` (rotate)
-- `GET /api/settings` → `{general:{instance, public_url, retention_raw_days, retention_5m_days, retention_1h_days, renotify_hours}, notify: notify.Settings (redacted), thresholds:[Threshold], defaults:[Threshold], central:{enabled, url, has_token, interval}, agent:{auto_update}}`
+- `GET /api/settings` → `{general:{instance, public_url, retention_raw_days, retention_5m_days, retention_1h_days, renotify_hours}, notify: notify.Settings (redacted), thresholds:[Threshold], defaults:[Threshold], central:{enabled, url, has_token, interval}, agent:{auto_update, windows_services:[string], linux_services:[string]}}` (service lists: names or patterns, ≤ 200 entries of ≤ 256 characters, never `null`)
 - `PUT /api/settings` (same shape; missing sections unchanged) → same as GET
 - `POST /api/settings/test {notify?}` → `{ok}` (unsaved form values; missing secrets from the store); `POST /api/settings/telegram/chats {token?}` → `{chats}`
 - `GET /api/tokens` → `{tokens:[{id, name, prefix, created, last_used}]}`; `POST /api/tokens {name}` → `{token, …}` (plain token only once); `DELETE /api/tokens/{id}`
@@ -400,7 +401,17 @@ Central push (settings.central): every `interval` minutes `POST <url>` with Summ
 - Binary `pk95agent` (linux/amd64, linux/arm64, windows/amd64; CGO-free). Config JSON: Linux
   `/etc/pk95agent/agent.json`, Windows `C:\ProgramData\PK95Agent\agent.json` (`server`, `token`,
   `device_id`, `fingerprint`, `insecure`, `interval`, `services`, `watch_auto_services`,
-  `ignore_services`); every command takes `--config PATH`.
+  `ignore_services`, `central_services`); every command takes `--config PATH`.
+- Services (`agent/filter.go` `pickServices`, the same on Windows and Linux): entries of the device's
+  `services` without `*` are required names (must exist and run; keyed `svc:<configured spelling>`, crit "Dienst
+  nicht gefunden" when missing, never ignored). Entries with `*` and every entry of `central_services` (the
+  server's `settings.agent.windows_services` / `linux_services` for the agent's OS, sent with every reply) are
+  optional: they pick each matching service (case-insensitive glob on the name, the name without `.service`, or
+  the display name/description) that runs or starts automatically (Windows: start type automatic without
+  triggers; Linux: unit file enabled), minus `ignore_services` (names or patterns); keyed `svc:<name>` (Linux
+  without `.service`). Within the first 10 minutes after boot a picked optional service that does not run yet is
+  unknown ("startet nach dem Systemstart noch"). Linux reads `systemctl list-units --type=service --all` and
+  `list-unit-files --type=service` only when there is a pattern or central entry.
 - Install: `pk95agent install --server URL --key KEY [--fingerprint SHA256] [--insecure] [--device ID [--node NODE]]`
   (root/Administrator) registers (with `--device`: attached to that device, see "Attached agents"), writes the config, copies itself to `/usr/local/bin/pk95agent` or
   `C:\Program Files\PK95Agent\pk95agent.exe`, installs and starts the service (systemd / Windows
@@ -455,6 +466,10 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   agent, "Ausgeblendet" – with group headings. A search field and "Auffällig" filter rows client-side; the
   checkboxes (row, group, section) feed a sticky bar that sets Überwachen / Nur anzeigen / Ausblenden for all
   checked checks (pattern rules where a whole key family is checked, exact rules otherwise).
+- Settings page `/settings`: one tab per area (`STABS`), the tab in the URL hash – Allgemein (instance, data
+  retention, re-notify; system info), `#notify` Benachrichtigungen, `#thresholds` Schwellwerte, `#agents` Agents
+  (auto-update, central service lists), `#api` Schnittstellen (API tokens, central push), `#account` Konto
+  (password). All panes are rendered at once and toggled, so every form keeps its own save button.
 - Device page, tab "Übersicht", view "Kacheln": every check as a card (name, primary value, second line, usage bar, 6 h
   sparkline from `GET /api/devices/{id}/sparks`, reason), grouped as before; attached agents get their own
   card section (sparks requested with the agent's id). Proxmox nodes, guests and storage, switch ports and

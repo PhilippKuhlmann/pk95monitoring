@@ -60,6 +60,21 @@ type CentralSettings struct {
 // AgentSettings configure agent distribution.
 type AgentSettings struct {
 	AutoUpdate bool `json:"auto_update"` // default true
+	// WindowsServices and LinuxServices are monitored on every agent of that OS where present:
+	// names or patterns ("veeam*"), each matching service that runs or starts automatically.
+	WindowsServices []string `json:"windows_services"`
+	LinuxServices   []string `json:"linux_services"`
+}
+
+// centralServices returns the central service list for an agent OS.
+func (a AgentSettings) centralServices(os string) []string {
+	switch os {
+	case "windows":
+		return a.WindowsServices
+	case "linux":
+		return a.LinuxServices
+	}
+	return nil
 }
 
 // Settings are all persisted settings. Secrets (notify passwords/tokens, central token) are

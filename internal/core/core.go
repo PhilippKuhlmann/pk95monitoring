@@ -245,6 +245,8 @@ func (c *Core) Settings() Settings {
 	if s.Thresholds == nil {
 		s.Thresholds = []model.Threshold{}
 	}
+	s.Agent.WindowsServices = append([]string{}, s.Agent.WindowsServices...)
+	s.Agent.LinuxServices = append([]string{}, s.Agent.LinuxServices...)
 	return s
 }
 
@@ -361,6 +363,19 @@ func (c *Core) SaveSettings(s Settings) (map[string]string, error) {
 	if ce.Enabled && ce.Token == "" {
 		errs["central.token"] = "Token angeben."
 	}
+
+	ag := &s.Agent
+	ag.WindowsServices, ag.LinuxServices = cleanList(ag.WindowsServices), cleanList(ag.LinuxServices)
+	for key, list := range map[string][]string{"agent.windows_services": ag.WindowsServices, "agent.linux_services": ag.LinuxServices} {
+		if len(list) > maxServiceEntries {
+			errs[key] = fmt.Sprintf("Höchstens %d Einträge.", maxServiceEntries)
+		}
+		for i, e := range list {
+			if len(e) > 256 || strings.ContainsAny(e, "\n\r\t") {
+				errs[key] = fmt.Sprintf("Eintrag %d ist ungültig.", i+1)
+			}
+		}
+	}
 	if len(errs) > 0 {
 		return errs, nil
 	}
@@ -372,6 +387,17 @@ func (c *Core) SaveSettings(s Settings) (map[string]string, error) {
 	c.smu.Unlock()
 	if s.Central != old.Central {
 		c.centralReset.Store(true) // push soon with the new settings, not after the old interval
+	}
+	if !slices.Equal(s.Agent.WindowsServices, old.Agent.WindowsServices) || !slices.Equal(s.Agent.LinuxServices, old.Agent.LinuxServices) {
+		// The agents report the new selection with their next report: those services are
+		// expected, not discovered.
+		c.mu.Lock()
+		for id, d := range c.devices {
+			if d.Type == model.TypeAgent && c.rt[id] != nil {
+				c.rt[id].acceptUnseen = true
+			}
+		}
+		c.mu.Unlock()
 	}
 	return nil, nil
 }

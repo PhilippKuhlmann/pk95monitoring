@@ -286,11 +286,13 @@ type AgentConfig struct {
 	Version         string   `json:"version"` // agent version
 	IPs             []string `json:"ips"`
 	LastSeen        int64    `json:"last_seen"`
-	// Services that must be running (Windows service names or systemd units).
+	// Services that must be running (Windows service names or systemd units). Entries with
+	// "*" are patterns ("veeam*"): every matching service that runs or starts automatically.
 	Services []string `json:"services"`
 	// WatchAutoServices (Windows): every service with start type "automatic" must run.
 	WatchAutoServices bool `json:"watch_auto_services"`
-	// IgnoreServices are never reported, even if WatchAutoServices is on.
+	// IgnoreServices are never reported, even if WatchAutoServices is on or a pattern (device or
+	// central) matches; names or patterns.
 	IgnoreServices []string `json:"ignore_services"`
 }
 
@@ -522,11 +524,14 @@ type AgentReport struct {
 
 // AgentReply is the answer to a report: the configuration the agent should use next.
 type AgentReply struct {
-	Interval          int          `json:"interval"`
-	Services          []string     `json:"services"`
-	WatchAutoServices bool         `json:"watch_auto_services"`
-	IgnoreServices    []string     `json:"ignore_services"`
-	Update            *AgentUpdate `json:"update,omitempty"`
+	Interval          int      `json:"interval"`
+	Services          []string `json:"services"`
+	WatchAutoServices bool     `json:"watch_auto_services"`
+	IgnoreServices    []string `json:"ignore_services"`
+	// CentralServices are the services of the central setting for the agent's OS (names or
+	// patterns like "veeam*"): monitored where present, when they run or start automatically.
+	CentralServices []string     `json:"central_services"`
+	Update          *AgentUpdate `json:"update,omitempty"`
 }
 
 // AgentUpdate tells the agent to replace itself with another version.

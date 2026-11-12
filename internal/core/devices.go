@@ -271,6 +271,14 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 				errs["agent.services"] = fmt.Sprintf("Dienst %d ist ungültig.", i+1)
 			}
 		}
+		for i, s := range a.IgnoreServices {
+			if len(s) > 256 || strings.ContainsAny(s, "\n\r") {
+				errs["agent.ignore_services"] = fmt.Sprintf("Eintrag %d ist ungültig.", i+1)
+			}
+		}
+		if len(a.Services) > maxServiceEntries || len(a.IgnoreServices) > maxServiceEntries {
+			errs["agent.services"] = fmt.Sprintf("Höchstens %d Einträge.", maxServiceEntries)
+		}
 		d.Agent = &a
 	} else if d.Type != model.TypeAgent {
 		d.Agent = nil
@@ -334,6 +342,9 @@ func (c *Core) validateParent(d *model.Device, old *model.Device, errs map[strin
 var idRe = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 
 // cleanList trims entries and drops empty ones and duplicates.
+// maxServiceEntries limits the service lists of a device and of the central setting.
+const maxServiceEntries = 200
+
 func cleanList(in []string) []string {
 	out := []string{}
 	for _, s := range in {

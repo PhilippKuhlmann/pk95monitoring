@@ -31,8 +31,9 @@ type devState struct {
 	pollMu   sync.Mutex           // serializes polls of this device
 	offer    updateOffer          // agents: the last update offered
 	newKeys  map[string]bool      // keys of new (undecided) checks, from st.Inventory
-	// acceptUnseen accepts the keys the next collection reports for the first time (the
-	// device's configuration changed, so new checks are expected, not discovered).
+	// acceptUnseen makes the next collection the new inventory baseline: keys it reports for
+	// the first time are accepted and keys it misses are dropped (the device's configuration
+	// or the central service selection changed, so the difference is expected).
 	acceptUnseen bool
 }
 

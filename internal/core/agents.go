@@ -319,6 +319,10 @@ func (c *Core) agentReply(d model.Device, rep model.AgentReport) model.AgentRepl
 		r.Services = append(r.Services, d.Agent.Services...)
 		r.WatchAutoServices = d.Agent.WatchAutoServices
 		r.IgnoreServices = append(r.IgnoreServices, d.Agent.IgnoreServices...)
+		r.CentralServices = slices.Clone(c.Settings().Agent.centralServices(d.Agent.OS))
+	}
+	if r.CentralServices == nil {
+		r.CentralServices = []string{}
 	}
 	ver := c.Agents.Version()
 	if !c.Settings().Agent.AutoUpdate || ver == "" || rep.Version == "" || rep.Version == ver {

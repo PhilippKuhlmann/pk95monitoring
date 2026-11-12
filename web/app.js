@@ -767,7 +767,7 @@ PAGES["/"] = async (el, token) => {
           <li><span><b>Proxmox VE</b> – API-Token anlegen (nur Leserechte) und über „Gerät hinzufügen“ eintragen. Knoten, VMs, Container, Speicher, Platten, Updates und Sicherungen werden dann überwacht.</span></li>
           <li><span><b>Server mit dem Agent</b> – unter <a href="/agents" data-go>Agents</a> den Befehl für Linux oder Windows kopieren und auf dem Server ausführen.</span></li>
           <li><span><b>Netzwerk</b> – Switches, USV und Drucker per SNMP, Websites und Dienste per Ping, HTTP, TCP, DNS oder TLS.</span></li>
-          <li><span><b>Benachrichtigungen</b> unter <a href="/settings" data-go>Einstellungen</a> einrichten – per E-Mail, Telegram oder Push.</span></li></ol></div></div>`;
+          <li><span><b>Benachrichtigungen</b> unter <a href="/settings#notify" data-go>Einstellungen → Benachrichtigungen</a> einrichten – per E-Mail, Telegram oder Push.</span></li></ol></div></div>`;
       qsa("[data-add], [data-add2]", el).forEach((b) => b.onclick = () => addDevice());
       qs("[data-refresh]", el).onclick = (e) => run(e.currentTarget, () => draw(true));
       return;
@@ -2729,6 +2729,7 @@ async function deviceSettingsTab(box, dv, alive, reload, st = {}) {
   const global = set.thresholds || [], defs = set.defaults || [];
   const ag = dv.agent || {};
   const win = ag.os === "windows";
+  const central = ((set.agent || {})[win ? "windows_services" : "linux_services"]) || [];
   box.innerHTML = `<form class="panel form" data-dset novalidate>
       <div><div class="panel-title">Schwellwerte für dieses Gerät</div>
       <p class="panel-intro" style="margin:4px 0 0">Überschreiben die globalen Schwellwerte (Einstellungen → Schwellwerte). Mit „Instanz“ gilt eine Grenze nur für eine Platte, einen Port oder einen Gast (z. B. <code>/var</code>, <code>C:</code>, <code>vm/100</code>). „Unterhalb“: schlecht, wenn der Wert kleiner ist (Akku, Toner, Zertifikat). „Anzahl“: so viele Werte in Folge, bevor der Zustand wechselt.</p></div>
@@ -2739,9 +2740,12 @@ async function deviceSettingsTab(box, dv, alive, reload, st = {}) {
           Muster: <code>*</code> steht für beliebige Zeichen, z. B. <code>snmp:if:*</code> (alle Ports) oder <code>pve:vm:*</code> (alle VMs). Ein exakter Check-Key gilt vor jedem Muster, unter mehreren passenden Mustern gewinnt das längere. Die Erreichbarkeit wird immer überwacht.</p>
         <div data-rules></div></div>
       ${dv.type === "agent" ? `<div class="section"><div class="section-title">Dienste</div><div class="form-grid">
-        ${field({ name: "services", label: "Diese Dienste müssen laufen", type: "textarea", mono: true, rows: 4, value: (ag.services || []).join("\n"), wide: true, hint: win ? "Dienstnamen (nicht Anzeigenamen), einer pro Zeile – z. B. Spooler, MSSQLSERVER, W3SVC." : "systemd-Units, eine pro Zeile – z. B. nginx.service, postgresql, docker." })}
+        ${field({ name: "services", label: "Diese Dienste überwachen", type: "textarea", mono: true, rows: 4, value: (ag.services || []).join("\n"), wide: true, hintHTML: true,
+          hint: (win ? "Dienstnamen, einer pro Zeile – z. B. Spooler, MSSQLSERVER, W3SVC." : "systemd-Units, eine pro Zeile – z. B. nginx.service, postgresql, docker.") +
+            " Ein Name muss vorhanden sein und laufen. Mit <code>*</code> als Muster, z. B. <code>veeam*</code>: jeder passende Dienst (Name oder Anzeigename), der läuft oder automatisch startet." })}
+        ${central.length ? `<div class="wide hint">Zentral eingestellt (<a href="/settings#agents" data-go>Einstellungen → Agents</a>), überwacht wo vorhanden: ${central.map((x) => `<code>${esc(x)}</code>`).join(", ")}</div>` : `<div class="wide hint">Dienste für alle ${win ? "Windows" : "Linux"}-Agents stellst du zentral unter <a href="/settings#agents" data-go>Einstellungen → Agents</a> ein.</div>`}
         ${win ? field({ name: "watch_auto_services", label: "Alle automatisch startenden Dienste überwachen", type: "checkbox", value: ag.watch_auto_services, wide: true, hint: "Jeder Dienst mit Starttyp „Automatisch“ muss laufen – Ausnahmen unten eintragen." }) : ""}
-        ${field({ name: "ignore_services", label: "Diese Dienste ignorieren", type: "textarea", mono: true, rows: 3, value: (ag.ignore_services || []).join("\n"), wide: true, hint: "Werden nie gemeldet, auch nicht über die automatische Überwachung." })}
+        ${field({ name: "ignore_services", label: "Diese Dienste ignorieren", type: "textarea", mono: true, rows: 3, value: (ag.ignore_services || []).join("\n"), wide: true, hintHTML: true, hint: "Namen oder Muster mit <code>*</code>. Werden nie gemeldet – weder über Muster noch über die zentrale Liste oder die automatische Überwachung. Ein hier oben eingetragener Name wird trotzdem überwacht." })}
       </div></div>` : ""}
       <div class="flex"><button class="btn" type="submit">Speichern</button><span class="muted small">Gilt ab der nächsten Abfrage${dv.type === "agent" ? " bzw. dem nächsten Bericht des Agents" : ""}.</span></div>
     </form>`;
@@ -3408,7 +3412,7 @@ PAGES["/agents"] = async (el, token) => {
             <tr><td>Server-Adresse</td><td class="mono">${esc(r.server_url || "—")}<div class="t-sub" style="font-family:var(--font)">So erreichen die Agents diesen Server. Ändern unter <a href="/settings" data-go>Einstellungen → Allgemein</a>.</div></td></tr>
             <tr><td>Fingerabdruck</td><td><span class="mono small">${esc(r.fingerprint || "—")}</span><div class="t-sub">Der Agent prüft das Zertifikat dieses Servers anhand des Fingerabdrucks – auch wenn es selbst signiert ist.</div></td></tr>
             <tr><td>Version</td><td>${esc(r.version || "—")}</td></tr>
-            <tr><td>Updates</td><td>${r.auto_update ? `${pill("automatisch", "green")} <span class="small muted">Agents aktualisieren sich selbst auf diese Version.</span>` : `${pill("aus")} <span class="small muted">Einschalten unter <a href="/settings" data-go>Einstellungen → Agents</a>.</span>`}</td></tr>
+            <tr><td>Updates</td><td>${r.auto_update ? `${pill("automatisch", "green")} <span class="small muted">Agents aktualisieren sich selbst auf diese Version.</span>` : `${pill("aus")} <span class="small muted">Einschalten unter <a href="/settings#agents" data-go>Einstellungen → Agents</a>.</span>`}</td></tr>
           </table></div>
         <div class="panel flush"><div class="panel-head"><div class="panel-title">Agent-Dateien</div></div>
           ${bins.length ? `<div class="table-wrap"><table class="resp"><thead><tr><th>System</th><th>Datei</th><th class="num">Größe</th><th>SHA-256</th><th></th></tr></thead><tbody>
@@ -3452,30 +3456,54 @@ function formSubmit(form, fn, prefix) {
   };
 }
 
+// Settings tabs: key (URL hash), label, icon.
+const STABS = [["general", "Allgemein", "cog"], ["notify", "Benachrichtigungen", "bell"], ["thresholds", "Schwellwerte", "pulse"],
+  ["agents", "Agents", "desktop"], ["api", "Schnittstellen", "link"], ["account", "Konto", "user"]];
+
 PAGES["/settings"] = async (el, token) => {
   const [sys, set, tok] = await Promise.all([GET("/api/system"), GET("/api/settings"), GET("/api/tokens").catch(() => ({ tokens: [] }))]);
   if (token !== pageToken) return;
   const g = set.general || {}, n = set.notify || {}, cen = set.central || {}, agc = set.agent || {};
   const has = (k) => !!(n["has_" + k] || set["has_" + k]);
   const origin = location.origin;
-  el.innerHTML = pageHead("Einstellungen", "Allgemeines, Benachrichtigungen, Schwellwerte und die Anbindung an eine Zentrale.") + `<div class="grid">
-    <div>
+  el.innerHTML = pageHead("Einstellungen", "Für diese Instanz – Geräte stellst du am jeweiligen Gerät ein.") +
+    `<div class="tabs set-tabs" role="tablist" aria-label="Bereiche">${STABS.map(([k, l, ic]) => `<button type="button" role="tab" id="stab-${k}" aria-controls="spane-${k}" data-stab="${k}" aria-selected="false" tabindex="-1">${icon(ic)}${l}</button>`).join("")}</div>
+    <div class="set-pane" role="tabpanel" id="spane-general" aria-labelledby="stab-general" data-spane="general" hidden><div class="grid set-grid">
       <div class="panel"><div class="panel-head"><div class="panel-title">Allgemein</div></div>
-        <form class="form" data-general novalidate><div class="form-error" hidden></div><div class="form-grid">
+        <form class="form" data-general novalidate><div class="form-error" hidden></div>
+          <div class="section"><div class="section-title">Instanz</div><div class="form-grid">
           ${field({ name: "instance", label: "Instanzname / Kunde", value: g.instance, placeholder: "z. B. Muster GmbH", hint: "Steht oben in der Leiste, in Benachrichtigungen und bei der Zentrale." })}
           ${field({ name: "public_url", label: "Öffentliche Adresse für Agents", value: g.public_url, mono: true, placeholder: origin, hint: "So erreichen Agents diesen Server, z. B. https://monitoring.kunde.de:8443. Leer = Adresse aus dem Browser." })}
-          ${field({ name: "retention_raw_days", label: "Rohdaten aufbewahren (Tage)", type: "number", min: 1, value: g.retention_raw_days, hint: "Jeder einzelne Messwert." })}
+          </div></div>
+          <div class="section"><div class="section-title">Datenhaltung</div><div class="form-grid cols-3">
+          ${field({ name: "retention_raw_days", label: "Rohdaten (Tage)", type: "number", min: 1, value: g.retention_raw_days, hint: "Jeder einzelne Messwert." })}
           ${field({ name: "retention_5m_days", label: "5-Minuten-Werte (Tage)", type: "number", min: 1, value: g.retention_5m_days })}
-          ${field({ name: "retention_1h_days", label: "Stundenwerte (Tage)", type: "number", min: 1, value: g.retention_1h_days, hint: "Für die Ansicht „1 Jahr“: mindestens 366." })}
+          ${field({ name: "retention_1h_days", label: "Stundenwerte (Tage)", type: "number", min: 1, value: g.retention_1h_days, hint: "Für „1 Jahr“: mindestens 366." })}
+          </div></div>
+          <div class="section"><div class="section-title">Alarme</div><div class="form-grid">
           ${field({ name: "renotify_hours", label: "Erneut benachrichtigen nach (Std.)", type: "number", min: 0, value: g.renotify_hours ?? 0, hint: "Solange ein Alarm offen und nicht quittiert ist. 0 = nie." })}
-        </div><div><button class="btn" type="submit">Speichern</button></div></form></div>
+          </div></div>
+          <div><button class="btn" type="submit">Speichern</button></div></form></div>
+      <div class="panel"><div class="panel-head"><div class="panel-title">System</div></div>
+        <table class="kv">
+          <tr><td>Version</td><td>PK95 Monitoring ${esc(sys.version)} ${sys.demo ? pill("Demo", "amber") : ""}</td></tr>
+          <tr><td>Instanz</td><td data-sys-instance>${esc(sys.instance || "—")}</td></tr>
+          <tr><td>Läuft seit</td><td>${sys.started ? `${esc(fmtTime(sys.started, true))} <span class="muted">(${esc(fmtUptime(nowSec() - sys.started))})</span>` : "—"}</td></tr>
+          <tr><td>Geräte</td><td>${esc(fmtNum(sys.devices, 0))}</td></tr>
+          <tr><td>Messreihen</td><td>${esc(fmtNum(sys.series, 0))}</td></tr>
+          <tr><td>Datenbank</td><td>${esc(fmtBytes(sys.db_size))}</td></tr>
+          <tr><td>Datenverzeichnis</td><td class="mono">${esc(sys.data_dir || "—")}</td></tr>
+        </table></div>
 
+    </div></div>
+    <div class="set-pane" role="tabpanel" id="spane-notify" aria-labelledby="stab-notify" data-spane="notify" hidden>
       <div class="panel"><div class="panel-head"><div class="panel-title">Benachrichtigungen</div></div>
+        <p class="panel-intro">Wohin Alarme geschickt werden. Mehrere Wege gleichzeitig sind möglich; „Testnachricht senden“ prüft die Eingaben, ohne zu speichern.</p>
         <form class="form" data-notify novalidate><div class="form-error" hidden></div>
           <div class="form-grid">
             ${field({ name: "min_severity", label: "Melden ab", type: "select", value: n.min_severity || "warning", options: [["info", "Alles – auch „Wieder OK“ und Systemmeldungen"], ["warning", "Warnungen und kritische Alarme"], ["critical", "Nur kritische Alarme"]], wide: true })}
           </div>
-          <div class="section"><div class="form-grid">
+          <div class="section"><div class="section-title">E-Mail</div><div class="form-grid">
             ${field({ name: "mail_enabled", label: "Per E-Mail", type: "checkbox", value: n.mail_enabled, wide: true })}
             ${field({ name: "smtp_host", label: "SMTP-Server", value: n.smtp_host, mono: true, placeholder: "smtp.example.org" })}
             ${field({ name: "smtp_port", label: "Port", type: "number", value: n.smtp_port || 587 })}
@@ -3486,13 +3514,13 @@ PAGES["/settings"] = async (el, token) => {
             ${field({ name: "mail_to", label: "Empfänger", value: n.mail_to, placeholder: "ich@example.org, …", wide: true })}
             ${field({ name: "mail_links", label: "Knopf „Im Monitoring ansehen“ in Mails", type: "checkbox", value: n.mail_links, wide: true, hint: "Nur einschalten, wenn die Empfänger sich hier anmelden können." })}
           </div></div>
-          <div class="section"><div class="form-grid">
+          <div class="section"><div class="section-title">Push</div><div class="form-grid">
             ${field({ name: "hook_enabled", label: "Per Push (ntfy, Gotify, Webhook)", type: "checkbox", value: n.hook_enabled, wide: true })}
             ${field({ name: "hook_kind", label: "Art", type: "select", value: n.hook_kind || "ntfy", options: [["ntfy", "ntfy"], ["gotify", "Gotify"], ["json", "Webhook (JSON)"]] })}
             ${field({ name: "hook_url", label: "URL", value: n.hook_url, mono: true, placeholder: "https://ntfy.sh/mein-thema", wide: true })}
             ${field({ name: "hook_token", label: "Token (optional)", type: "password", placeholder: has("hook_token") ? "unverändert" : "" })}
           </div></div>
-          <div class="section"><div class="form-grid">
+          <div class="section"><div class="section-title">Telegram</div><div class="form-grid">
             ${field({ name: "telegram_enabled", label: "Per Telegram", type: "checkbox", value: n.telegram_enabled, wide: true, hint: "Bot bei @BotFather anlegen (/newbot), dem Bot eine Nachricht schreiben oder ihn in die Gruppe aufnehmen – dann „Chat-ID ermitteln“." })}
             ${field({ name: "telegram_token", label: "Bot-Token", type: "password", mono: true, placeholder: has("telegram_token") ? "unverändert" : "123456789:AA…", wide: true })}
             ${field({ name: "telegram_chat", label: "Chat-ID", value: n.telegram_chat, mono: true, placeholder: "z. B. 123456789 oder -100…", button: "Chat-ID ermitteln", wide: true, hint: "Person, Gruppe oder Kanal (@kanalname). Gruppen-IDs beginnen mit einem Minus." })}
@@ -3501,30 +3529,7 @@ PAGES["/settings"] = async (el, token) => {
           <div class="flex"><button class="btn" type="submit">Speichern</button><button class="btn gray" type="button" data-test>Testnachricht senden</button></div>
         </form></div>
     </div>
-    <div>
-      <div class="panel"><div class="panel-head"><div class="panel-title">System</div></div>
-        <table class="kv">
-          <tr><td>Version</td><td>PK95 Monitoring ${esc(sys.version)} ${sys.demo ? pill("Demo", "amber") : ""}</td></tr>
-          <tr><td>Instanz</td><td data-sys-instance>${esc(sys.instance || "—")}</td></tr>
-          <tr><td>Läuft seit</td><td>${sys.started ? `${esc(fmtTime(sys.started, true))} <span class="muted">(${esc(fmtUptime(nowSec() - sys.started))})</span>` : "—"}</td></tr>
-          <tr><td>Geräte</td><td>${esc(fmtNum(sys.devices, 0))}</td></tr>
-          <tr><td>Messreihen</td><td>${esc(fmtNum(sys.series, 0))}</td></tr>
-          <tr><td>Datenbank</td><td>${esc(fmtBytes(sys.db_size))}</td></tr>
-          <tr><td>Datenverzeichnis</td><td class="mono">${esc(sys.data_dir || "—")}</td></tr>
-          <tr><td>Angemeldet</td><td>${esc(state.user)}</td></tr></table></div>
-
-      <div class="panel"><div class="panel-head"><div class="panel-title">Agents</div></div>
-        <form class="form" data-agentset novalidate><div class="form-error" hidden></div>
-          ${field({ name: "auto_update", label: "Agents automatisch aktualisieren", type: "checkbox", value: agc.auto_update, hint: "Ältere Agents laden beim nächsten Bericht die Version dieses Servers, prüfen die Prüfsumme und starten neu." })}
-          <div class="flex"><button class="btn" type="submit">Speichern</button><a class="btn gray" href="/agents" data-go>Zu den Agents</a></div></form></div>
-
-      <div class="panel"><div class="panel-head"><div class="panel-title">Passwort ändern</div></div>
-        <form class="form" data-pw novalidate><div class="form-error" hidden></div><div class="form-grid">
-          ${field({ name: "old", label: "Aktuelles Passwort", type: "password", autocomplete: "current-password" })}
-          ${field({ name: "new", label: "Neues Passwort", type: "password", hint: "Mindestens 10 Zeichen.", autocomplete: "new-password" })}
-        </div><div><button class="btn" type="submit">Passwort ändern</button></div></form></div>
-    </div></div>
-
+    <div class="set-pane" role="tabpanel" id="spane-thresholds" aria-labelledby="stab-thresholds" data-spane="thresholds" hidden>
     <div class="panel"><div class="panel-head"><div class="panel-title">Schwellwerte</div><div class="actions"><button class="btn gray sm" type="button" data-th-reset>${icon("restore")} Auf Standard zurücksetzen</button></div></div>
       <p class="panel-intro">Gelten für alle Geräte, solange ein Gerät keine eigenen hat. Ohne Eintrag gelten die eingebauten Standardwerte (unten). „Unterhalb“: schlecht, wenn der Wert kleiner ist. „Anzahl“: so viele Werte in Folge, bevor der Zustand wechselt.</p>
       <form class="form" data-thr novalidate><div class="form-error" hidden></div><div data-th></div>
@@ -3533,8 +3538,23 @@ PAGES["/settings"] = async (el, token) => {
         <div class="table-wrap"><table class="resp"><thead><tr><th>Messwert</th><th>Grenzen</th></tr></thead><tbody>
           ${(set.defaults || []).map((t) => `<tr><td data-l="Messwert">${esc(metricLabel(splitMetric(t.metric)[0]))} <span class="muted mono small">${esc(t.metric)}</span></td><td data-l="Grenzen" class="small">${esc(thrText(t))}</td></tr>`).join("")}
         </tbody></table></div></details></div>
+    </div>
+    <div class="set-pane" role="tabpanel" id="spane-agents" aria-labelledby="stab-agents" data-spane="agents" hidden>
+      <div class="panel"><div class="panel-head"><div class="panel-title">Agents</div></div>
+        <form class="form" data-agentset novalidate><div class="form-error" hidden></div>
+          <div class="section"><div class="section-title">Aktualisierung</div>
+          ${field({ name: "auto_update", label: "Agents automatisch aktualisieren", type: "checkbox", value: agc.auto_update, hint: "Ältere Agents laden beim nächsten Bericht die Version dieses Servers, prüfen die Prüfsumme und starten neu." })}
+          </div>
+          <div class="section"><div class="section-title">Dienste auf allen Agents überwachen</div>
+          <p class="hint" style="margin:-8px 0 0">Gilt für jeden Agent des jeweiligen Systems, auf dem es passende Dienste gibt. Überwacht wird jeder passende Dienst, der läuft oder automatisch startet; er muss laufen. Ein Eintrag pro Zeile, <code>*</code> steht für beliebige Zeichen – z. B. <code>veeam*</code> für alles von Veeam. Verglichen wird mit dem Dienstnamen und dem Anzeigenamen. Ausnahmen trägst du am Gerät unter „Diese Dienste ignorieren“ ein.</p>
+          <div class="form-grid">
+            ${field({ name: "windows_services", label: "Windows", type: "textarea", mono: true, rows: 4, value: (agc.windows_services || []).join("\n"), placeholder: "veeam*\nMSSQL$*\nSpooler" })}
+            ${field({ name: "linux_services", label: "Linux", type: "textarea", mono: true, rows: 4, value: (agc.linux_services || []).join("\n"), placeholder: "veeam*\nssh\npostgresql*" })}
+          </div></div>
+          <div class="flex"><button class="btn" type="submit">Speichern</button><a class="btn gray" href="/agents" data-go>Agents installieren und verwalten</a></div></form></div>
 
-    <div class="grid">
+    </div>
+    <div class="set-pane" role="tabpanel" id="spane-api" aria-labelledby="stab-api" data-spane="api" hidden><div class="grid">
       <div class="panel flush"><div class="panel-head"><div class="panel-title">API-Token</div><div class="actions"><button class="btn" type="button" data-tok-add>${icon("plus")} Token erstellen</button></div></div>
         <p class="panel-intro">Für eine Zentrale oder andere Programme: nur lesender Zugriff auf Zusammenfassung, Geräte und Alarme.</p>
         <div data-tokens></div>
@@ -3548,7 +3568,40 @@ PAGES["/settings"] = async (el, token) => {
           ${field({ name: "token", label: "Token", type: "password", mono: true, placeholder: cen.has_token ? "unverändert" : "", hint: "Wird als Bearer-Token mitgeschickt." })}
           ${field({ name: "interval", label: "Alle (Minuten)", type: "number", min: 1, value: cen.interval || 5 })}
         </div><div><button class="btn" type="submit">Speichern</button></div></form></div>
+    </div></div>
+    <div class="set-pane" role="tabpanel" id="spane-account" aria-labelledby="stab-account" data-spane="account" hidden>
+      <div class="panel"><div class="panel-head"><div class="panel-title">Konto</div></div>
+        <table class="kv"><tr><td>Angemeldet als</td><td><b>${esc(state.user)}</b></td></tr></table></div>
+      <div class="panel"><div class="panel-head"><div class="panel-title">Passwort ändern</div></div>
+        <form class="form" data-pw novalidate><div class="form-error" hidden></div><div class="form-grid">
+          ${field({ name: "old", label: "Aktuelles Passwort", type: "password", autocomplete: "current-password" })}
+          ${field({ name: "new", label: "Neues Passwort", type: "password", hint: "Mindestens 10 Zeichen.", autocomplete: "new-password" })}
+        </div><div><button class="btn" type="submit">Passwort ändern</button></div></form></div>
     </div>`;
+  // tabs: #notify, #thresholds … in the address (shareable, survives a reload)
+  const stabs = qsa("[data-stab]", el);
+  const showTab = (k, focus) => {
+    if (!STABS.some(([x]) => x === k)) k = "general";
+    stabs.forEach((b) => {
+      const on = b.dataset.stab === k;
+      b.setAttribute("aria-selected", on); b.tabIndex = on ? 0 : -1;
+      if (!on) return;
+      if (focus) b.focus();
+      // narrow screens: keep the chosen tab visible in the scrolling bar
+      const bar = b.parentElement;
+      const d = b.getBoundingClientRect().left - bar.getBoundingClientRect().left;
+      if (d < 0 || d + b.offsetWidth > bar.clientWidth) bar.scrollLeft += d - 16;
+    });
+    qsa("[data-spane]", el).forEach((p) => { p.hidden = p.dataset.spane !== k; });
+    history.replaceState({}, "", location.pathname + (k === "general" ? "" : "#" + k));
+  };
+  stabs.forEach((b, i) => {
+    b.onclick = () => showTab(b.dataset.stab);
+    b.onkeydown = (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); showTab(stabs[(i + (e.key === "ArrowRight" ? 1 : stabs.length - 1)) % stabs.length].dataset.stab, true); }
+    };
+  });
+  showTab(location.hash.slice(1));
   bindCopy(el);
 
   // Allgemein
@@ -3643,7 +3696,11 @@ PAGES["/settings"] = async (el, token) => {
   }, "central");
 
   // Agents
-  formSubmit(qs("[data-agentset]", el), async (v) => { await PUT("/api/settings", { agent: { auto_update: v.auto_update } }); toast("Gespeichert."); }, "agent");
+  formSubmit(qs("[data-agentset]", el), async (v) => {
+    const lines = (x) => String(x || "").split(/\n+/).map((y) => y.trim()).filter(Boolean);
+    await PUT("/api/settings", { agent: { auto_update: v.auto_update, windows_services: lines(v.windows_services), linux_services: lines(v.linux_services) } });
+    toast("Gespeichert – gilt ab dem nächsten Bericht der Agents.");
+  }, "agent");
 
   // Konto
   const pf = qs("[data-pw]", el);

@@ -78,6 +78,8 @@ func discover(d model.Device, rt *devState, checks []model.Check, now int64) {
 	for _, it := range rt.st.Inventory {
 		if ch, ok := seen[it.Key]; ok {
 			it.Name, it.Group, it.Last, it.Missing = ch.Name, ch.Group, now, 0
+		} else if rt.acceptUnseen {
+			continue // the selection changed: what is gone now was deselected, not lost
 		} else {
 			it.Missing++
 		}

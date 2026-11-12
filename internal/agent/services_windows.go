@@ -17,18 +17,16 @@ import (
 // which come and go with logons.
 const serviceUserService = 0x40
 
-// bootGrace: automatic services may still be starting during the first minutes after boot.
-const bootGrace = 10 * 60
-
 type winService struct {
 	Name, Display string
 	Type, State   uint32
 }
 
-// serviceChecks reports the configured services (must run) and, with WatchAutoServices,
-// every automatic-start service that is not running.
+// serviceChecks reports the configured services (names must run; patterns and the central
+// list: every matching service that runs or starts automatically) and, with
+// WatchAutoServices, every automatic-start service that is not running.
 func serviceChecks(cfg Config, uptime uint64) []model.Check {
-	if len(cfg.Services) == 0 && !cfg.WatchAutoServices {
+	if len(cfg.Services) == 0 && len(cfg.CentralServices) == 0 && !cfg.WatchAutoServices {
 		return nil
 	}
 	// Least privilege, so "pk95agent once" also works without elevation.
@@ -44,34 +42,38 @@ func serviceChecks(cfg Config, uptime uint64) []model.Check {
 			Message: "Dienste nicht lesbar: " + err.Error()}}
 	}
 	byName := make(map[string]winService, len(list))
+	entries := make([]svcEntry, 0, len(list))
 	for _, s := range list {
 		byName[strings.ToLower(s.Name)] = s
+		if s.Type&serviceUserService == 0 { // per-user instances come and go with logons
+			entries = append(entries, svcEntry{Name: s.Name, Display: s.Display, Active: s.State == windows.SERVICE_RUNNING})
+		}
 	}
 
 	var out []model.Check
-	configured := map[string]bool{}
-	for _, name := range cfg.Services {
-		name = strings.TrimSpace(name)
-		if name == "" || configured[strings.ToLower(name)] {
-			continue
-		}
-		configured[strings.ToLower(name)] = true
-		s, ok := byName[strings.ToLower(name)]
-		if !ok {
-			out = append(out, model.Check{Key: "svc:" + name, Name: "Dienst " + name, Group: groupServices,
+	picked := map[string]bool{}
+	auto := func(e svcEntry) bool { return mustRun(h, e.Name) }
+	for _, p := range pickServices(entries, cfg.Services, cfg.CentralServices, cfg.IgnoreServices, auto) {
+		picked[strings.ToLower(p.Entry.Name)] = true
+		s, ok := byName[strings.ToLower(p.Entry.Name)]
+		if !p.Found || !ok {
+			out = append(out, model.Check{Key: p.Key, Name: "Dienst " + p.Entry.Name, Group: groupServices,
 				State: model.StateCrit, Message: "Dienst nicht gefunden"})
 			continue
 		}
 		// Key by the configured spelling, so it stays the same when the service disappears.
 		ch := winServiceCheck(s)
-		ch.Key = "svc:" + name
+		ch.Key = p.Key
+		if p.Optional && s.State != windows.SERVICE_RUNNING && uptime < bootGrace {
+			ch.State, ch.Message = model.StateUnknown, "startet nach dem Systemstart noch ("+ch.Message+")"
+		}
 		out = append(out, ch)
 	}
 
 	if cfg.WatchAutoServices && uptime >= bootGrace {
 		for _, s := range list {
 			if s.State == windows.SERVICE_RUNNING || s.Type&serviceUserService != 0 ||
-				configured[strings.ToLower(s.Name)] || ignored(s.Name, defaultIgnoredServices, cfg.IgnoreServices) {
+				picked[strings.ToLower(s.Name)] || ignored(s.Name, defaultIgnoredServices, cfg.IgnoreServices) {
 				continue
 			}
 			if !mustRun(h, s.Name) {

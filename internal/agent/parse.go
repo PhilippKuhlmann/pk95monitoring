@@ -111,6 +111,42 @@ func parseIsActive(units []string, out string) map[string]string {
 	return m
 }
 
+// unitInfo is a loaded service unit of "systemctl list-units".
+type unitInfo struct {
+	Active      string // ActiveState: active, inactive, failed, activating …
+	Description string
+}
+
+// parseListUnits reads "systemctl list-units --type=service --all --no-legend --plain"
+// (UNIT LOAD ACTIVE SUB DESCRIPTION) into unit → info; units that are not found are skipped.
+func parseListUnits(out string) map[string]unitInfo {
+	m := map[string]unitInfo{}
+	for line := range strings.Lines(out) {
+		f := strings.Fields(strings.TrimLeft(strings.TrimSpace(line), "●*× "))
+		if len(f) < 4 || !strings.HasSuffix(f[0], ".service") || f[1] == "not-found" {
+			continue
+		}
+		m[f[0]] = unitInfo{Active: f[2], Description: strings.Join(f[4:], " ")}
+	}
+	return m
+}
+
+// parseEnabledUnits reads "systemctl list-unit-files --type=service --no-legend" (UNIT STATE
+// [PRESET]) and returns the units that start automatically (enabled); templates are skipped.
+func parseEnabledUnits(out string) map[string]bool {
+	m := map[string]bool{}
+	for line := range strings.Lines(out) {
+		f := strings.Fields(line)
+		if len(f) < 2 || !strings.HasSuffix(f[0], ".service") || strings.HasSuffix(f[0], "@.service") {
+			continue
+		}
+		if f[1] == "enabled" || f[1] == "enabled-runtime" {
+			m[f[0]] = true
+		}
+	}
+	return m
+}
+
 // unitStateText translates systemd's ActiveState for messages.
 func unitStateText(s string) string {
 	switch s {

@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/shirou/gopsutil/v4/disk"
+
+	"pk95monitoring/internal/model"
 )
 
 // Pseudo and virtual file systems never worth monitoring.
@@ -107,13 +109,99 @@ func skipIface(name string) bool {
 	return false
 }
 
-// matchName matches a service name against a pattern with an optional trailing "*",
-// case-insensitively (Windows service names are case-insensitive).
+// matchName matches a service name against a pattern where "*" stands for any text
+// ("veeam*", "*sql*"), case-insensitively (Windows service names are case-insensitive).
 func matchName(pattern, name string) bool {
-	if p, ok := strings.CutSuffix(pattern, "*"); ok {
-		return len(name) >= len(p) && strings.EqualFold(name[:len(p)], p)
+	return model.GlobMatch(strings.ToLower(pattern), strings.ToLower(name))
+}
+
+// isPattern reports whether a service entry is a pattern rather than one name.
+func isPattern(s string) bool { return strings.Contains(s, "*") }
+
+// svcEntry is one service of the host, for the selection.
+type svcEntry struct {
+	Name    string // service name (Windows) or unit name (Linux, "nginx.service")
+	Display string // display name (Windows) or description (Linux)
+	Active  bool   // running / active
+}
+
+// svcPick is a selected service with the check key it is reported under.
+type svcPick struct {
+	Key      string // "svc:<name>"
+	Entry    svcEntry
+	Found    bool // false: a required name the host does not have
+	Optional bool // picked by a pattern or the central list
+}
+
+// bootGrace: services may still be starting during the first minutes after boot; a picked
+// optional service that does not run yet is reported unknown meanwhile (no alert).
+const bootGrace = 10 * 60
+
+// svcBase is a unit name without ".service" (Windows names stay as they are).
+func svcBase(name string) string { return strings.TrimSuffix(name, ".service") }
+
+// svcMatches matches a pattern or name against a service: its name (also without ".service")
+// or its display name.
+func svcMatches(pattern string, e svcEntry) bool {
+	return matchName(pattern, e.Name) || matchName(pattern, svcBase(e.Name)) || (e.Display != "" && matchName(pattern, e.Display))
+}
+
+// pickServices selects the services to report:
+//   - required names (the device's list, no "*") must exist: a missing one is picked with
+//     Found false; they are keyed by the configured spelling and never ignored;
+//   - patterns of the device's list and every entry of the central list are optional: they
+//     pick the matching services that run or start automatically (auto is asked only for
+//     services that do not run), except ignored ones.
+//
+// Each service is picked once; the order is required first, then by name.
+func pickServices(list []svcEntry, required, optional, ignore []string, auto func(svcEntry) bool) []svcPick {
+	byName := make(map[string]svcEntry, len(list))
+	for _, e := range list {
+		byName[strings.ToLower(svcBase(e.Name))] = e
 	}
-	return strings.EqualFold(pattern, name)
+	var out []svcPick
+	seen := map[string]bool{}
+	var patterns []string
+	for _, r := range required {
+		r = strings.TrimSpace(r)
+		switch {
+		case r == "":
+		case isPattern(r):
+			patterns = append(patterns, r)
+		case !seen[strings.ToLower(svcBase(r))]:
+			seen[strings.ToLower(svcBase(r))] = true
+			e, ok := byName[strings.ToLower(svcBase(r))]
+			if !ok {
+				e = svcEntry{Name: r}
+			}
+			out = append(out, svcPick{Key: "svc:" + r, Entry: e, Found: ok})
+		}
+	}
+	for _, o := range optional {
+		if o = strings.TrimSpace(o); o != "" {
+			patterns = append(patterns, o)
+		}
+	}
+	if len(patterns) == 0 {
+		return out
+	}
+	sorted := slices.Clone(list)
+	slices.SortFunc(sorted, func(a, b svcEntry) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
+	for _, e := range sorted {
+		k := strings.ToLower(svcBase(e.Name))
+		if seen[k] || !slices.ContainsFunc(patterns, func(p string) bool { return svcMatches(p, e) }) {
+			continue
+		}
+		if slices.ContainsFunc(ignore, func(p string) bool { p = strings.TrimSpace(p); return p != "" && svcMatches(p, e) }) {
+			continue
+		}
+		if !e.Active && (auto == nil || !auto(e)) {
+			continue
+		}
+		seen[k] = true
+		out = append(out, svcPick{Key: "svc:" + svcBase(e.Name), Entry: e, Found: true, Optional: true})
+	}
+	return out
 }
 
 // ignored reports whether name matches one of the patterns.

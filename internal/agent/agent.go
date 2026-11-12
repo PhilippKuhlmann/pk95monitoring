@@ -163,11 +163,11 @@ func (a *Agent) flush(ctx context.Context) {
 
 // applyReply takes over the configuration the server sent and persists changes.
 func (a *Agent) applyReply(r model.AgentReply) {
-	if !a.Config.applyReply(r.Interval, r.Services, r.WatchAutoServices, r.IgnoreServices) {
+	if !a.Config.applyReply(r) {
 		return
 	}
 	a.Log.Info("applied configuration from server", "interval", a.Config.IntervalSeconds(),
-		"services", len(a.Config.Services), "auto_services", a.Config.WatchAutoServices)
+		"services", len(a.Config.Services), "central_services", len(a.Config.CentralServices), "auto_services", a.Config.WatchAutoServices)
 	if a.ConfigPath == "" {
 		return
 	}
