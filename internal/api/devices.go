@@ -12,6 +12,7 @@ import (
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/core"
 	"pk95monitoring/internal/model"
+	"pk95monitoring/internal/notify"
 	"pk95monitoring/internal/store"
 )
 
@@ -538,6 +539,68 @@ func (s *Server) availability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
+}
+
+// setGroup moves devices into a group (folder): {ids: [...], group: "Standort A/Server"}.
+func (s *Server) setGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs   []string `json:"ids"`
+		Group string   `json:"group"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.IDs) > 10000 {
+		writeErr(w, http.StatusBadRequest, "Zu viele Geräte auf einmal.")
+		return
+	}
+	n, errs, err := s.C.SetGroup(req.IDs, req.Group)
+	if fieldErrs(w, errs) {
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changed": n})
+}
+
+// reportMailPreview shows the monthly report mail of ?month=YYYY-MM (default: last month)
+// as a web page.
+func (s *Server) reportMailPreview(w http.ResponseWriter, r *http.Request) {
+	month, err := core.ParseMonth(r.URL.Query().Get("month"), time.Now())
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	m, err := s.C.ReportMessage(r.Context(), month)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
+	_, _ = w.Write([]byte(notify.HTMLPreview(m)))
+}
+
+// sendReport mails the monthly report of {month: "YYYY-MM"} (default: last month) now.
+func (s *Server) sendReport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Month string `json:"month"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	month, err := core.ParseMonth(req.Month, time.Now())
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.C.SendReport(r.Context(), month); err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	ok(w)
 }
 
 // unackAlert removes the acknowledgement of an open alert.

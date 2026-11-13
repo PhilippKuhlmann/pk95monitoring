@@ -204,15 +204,15 @@ func typeLabel(t string) string {
 func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]string {
 	errs := map[string]string{}
 	d.Name, d.Host = strings.TrimSpace(d.Name), strings.TrimSpace(d.Host)
-	d.Group, d.Notes = strings.TrimSpace(d.Group), strings.TrimSpace(d.Notes)
+	d.Group, d.Notes = NormalizeGroup(d.Group), strings.TrimSpace(d.Notes)
 	switch {
 	case d.Name == "":
 		errs["name"] = "Name angeben."
 	case len([]rune(d.Name)) > 100:
 		errs["name"] = "Höchstens 100 Zeichen."
 	}
-	if len([]rune(d.Group)) > 60 {
-		errs["group"] = "Höchstens 60 Zeichen."
+	if len([]rune(d.Group)) > maxGroupLen {
+		errs["group"] = fmt.Sprintf("Höchstens %d Zeichen.", maxGroupLen)
 	}
 	if len([]rune(d.Notes)) > 4000 {
 		errs["notes"] = "Höchstens 4000 Zeichen."
@@ -625,6 +625,54 @@ func (c *Core) SetMaintenance(id string, until int64, note string) (model.Device
 		c.Event("info", d.Name, "Wartung beendet", "Alarme sind wieder aktiv.", nil, false)
 	}
 	return d, nil
+}
+
+// maxGroupLen limits a device group (folder path).
+const maxGroupLen = 60
+
+// NormalizeGroup cleans a group: "/" separates folders ("Standort A/Server"); spaces around
+// the parts and empty parts are dropped.
+func NormalizeGroup(g string) string {
+	var parts []string
+	for _, p := range strings.Split(g, "/") {
+		if p = strings.Join(strings.Fields(p), " "); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+// SetGroup moves devices into a group (folder); "" = no group. It changes nothing else (no
+// poll) and returns the number of devices changed. Unknown ids are ignored.
+func (c *Core) SetGroup(ids []string, group string) (int, map[string]string, error) {
+	group = NormalizeGroup(group)
+	if len([]rune(group)) > maxGroupLen {
+		return 0, map[string]string{"group": fmt.Sprintf("Höchstens %d Zeichen.", maxGroupLen)}, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.Now().Unix()
+	n := 0
+	for _, id := range ids {
+		d, ok := c.devices[id]
+		if !ok || d.Group == group {
+			continue
+		}
+		d.Group, d.Updated = group, now
+		if err := c.St.Put(KindDevice, id, d); err != nil {
+			return n, nil, err
+		}
+		c.devices[id] = d.Clone()
+		n++
+	}
+	if n > 0 {
+		target := group
+		if target == "" {
+			target = "ohne Ordner"
+		}
+		c.Event("info", "Geräte", "Ordner geändert", fmt.Sprintf("%d %s nach „%s“ verschoben.", n, plural1(n, "Gerät", "Geräte"), target), nil, false)
+	}
+	return n, nil, nil
 }
 
 // ---- connection tests (used by the device dialogs) ----

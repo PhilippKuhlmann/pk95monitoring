@@ -17,6 +17,9 @@ type Details struct {
 	Images []Image `json:"images,omitempty"`
 	// Note is a closing remark, e.g. "Der vollständige Bericht hängt an."
 	Note string `json:"note,omitempty"`
+	// CountWords label the counts of rows above the table (ok, warning, error); empty =
+	// "erfolgreich", "mit Warnung", "fehlgeschlagen".
+	CountWords [3]string `json:"-"`
 }
 
 // Image is a picture in the mail.

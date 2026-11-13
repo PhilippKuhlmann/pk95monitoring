@@ -11,7 +11,7 @@ import (
 
 // palette of the three states (PK95 Core: green-600/amber-500/red-600 with their washes).
 var tones = map[string]struct{ Accent, Wash, Ink, Word, Mark string }{
-	"ok":      {"#16a34a", "#dcfce7", "#14532d", "Erfolgreich", "✓"},
+	"ok":      {"#16a34a", "#dcfce7", "#14532d", "OK", "✓"},
 	"warning": {"#d97706", "#fef3c7", "#78350f", "Warnung", "!"},
 	"error":   {"#dc2626", "#fee2e2", "#7f1d1d", "Fehler", "✕"},
 }
@@ -137,9 +137,9 @@ var mailTmpl = template.Must(template.New("mail").Funcs(template.FuncMap{
         {{if .M.Body}}<div style="font-size:14px;color:{{.T.Ink}};margin-top:6px;line-height:1.5;white-space:pre-line;">{{.M.Body}}</div>{{end}}
       </td></tr></table></td></tr>
   {{if .HasCounts}}<tr><td style="padding:16px 24px 0;">
-    {{if .OK}}<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;border-radius:2px;background:#dcfce7;color:#166534;font-size:12px;font-weight:700;">{{.OK}} erfolgreich</span>{{end}}
-    {{if .Warn}}<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;border-radius:2px;background:#fef3c7;color:#78350f;font-size:12px;font-weight:700;">{{.Warn}} mit Warnung</span>{{end}}
-    {{if .Fail}}<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;border-radius:2px;background:#fee2e2;color:#991b1b;font-size:12px;font-weight:700;">{{.Fail}} fehlgeschlagen</span>{{end}}
+    {{if .OK}}<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;border-radius:2px;background:#dcfce7;color:#166534;font-size:12px;font-weight:700;">{{.OK}} {{index .Words 0}}</span>{{end}}
+    {{if .Warn}}<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;border-radius:2px;background:#fef3c7;color:#78350f;font-size:12px;font-weight:700;">{{.Warn}} {{index .Words 1}}</span>{{end}}
+    {{if .Fail}}<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;border-radius:2px;background:#fee2e2;color:#991b1b;font-size:12px;font-weight:700;">{{.Fail}} {{index .Words 2}}</span>{{end}}
   </td></tr>{{end}}
   {{with .D}}{{if .Facts}}<tr><td style="padding:16px 24px 0;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">
@@ -172,7 +172,7 @@ var mailTmpl = template.Must(template.New("mail").Funcs(template.FuncMap{
   {{if .Link}}<tr><td style="padding:24px 24px 0;">
     <a href="{{.Link}}" style="display:inline-block;background:#1f73d6;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:10px 18px;border-radius:3px;">Details ansehen</a></td></tr>{{end}}
   <tr><td style="padding:24px;"><div style="border-top:1px solid #e5e7eb;padding-top:14px;font-size:12px;color:#6b7280;line-height:1.6;">
-    Diese Nachricht wurde automatisch von Ihrer Datensicherung verschickt ({{.When}}).<br>
+    Diese Nachricht wurde automatisch von PK95 Monitoring verschickt ({{.When}}).<br>
     Bei Fragen wenden Sie sich bitte an Ihren IT-Betreuer.<br>
     <span style="color:#9ca3af;">{{.M.Host}}{{if .M.Version}} · PK95 Monitoring {{.M.Version}}{{end}}</span></div></td></tr>
 </table></td></tr></table></body></html>`))
@@ -201,6 +201,10 @@ func renderHTML(m Message, preview bool) string {
 		"M": m, "D": m.Details, "T": tones[m.Details.StatusOf(m.Severity)],
 		"OK": ok, "Warn": warn, "Fail": fail, "HasCounts": ok+warn+fail > 1,
 		"Link": template.URL(link), "When": t.Format("02.01.2006 um 15:04 Uhr"), "Preheader": pre,
+		"Words": [3]string{"erfolgreich", "mit Warnung", "fehlgeschlagen"},
+	}
+	if m.Details != nil && m.Details.CountWords[0] != "" {
+		data["Words"] = m.Details.CountWords
 	}
 	// image sources: cid: references to the inline attachments, data: URLs for a browser preview
 	imgs := map[string]template.URL{}

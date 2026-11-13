@@ -277,6 +277,26 @@ func TestEndToEnd(t *testing.T) {
 	if code := ui.do("GET", "/api/report?from=200&to=100", nil, nil); code != 400 {
 		t.Errorf("report with a bad period: %d", code)
 	}
+	if code := ui.do("GET", "/api/report/mail?month=2026-10", nil, nil); code != 200 {
+		t.Errorf("report mail preview: %d", code)
+	}
+	if code := ui.do("GET", "/api/report/mail?month=Oktober", nil, nil); code != 400 {
+		t.Errorf("report mail preview with a bad month: %d", code)
+	}
+	if code := ui.do("POST", "/api/report/send", map[string]any{"month": "2026-10"}, nil); code != 502 {
+		t.Errorf("report sent without SMTP: %d", code)
+	}
+	// the report settings round-trip; switching it on needs SMTP
+	if code := ui.do("PUT", "/api/settings", map[string]any{"report": map[string]any{"enabled": true}}, nil); code != 422 {
+		t.Errorf("report on without SMTP: %d", code)
+	}
+	var rs struct {
+		Report core.ReportSettings `json:"report"`
+	}
+	ui.must("PUT", "/api/settings", map[string]any{"report": map[string]any{"mail_to": "chef@example.org"}}, &rs)
+	if rs.Report.MailTo != "chef@example.org" || rs.Report.Enabled {
+		t.Errorf("report settings %+v", rs.Report)
+	}
 	var got map[string]json.RawMessage
 	ui.must("GET", "/api/devices/"+pxID, nil, &got)
 	if strings.Contains(string(got["status"]), `"inventory"`) {

@@ -104,6 +104,7 @@ type settingsOut struct {
 	Defaults   []model.Threshold    `json:"defaults"`
 	Central    centralOut           `json:"central"`
 	Agent      core.AgentSettings   `json:"agent"`
+	Report     core.ReportSettings  `json:"report"`
 }
 
 func redactSettings(s core.Settings) settingsOut {
@@ -118,6 +119,7 @@ func redactSettings(s core.Settings) settingsOut {
 		Defaults:   model.DefaultThresholds(),
 		Central:    centralOut{Enabled: s.Central.Enabled, URL: s.Central.URL, HasToken: s.Central.Token != "", Interval: s.Central.Interval},
 		Agent:      s.Agent,
+		Report:     s.Report,
 	}
 }
 
@@ -159,6 +161,11 @@ func mergeSettings(cur core.Settings, body []byte) (core.Settings, error) {
 	if raw, ok := present("agent"); ok {
 		if err := json.Unmarshal(raw, &cur.Agent); err != nil {
 			return cur, fmt.Errorf("agent: %w", err)
+		}
+	}
+	if raw, ok := present("report"); ok {
+		if err := json.Unmarshal(raw, &cur.Report); err != nil {
+			return cur, fmt.Errorf("report: %w", err)
 		}
 	}
 	return cur, nil

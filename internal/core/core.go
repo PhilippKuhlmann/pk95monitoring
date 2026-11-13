@@ -68,7 +68,7 @@ func New(st *store.Store, opt Options) (*Core, error) {
 		St: st, Opt: opt, Started: time.Now().Unix(),
 		Agents:  agentdist.NewCatalog(opt.AgentDir, opt.Version),
 		Proxmox: proxmox.New(), SNMP: snmp.New(), NUT: nut.New(),
-		Notify: notify.Send, Now: time.Now,
+		Notify: notify.Send, Mail: notify.SendMail, Now: time.Now,
 		devices: map[string]model.Device{}, rt: map[string]*devState{}, open: map[string]*openAlert{},
 		wake: make(chan struct{}, 1), tm: defaultTimings(),
 	}
@@ -198,6 +198,7 @@ func (c *Core) Run(ctx context.Context) {
 			c.prune()
 		case <-prune.C:
 			c.prune()
+			c.maybeMonthlyReport()
 		case <-persist.C:
 			c.persist(false)
 		}
@@ -378,6 +379,7 @@ func (c *Core) SaveSettings(s Settings) (map[string]string, error) {
 	if ce.Enabled && ce.Token == "" {
 		errs["central.token"] = "Token angeben."
 	}
+	validateReport(&s, errs)
 
 	ag := &s.Agent
 	ag.WindowsServices, ag.LinuxServices = cleanList(ag.WindowsServices), cleanList(ag.LinuxServices)

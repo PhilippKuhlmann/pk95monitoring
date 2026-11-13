@@ -555,3 +555,34 @@ func TestUnackAlert(t *testing.T) {
 		t.Fatal("unknown alert unacked")
 	}
 }
+
+func TestSetGroup(t *testing.T) {
+	e := newEnv(t, Options{})
+	a := e.agentDevice(t, "a1", nil)
+	b := e.agentDevice(t, "b1", nil)
+	if got := NormalizeGroup("  Standort A / Server //  "); got != "Standort A/Server" {
+		t.Fatalf("normalize %q", got)
+	}
+	n, errs, err := e.c.SetGroup([]string{a, b, "nope"}, " Standort A / Server ")
+	if err != nil || len(errs) > 0 || n != 2 {
+		t.Fatalf("set: %d %v %v", n, errs, err)
+	}
+	if d, _ := e.c.Device(a); d.Group != "Standort A/Server" {
+		t.Fatalf("group %q", d.Group)
+	}
+	if n, _, _ := e.c.SetGroup([]string{a}, "Standort A/Server"); n != 0 {
+		t.Fatalf("unchanged counted: %d", n)
+	}
+	if _, errs, _ := e.c.SetGroup([]string{a}, strings.Repeat("x", 61)); errs["group"] == "" {
+		t.Fatal("long group accepted")
+	}
+	if n, _, _ := e.c.SetGroup([]string{b}, ""); n != 1 {
+		t.Fatalf("clear: %d", n)
+	}
+	if d, _ := e.c.Device(b); d.Group != "" {
+		t.Fatalf("cleared group %q", d.Group)
+	}
+	if body := lastEventBody(t, e, "Ordner geändert"); body != "1 Gerät nach „ohne Ordner“ verschoben." {
+		t.Fatalf("event %q", body)
+	}
+}

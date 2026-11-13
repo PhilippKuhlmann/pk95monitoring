@@ -855,34 +855,94 @@ PAGES["/devices"] = async (el, token) => {
     for (const [k, v] of Object.entries(f)) if (v) u.set(k, v);
     history.replaceState({}, "", "/devices" + (u.toString() ? "?" + u : ""));
   };
+  // ---- folders: the group of a device is its folder, "/" separates subfolders ----
+  const VIEW_KEY_D = "pk95mon-devview", CLOSED_KEY = "pk95mon-folders-closed";
+  let view = lsGet(VIEW_KEY_D) === "list" ? "list" : "folders";
+  const closed = new Set((() => { try { return JSON.parse(lsGet(CLOSED_KEY) || "[]"); } catch (e) { return []; } })());
+  const saveClosed = () => lsSet(CLOSED_KEY, JSON.stringify([...closed]));
+  const sel = new Set(); // selected device ids (kept across the 30-s refresh)
+  const inFolder = (g, path) => g === path || String(g || "").startsWith(path + "/");
+  // folderTree builds {path, name, kids: Map, devs} from the (filtered, sorted) list.
+  const folderTree = (list) => {
+    const root = { path: "", name: "", kids: new Map(), devs: [] };
+    for (const d of list) {
+      let node = root;
+      const parts = d.group ? d.group.split("/") : [];
+      parts.forEach((part, i) => {
+        if (!node.kids.has(part)) node.kids.set(part, { path: parts.slice(0, i + 1).join("/"), name: part, kids: new Map(), devs: [] });
+        node = node.kids.get(part);
+      });
+      node.devs.push(d);
+    }
+    return root;
+  };
+  const folderDevs = (node) => [...node.devs, ...[...node.kids.values()].flatMap(folderDevs)];
+  const devRow = (d, depth, showGroup) => {
+    const st = devState(d);
+    const meta = [d.host ? `<span class="mono">${esc(d.host)}</span>` : "", `<span class="dt-type"${d.platform ? ` title="${esc(d.platform)}"` : ""}>${icon(TYPE_ICONS[d.type] || "box", "sm")}${esc(TYPE_LABELS[d.type] || d.type)}</span>`, showGroup && d.group ? esc(d.group) : ""].filter(Boolean).join(`<span class="dt-dot" aria-hidden="true">·</span>`);
+    const msg = d.message && st !== "ok" && st !== "disabled" ? `<div class="dt-msg st-${esc(st)}" title="${esc(d.message)}">${esc(d.message)}</div>` : "";
+    return `<tr class="row-link dt-row st-${esc(st)}${st === "disabled" ? " off" : ""}${sel.has(d.id) ? " sel" : ""}" data-href="/devices/${enc(d.id)}" data-did="${esc(d.id)}">
+      <td class="dt-sel">${selBox(`data-dsel="${esc(d.id)}" ${sel.has(d.id) ? "checked" : ""}`, `${d.name} auswählen`)}</td>
+      <td data-l="Zustand" class="dt-state">${statePill(st)}</td>
+      <td data-l="Gerät" class="dt-name" style="--d:${depth}"><a class="t-main row-main" href="/devices/${enc(d.id)}" data-go>${esc(d.name)}</a>${attTag(d)}<div class="dt-meta">${meta}</div>${msg}</td>
+      <td data-l="Checks" class="small nowrap dt-checks">${checksSummary(d.checks)}<div class="t-sub" title="Letzter Kontakt ${esc(fmtTime(d.last_poll, true))}">Kontakt ${esc(fmtAgo(d.last_poll))}</div></td>
+      <td data-l="CPU" class="bar-cell dt-cpu">${isNum(d.cpu) ? pctBar(d.cpu) : '<span class="muted">—</span>'}</td>
+      <td data-l="RAM" class="bar-cell dt-ram">${isNum(d.mem) ? pctBar(d.mem) : '<span class="muted">—</span>'}</td>
+      <td data-l="Disk" class="bar-cell dt-disk">${isNum(d.disk) ? pctBar(d.disk) : '<span class="muted">—</span>'}</td>
+      <td class="act dt-act"><button class="ib sm-ib" type="button" title="Jetzt prüfen" aria-label="${esc(d.name)} jetzt prüfen" data-poll="${esc(d.id)}" ${d.enabled === false ? "disabled" : ""}>${icon("refresh")}</button></td></tr>`;
+  };
+  const folderRow = (node, depth, open) => {
+    const devs = folderDevs(node), n = { crit: 0, warn: 0, unknown: 0 };
+    devs.forEach((d) => { const s = devState(d); if (s in n) n[s]++; });
+    const badges = [n.crit ? pill(`${n.crit} kritisch`, "rose") : "", n.warn ? pill(`${n.warn} ${n.warn === 1 ? "Warnung" : "Warnungen"}`, "amber") : "", n.unknown ? pill(`${n.unknown} unbekannt`) : ""].join("");
+    const tone = n.crit ? "crit" : n.warn ? "warn" : "ok";
+    return `<tr class="fd-row st-${tone}" data-folder="${esc(node.path)}">
+      <td class="dt-sel">${node.path ? selBox(`data-fsel="${esc(node.path)}"`, `Alle Geräte in ${node.name} auswählen`) : ""}</td>
+      <td colspan="7" class="fd-cell" style="--d:${depth}"><div class="fd-line">
+        <button class="fd-toggle" type="button" data-ftoggle="${esc(node.path)}" aria-expanded="${open}">${icon("chevron-down", "fd-chev")}${icon("folder", "fd-ic")}<span class="fd-name">${esc(node.path ? node.name : "Ohne Ordner")}</span><span class="muted fd-n">${devs.length}</span></button>
+        <span class="fd-badges">${badges}</span>
+        ${node.path ? `<button class="ib sm-ib fd-rename" type="button" data-frename="${esc(node.path)}" title="Ordner umbenennen" aria-label="Ordner ${esc(node.name)} umbenennen">${icon("pencil")}</button>` : ""}</div></td></tr>`;
+  };
+  // renderTree: folders first (by name), then the devices of the folder; closed folders hide
+  // their content (a search opens everything; the filtered folder and its parents stay open).
+  const renderTree = (node, depth, expandAll, rows) => {
+    const kids = [...node.kids.values()].sort((a, b) => a.name.localeCompare(b.name, "de", { numeric: true }));
+    for (const k of kids) {
+      const open = expandAll || !closed.has(k.path) || (f.group && f.group !== "-" && inFolder(f.group, k.path));
+      rows.push(folderRow(k, depth, open));
+      if (open) renderTree(k, depth + 1, expandAll, rows);
+    }
+    if (node.path === "" && node.devs.length && kids.length) {
+      const open = expandAll || !closed.has("");
+      rows.push(folderRow({ path: "", name: "", kids: new Map(), devs: node.devs }, 0, open));
+      if (open) node.devs.forEach((d) => rows.push(devRow(d, 1, false)));
+      return rows;
+    }
+    node.devs.forEach((d) => rows.push(devRow(d, depth, false)));
+    return rows;
+  };
+
   const drawList = () => {
     if (token !== pageToken || !data) return;
     const q = f.q.trim().toLowerCase();
     const all = data.devices || [];
+    for (const id of [...sel]) if (!all.some((d) => d.id === id)) sel.delete(id);
     const list = all.filter((d) => {
       if (q && !`${d.name} ${d.host} ${d.group} ${d.platform || ""} ${d.message || ""}`.toLowerCase().includes(q)) return false;
       if (f.state && devState(d) !== f.state) return false;
       if (f.type && d.type !== f.type) return false;
-      if (f.group && (f.group === "-" ? d.group : d.group !== f.group)) return false;
+      if (f.group && (f.group === "-" ? d.group : !inFolder(d.group, f.group))) return false;
       return true;
     }).sort((a, b) => RANK[devState(b)] - RANK[devState(a)] || byName(a, b));
     const box = qs("[data-list]", el);
-    // One compact line per device: name with address, type and group below; the first problem
-    // in one line (full text as tooltip); the whole row opens the device.
-    box.innerHTML = list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp dev-table"><thead><tr><th>Zustand</th><th>Gerät</th><th>Checks</th><th>CPU</th><th>RAM</th><th>Disk</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
-      ${list.map((d) => {
-        const st = devState(d);
-        const meta = [d.host ? `<span class="mono">${esc(d.host)}</span>` : "", `<span class="dt-type"${d.platform ? ` title="${esc(d.platform)}"` : ""}>${icon(TYPE_ICONS[d.type] || "box", "sm")}${esc(TYPE_LABELS[d.type] || d.type)}</span>`, d.group ? esc(d.group) : ""].filter(Boolean).join(`<span class="dt-dot" aria-hidden="true">·</span>`);
-        const msg = d.message && st !== "ok" && st !== "disabled" ? `<div class="dt-msg st-${esc(st)}" title="${esc(d.message)}">${esc(d.message)}</div>` : "";
-        return `<tr class="row-link dt-row st-${esc(st)}${st === "disabled" ? " off" : ""}" data-href="/devices/${enc(d.id)}">
-        <td data-l="Zustand" class="dt-state">${statePill(st)}</td>
-        <td data-l="Gerät" class="dt-name"><a class="t-main row-main" href="/devices/${enc(d.id)}" data-go>${esc(d.name)}</a>${attTag(d)}<div class="dt-meta">${meta}</div>${msg}</td>
-        <td data-l="Checks" class="small nowrap dt-checks">${checksSummary(d.checks)}<div class="t-sub" title="Letzter Kontakt ${esc(fmtTime(d.last_poll, true))}">Kontakt ${esc(fmtAgo(d.last_poll))}</div></td>
-        <td data-l="CPU" class="bar-cell dt-cpu">${isNum(d.cpu) ? pctBar(d.cpu) : '<span class="muted">—</span>'}</td>
-        <td data-l="RAM" class="bar-cell dt-ram">${isNum(d.mem) ? pctBar(d.mem) : '<span class="muted">—</span>'}</td>
-        <td data-l="Disk" class="bar-cell dt-disk">${isNum(d.disk) ? pctBar(d.disk) : '<span class="muted">—</span>'}</td>
-        <td class="act dt-act"><button class="ib sm-ib" type="button" title="Jetzt prüfen" aria-label="${esc(d.name)} jetzt prüfen" data-poll="${esc(d.id)}" ${d.enabled === false ? "disabled" : ""}>${icon("refresh")}</button></td></tr>`; }).join("")}
-      </tbody></table></div></div><p class="muted small" style="margin:0 12px">${list.length} von ${all.length} Geräten</p>` :
+    const filtering = !!(q || f.state || f.type);
+    const rows = view === "folders" ? renderTree(folderTree(list), 0, filtering, []) : list.map((d) => devRow(d, 0, true));
+    box.innerHTML = list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp dev-table ${view === "folders" ? "dev-folders" : ""}"><thead><tr><th class="dt-sel">${selBox("data-dsel-all", "Alle angezeigten Geräte auswählen")}</th><th>Zustand</th><th>Gerät</th><th>Checks</th><th>CPU</th><th>RAM</th><th>Disk</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
+      ${rows.join("")}
+      </tbody></table></div></div><p class="muted small" style="margin:0 12px">${list.length} von ${all.length} Geräten</p>
+      <div class="sv-bulk" data-dbulk hidden><span class="sv-bulk-n" data-dbulk-n></span>
+        <button class="btn sm" type="button" data-move>${icon("folder")} In Ordner verschieben …</button>
+        <button class="btn ghost sm" type="button" data-sel-clear>Auswahl aufheben</button></div>` :
       (all.length ? empty("Nichts gefunden", "Kein Gerät passt zu den Filtern.", `<button class="btn gray" type="button" data-reset>Filter zurücksetzen</button>`, "search") :
         empty("Noch keine Geräte", "Proxmox VE, SNMP-Geräte und Netzwerk-Checks fügst du hier hinzu, Linux- und Windows-Server mit dem Agent.", `<div class="flex" style="justify-content:center"><button class="btn" type="button" data-add2>${icon("plus")} Gerät hinzufügen</button><a class="btn gray" href="/agents" data-go>Agent installieren</a></div>`, "server"));
     const find = (id) => all.find((d) => d.id === id);
@@ -893,6 +953,72 @@ PAGES["/devices"] = async (el, token) => {
       await load();
     }));
     bindRowLinks(box);
+    // folders: open/close, rename
+    qsa("[data-ftoggle]", box).forEach((b) => b.onclick = () => {
+      if (filtering) return; // a search shows everything
+      const p = b.dataset.ftoggle;
+      if (closed.has(p)) closed.delete(p); else closed.add(p);
+      saveClosed(); drawList();
+      const nb = qs(`[data-ftoggle="${CSS.escape(p)}"]`, box);
+      if (nb) nb.focus();
+    });
+    qsa("[data-frename]", box).forEach((b) => b.onclick = () => {
+      const path = b.dataset.frename, devs = all.filter((d) => inFolder(d.group, path));
+      formDialog({
+        title: "Ordner umbenennen", ic: "folder", cls: "", button: "Umbenennen",
+        text: `${devs.length} ${devs.length === 1 ? "Gerät liegt" : "Geräte liegen"} in „${esc(path)}“ und seinen Unterordnern. Mit „/“ verschiebst du den Ordner in einen anderen, z. B. <code>Standort A/Server</code>.`,
+        fields: [{ name: "group", label: "Neuer Name", value: path, required: true, wide: true }],
+        submit: async (v) => {
+          const to = v.group.split("/").map((x) => x.trim()).filter(Boolean).join("/");
+          const byGroup = new Map();
+          for (const d of devs) { const ng = to + String(d.group).slice(path.length); if (!byGroup.has(ng)) byGroup.set(ng, []); byGroup.get(ng).push(d.id); }
+          for (const [g, ids] of byGroup) await POST("/api/devices/group", { ids, group: g });
+          if (closed.delete(path)) { closed.add(to); saveClosed(); }
+          toast(`Ordner in „${to}“ umbenannt.`);
+          await load();
+        },
+      });
+    });
+    // selection and "In Ordner verschieben"
+    const syncDSel = () => {
+      qsa("input[data-dsel]", box).forEach((cb) => { cb.checked = sel.has(cb.dataset.dsel); cb.closest("tr").classList.toggle("sel", cb.checked); });
+      qsa("input[data-fsel]", box).forEach((cb) => {
+        const ids = all.filter((d) => inFolder(d.group, cb.dataset.fsel) && list.includes(d)).map((d) => d.id), on = ids.filter((id) => sel.has(id)).length;
+        cb.checked = ids.length > 0 && on === ids.length; cb.indeterminate = on > 0 && on < ids.length;
+      });
+      const allBox = qs("input[data-dsel-all]", box);
+      if (allBox) { const ids = list.map((d) => d.id), on = ids.filter((id) => sel.has(id)).length; allBox.checked = ids.length > 0 && on === ids.length; allBox.indeterminate = on > 0 && on < ids.length; }
+      const bar = qs("[data-dbulk]", box);
+      if (bar) { bar.hidden = sel.size === 0; qs("[data-dbulk-n]", bar).textContent = `${sel.size} ${sel.size === 1 ? "Gerät" : "Geräte"} ausgewählt:`; }
+    };
+    qsa("input[data-dsel]", box).forEach((cb) => cb.onchange = () => { if (cb.checked) sel.add(cb.dataset.dsel); else sel.delete(cb.dataset.dsel); syncDSel(); });
+    qsa("input[data-fsel]", box).forEach((cb) => cb.onchange = () => {
+      all.filter((d) => inFolder(d.group, cb.dataset.fsel) && list.includes(d)).forEach((d) => (cb.checked ? sel.add(d.id) : sel.delete(d.id)));
+      syncDSel();
+    });
+    const allBox = qs("input[data-dsel-all]", box);
+    if (allBox) allBox.onchange = () => { list.forEach((d) => (allBox.checked ? sel.add(d.id) : sel.delete(d.id))); syncDSel(); };
+    const clear = qs("[data-sel-clear]", box);
+    if (clear) clear.onclick = () => { sel.clear(); syncDSel(); };
+    const move = qs("[data-move]", box);
+    if (move) move.onclick = () => {
+      const ids = [...sel], groups = data.groups || [];
+      formDialog({
+        title: `${ids.length} ${ids.length === 1 ? "Gerät" : "Geräte"} verschieben`, ic: "folder", cls: "", button: "Verschieben",
+        text: "In einen vorhandenen oder neuen Ordner. Unterordner trennst du mit „/“, z. B. <code>Standort A/Server</code>. Leer = ohne Ordner.",
+        fields: [{ name: "group", label: "Ordner", value: f.group && f.group !== "-" ? f.group : "", list: "dl-move-groups", placeholder: "z. B. Server", wide: true }],
+        extra: `<datalist id="dl-move-groups">${groups.map((g) => `<option value="${esc(g)}"></option>`).join("")}</datalist>`,
+        submit: async (v) => {
+          const r = await POST("/api/devices/group", { ids, group: v.group });
+          sel.clear();
+          const g = v.group.split("/").map((x) => x.trim()).filter(Boolean).join("/");
+          if (g) { g.split("/").forEach((_, i, a) => closed.delete(a.slice(0, i + 1).join("/"))); saveClosed(); }
+          toast(`${r.changed || 0} ${r.changed === 1 ? "Gerät" : "Geräte"} ${g ? `nach „${g}“` : "aus dem Ordner"} verschoben.`);
+          await load();
+        },
+      });
+    };
+    syncDSel();
     const reset = qs("[data-reset]", box);
     if (reset) reset.onclick = () => { f.q = f.state = f.type = f.group = ""; syncUrl(); drawToolbar(); drawList(); };
     const add2 = qs("[data-add2]", box);
@@ -900,15 +1026,23 @@ PAGES["/devices"] = async (el, token) => {
   };
   const drawToolbar = () => {
     const groups = data.groups || [];
+    // every folder level is a filter option ("Standort A" and "Standort A/Server")
+    const paths = [...new Set(groups.flatMap((g) => g.split("/").map((_, i, a) => a.slice(0, i + 1).join("/"))))].sort((a, b) => a.localeCompare(b, "de", { numeric: true }));
     const opt = (v, l, cur) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`;
     qs("[data-toolbar]", el).innerHTML = `<div class="filters toolbar" role="search">
-      <input type="search" data-f="q" value="${esc(f.q)}" placeholder="Suchen: Name, Adresse, Gruppe …" aria-label="Geräte durchsuchen">
+      <input type="search" data-f="q" value="${esc(f.q)}" placeholder="Suchen: Name, Adresse, Ordner …" aria-label="Geräte durchsuchen">
       <select data-f="state" aria-label="Zustand">${opt("", "Alle Zustände", f.state)}${Object.entries(STATES).map(([k, [l]]) => opt(k, l, f.state)).join("")}</select>
       <select data-f="type" aria-label="Typ">${opt("", "Alle Typen", f.type)}${Object.entries(TYPE_LABELS).map(([k, l]) => opt(k, l, f.type)).join("")}</select>
-      <select data-f="group" aria-label="Gruppe">${opt("", "Alle Gruppen", f.group)}${groups.map((g) => opt(g, g, f.group)).join("")}${opt("-", "Ohne Gruppe", f.group)}</select></div>`;
+      <select data-f="group" aria-label="Ordner">${opt("", "Alle Ordner", f.group)}${paths.map((g) => opt(g, g.split("/").length > 1 ? " ".repeat(g.split("/").length - 1) + g.split("/").pop() : g, f.group)).join("")}${opt("-", "Ohne Ordner", f.group)}</select>
+      <div class="seg" role="group" aria-label="Darstellung"><button type="button" data-dview="folders" aria-pressed="${view === "folders"}">${icon("folder")}Ordner</button><button type="button" data-dview="list" aria-pressed="${view === "list"}">${icon("list")}Liste</button></div>
+      <span class="fd-all" ${view === "folders" ? "" : "hidden"}><button class="btn ghost sm" type="button" data-fopen>Alle aufklappen</button><button class="btn ghost sm" type="button" data-fclose>Alle zuklappen</button></span></div>`;
     qsa("[data-f]", el).forEach((x) => {
       x.oninput = x.onchange = () => { f[x.dataset.f] = x.value; syncUrl(); drawList(); };
     });
+    qsa("[data-dview]", el).forEach((b) => b.onclick = () => { view = b.dataset.dview; lsSet(VIEW_KEY_D, view); drawToolbar(); drawList(); });
+    const fo = qs("[data-fopen]", el), fc = qs("[data-fclose]", el);
+    if (fo) fo.onclick = () => { closed.clear(); saveClosed(); drawList(); };
+    if (fc) fc.onclick = () => { (data.groups || []).forEach((g) => g.split("/").forEach((_, i, a) => closed.add(a.slice(0, i + 1).join("/")))); closed.add(""); saveClosed(); drawList(); };
   };
   const load = async () => {
     const r = await GET("/api/devices");
@@ -3836,7 +3970,7 @@ const STABS = [["general", "Allgemein", "cog"], ["notify", "Benachrichtigungen",
 PAGES["/settings"] = async (el, token) => {
   const [sys, set, tok] = await Promise.all([GET("/api/system"), GET("/api/settings"), GET("/api/tokens").catch(() => ({ tokens: [] }))]);
   if (token !== pageToken) return;
-  const g = set.general || {}, n = set.notify || {}, cen = set.central || {}, agc = set.agent || {};
+  const g = set.general || {}, n = set.notify || {}, cen = set.central || {}, agc = set.agent || {}, rpt = set.report || {};
   const has = (k) => !!(n["has_" + k] || set["has_" + k]);
   const origin = location.origin;
   el.innerHTML = pageHead("Einstellungen", "Für diese Instanz – Geräte stellst du am jeweiligen Gerät ein.") +
@@ -3901,6 +4035,14 @@ PAGES["/settings"] = async (el, token) => {
           </div></div>
           <div class="flex"><button class="btn" type="submit">Speichern</button><button class="btn gray" type="button" data-test>Testnachricht senden</button></div>
         </form></div>
+      <div class="panel"><div class="panel-head"><div class="panel-title">Monatsbericht</div></div>
+        <p class="panel-intro">Am Monatsersten um 6 Uhr geht der Verfügbarkeitsbericht des Vormonats per E-Mail raus – mit Übersicht, den Geräten mit Ausfällen oder Alarmen und der vollständigen Liste als CSV-Anhang. Verschickt wird über den SMTP-Server oben, auch wenn E-Mail-Benachrichtigungen aus sind.</p>
+        <form class="form" data-reportset novalidate><div class="form-error" hidden></div><div class="form-grid">
+          ${field({ name: "enabled", label: "Monatsbericht per E-Mail verschicken", type: "checkbox", value: rpt.enabled, wide: true })}
+          ${field({ name: "mail_to", label: "Empfänger", value: rpt.mail_to, wide: true, placeholder: n.mail_to || "chef@example.org, it@example.org", hint: "Mehrere mit Komma trennen. Leer = die Empfänger der Benachrichtigungen." })}
+        </div><div class="flex"><button class="btn" type="submit">Speichern</button>
+          <a class="btn gray" href="/api/report/mail" target="_blank" rel="noopener">${icon("eye")} Vorschau (Vormonat)</a>
+          <button class="btn gray" type="button" data-report-send>${icon("bell")} Jetzt senden (Vormonat)</button></div></form></div>
     </div>
     <div class="set-pane" role="tabpanel" id="spane-thresholds" aria-labelledby="stab-thresholds" data-spane="thresholds" hidden>
     <div class="panel"><div class="panel-head"><div class="panel-title">Schwellwerte</div><div class="actions"><button class="btn gray sm" type="button" data-th-reset>${icon("restore")} Auf Standard zurücksetzen</button></div></div>
@@ -3985,6 +4127,15 @@ PAGES["/settings"] = async (el, token) => {
     qs("[data-sys-instance]", el).textContent = inst || "—";
     toast("Gespeichert.");
   }, "general");
+
+  // Monatsbericht
+  const rf = qs("[data-reportset]", el);
+  formSubmit(rf, async (v) => { await PUT("/api/settings", { report: { enabled: v.enabled, mail_to: v.mail_to.trim() } }); toast("Gespeichert."); }, "report");
+  qs("[data-report-send]", el).onclick = (e) => run(e.currentTarget, async () => {
+    showErrors(rf, null);
+    try { await POST("/api/report/send", {}); toast("Monatsbericht verschickt."); }
+    catch (err) { showErrors(rf, err); }
+  });
 
   // Benachrichtigungen
   const nf = qs("[data-notify]", el);

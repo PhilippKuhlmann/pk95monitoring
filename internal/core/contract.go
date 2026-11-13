@@ -84,6 +84,7 @@ type Settings struct {
 	Notify     notify.Settings   `json:"notify"`
 	Thresholds []model.Threshold `json:"thresholds"` // global overrides of model.DefaultThresholds
 	Central    CentralSettings   `json:"central"`
+	Report     ReportSettings    `json:"report"`
 	Agent      AgentSettings     `json:"agent"`
 }
 
@@ -166,6 +167,8 @@ type Core struct {
 
 	// Notify delivers a notification (default notify.Send); tests replace it.
 	Notify func(ctx context.Context, s notify.Settings, m notify.Message) error
+	// Mail sends a mail to the given addresses (default notify.SendMail, the monthly report); tests replace it.
+	Mail func(s notify.Settings, m notify.Message, to []string) error
 	// Now is the clock (default time.Now); tests replace it before use.
 	Now func() time.Time
 

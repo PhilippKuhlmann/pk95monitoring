@@ -80,3 +80,12 @@ func TestLinkPathFallsBackToEvents(t *testing.T) {
 		t.Errorf("linkPath with details = %q", got)
 	}
 }
+
+func TestCountWords(t *testing.T) {
+	m := Message{Severity: "info", Title: "Bericht", Details: &Details{CountWords: [3]string{"ohne Ausfall", "mit Ausfällen", "unter 99 %"},
+		Rows: []Row{{ID: "a", Status: "ok"}, {ID: "b", Status: "warning"}}}}
+	h := HTML(m)
+	if !strings.Contains(h, "1 ohne Ausfall") || !strings.Contains(h, "1 mit Ausfällen") || strings.Contains(h, "erfolgreich") {
+		t.Fatalf("count words: %s", h)
+	}
+}

@@ -100,16 +100,27 @@ func Send(ctx context.Context, s Settings, m Message) error {
 }
 
 func sendMail(s Settings, m Message) error {
-	if s.SMTPHost == "" || s.MailTo == "" || s.MailFrom == "" {
-		return errors.New("Server, Absender und Empfänger angeben")
-	}
-	addr := net.JoinHostPort(s.SMTPHost, strconv.Itoa(s.SMTPPort))
+	return SendMail(s, m, Recipients(s.MailTo))
+}
+
+// Recipients splits a comma separated list of addresses.
+func Recipients(list string) []string {
 	var to []string
-	for _, t := range strings.Split(s.MailTo, ",") {
+	for _, t := range strings.Split(list, ",") {
 		if t = strings.TrimSpace(t); t != "" {
 			to = append(to, t)
 		}
 	}
+	return to
+}
+
+// SendMail sends m by e-mail to the given addresses with the SMTP settings of s (whether or
+// not mail notifications are switched on).
+func SendMail(s Settings, m Message, to []string) error {
+	if s.SMTPHost == "" || len(to) == 0 || s.MailFrom == "" {
+		return errors.New("Server, Absender und Empfänger angeben")
+	}
+	addr := net.JoinHostPort(s.SMTPHost, strconv.Itoa(s.SMTPPort))
 	msg := BuildMail(s, m, to)
 
 	dialer := &net.Dialer{Timeout: 15 * time.Second}

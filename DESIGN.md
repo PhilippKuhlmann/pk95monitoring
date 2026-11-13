@@ -362,6 +362,10 @@ Authenticated:
 - `GET /api/devices` → `{devices:[DeviceRow], groups:[string]}` (overview and list: top-level devices only, see "Attached agents")
 - `POST /api/devices` (Device) → Device; `PUT /api/devices/{id}` → Device; `DELETE /api/devices/{id}` → `{ok}`
   (`rules: [{match, mode}]` round-trips, never `null`)
+- `POST /api/devices/group {ids:[id], group}` → `{changed}` moves devices into a folder (`""` = no folder) without
+  a poll (422 on `group` when too long; unknown ids are skipped; event "Ordner geändert"). Folders are the device `group`:
+  `/` separates levels ("Server/Standort Nord"), `core.NormalizeGroup` trims the parts and drops empty ones, at
+  most 60 characters. Renaming a folder in the UI moves every device of it and its subfolders.
 - `GET /api/devices/{id}` → `{device: Device (redacted), status: DeviceStatus, alerts:[Alert ×20]}` plus, for a
   non-agent device, `attached: [{device, status}]` (sorted by node, name; `[]` when none); for an attached agent
   `parent: {id, name, type}`; for an unattached agent `suggest: [{id, name, type, node}]`
@@ -510,10 +514,24 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   and longest alert; devices least available first, totals weighted by covered time. Maintenance raises no
   alerts and counts as available. Periods: 7 days, 30 days, this month, last month, custom days (`?p=…&from=&to=`).
   "Drucken / PDF" prints a clean report (print CSS: no navigation, details of every device with problems).
+- Monthly report (`core/report_mail.go`, settings `report: {enabled, mail_to}`): from the 1st of a month at 06:00
+  local time (checked hourly) the report of the previous month is mailed once (setting `report.last` = "YYYY-MM")
+  with the SMTP settings of the notifications – also when mail notifications are off – to `report.mail_to` (empty
+  = `notify.mail_to`): facts (period, availability, devices, outages, alerts), the devices with outages or alerts,
+  a CSV of all devices (semicolons, decimal commas, BOM). `GET /api/report/mail?month=YYYY-MM` shows the mail as a
+  page (default last month), `POST /api/report/send {month?}` sends it now (502 with the SMTP error). Events
+  "Monatsbericht verschickt" / "Monatsbericht nicht verschickt". Saving `enabled` needs SMTP host, sender and a
+  recipient.
 - Device list `/devices`: one compact row per device – state, name (+ attached agents) with address, type and
   group below and the first problem in one line (full text as tooltip), check counts with the last contact,
   CPU/RAM/disk bars, "Jetzt prüfen"; the whole row opens the device (edit and delete are on the device page).
   Phones get a card per device (name and state, checks, three small bars).
+  View "Ordner" (default, `pk95mon-devview`) shows a folder tree built from the groups: folders first, then their
+  devices, "Ohne Ordner" last (only when folders exist); a folder row shows its device count and the crit/warn
+  and unknown counts of everything below, toggles open/closed (closed folders in `pk95mon-folders-closed`; a search or a
+  state/type filter opens all, the filtered folder and its parents stay open), selects all its devices and has a
+  rename button. "Liste" is the flat list with the folder under the name. Checkboxes feed the sticky bar
+  "In Ordner verschieben …" (suggests existing folders). The folder filter matches a folder and its subfolders.
 - Settings page `/settings`: one tab per area (`STABS`), the tab in the URL hash – Allgemein (instance, data
   retention, re-notify; system info), `#notify` Benachrichtigungen, `#thresholds` Schwellwerte, `#agents` Agents
   (auto-update, central service lists), `#api` Schnittstellen (API tokens, central push), `#account` Konto
