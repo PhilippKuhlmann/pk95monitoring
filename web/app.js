@@ -488,6 +488,7 @@ const NAV = [
   { path: "/devices", label: "Geräte", icon: "server" },
   { path: "/alerts", label: "Alarme", icon: "bell" },
   { path: "/events", label: "Ereignisse", icon: "list" },
+  { path: "/reports", label: "Berichte", icon: "chart" },
   { head: "Einrichtung" },
   { path: "/agents", label: "Agents", icon: "download" },
   { path: "/settings", label: "Einstellungen", icon: "cog" },
@@ -3600,6 +3601,117 @@ PAGES["/alerts"] = async (el, token) => {
   qs("[data-refresh]", el).onclick = (e) => run(e.currentTarget, () => (reload ? reload(false) : load()));
   await load();
   every(30000, token, () => (tab !== "all" && reload ? reload(false).then(() => loadOverview().catch(() => {})) : null));
+};
+
+// ---------- reports (availability, GET /api/report) ----------
+const RPERIODS = [["7d", "7 Tage"], ["30d", "30 Tage"], ["month", "Dieser Monat"], ["lastmonth", "Letzter Monat"], ["custom", "Zeitraum"]];
+const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// reportRange returns [from, to) in unix seconds; custom "to" is the last day (inclusive).
+function reportRange(p, from, to) {
+  const now = new Date(), sec = (d) => Math.floor(d.getTime() / 1000);
+  switch (p) {
+    case "7d": return [sec(now) - 7 * 86400, sec(now)];
+    case "month": return [sec(new Date(now.getFullYear(), now.getMonth(), 1)), sec(now)];
+    case "lastmonth": return [sec(new Date(now.getFullYear(), now.getMonth() - 1, 1)), sec(new Date(now.getFullYear(), now.getMonth(), 1))];
+    case "custom": {
+      const a = from ? new Date(from + "T00:00") : new Date(now.getTime() - 30 * 86400e3);
+      const b = to ? new Date(to + "T00:00") : dayStart(now);
+      b.setDate(b.getDate() + 1);
+      return [sec(a), sec(b)];
+    }
+  }
+  return [sec(now) - 30 * 86400, sec(now)];
+}
+const fmtDay = (ts) => new Date(ts * 1000).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+// fmtAvail: "99,95 %" – never rounds a gap up to 100 %.
+function fmtAvail(v) {
+  if (!isNum(v)) return "—";
+  if (v >= 100) return "100" + NNBSP + "%";
+  return (Math.floor(v * 100) / 100).toFixed(2).replace(".", ",") + NNBSP + "%";
+}
+const availCls = (v) => (!isNum(v) || v >= 99.9 ? "" : v >= 99 ? "warn" : "bad");
+const durOrDash = (s) => (s > 0 ? esc(fmtUptime(s)) : '<span class="muted">—</span>');
+function availBar(v) {
+  const w = isNum(v) ? Math.max(0, Math.min(100, v)) : 0;
+  return `<div class="usage rp-avail"><span class="track"><span class="fill ${availCls(v)}" style="width:${w.toFixed(2)}%"></span></span><span class="pct">${fmtAvail(v)}</span></div>`;
+}
+
+PAGES["/reports"] = async (el, token) => {
+  const q = new URLSearchParams(location.search);
+  let p = RPERIODS.some(([k]) => k === q.get("p")) ? q.get("p") : "30d";
+  let cFrom = q.get("from") || isoDay(new Date(Date.now() - 30 * 86400e3)), cTo = q.get("to") || isoDay(new Date());
+  let seq = 0;
+  el.innerHTML = pageHead("Berichte", "Verfügbarkeit und Probleme aller Geräte in einem Zeitraum – zum Drucken oder als PDF speichern.",
+    `<button class="btn gray" type="button" data-print>${icon("printer")} Drucken / PDF</button>`) +
+    `<div class="rp-bar"><div class="seg" role="group" aria-label="Zeitraum">${RPERIODS.map(([k, l]) => `<button type="button" data-p="${k}" aria-pressed="${k === p}">${l}</button>`).join("")}</div>
+      <span class="rp-custom" data-custom ${p === "custom" ? "" : "hidden"}><input type="date" data-from value="${esc(cFrom)}" aria-label="Von"><span class="muted">bis</span><input type="date" data-to value="${esc(cTo)}" aria-label="Bis"></span></div>
+    <div data-rep>${loadingPanel()}</div>`;
+  const box = qs("[data-rep]", el);
+  const syncUrl = () => {
+    const u = new URLSearchParams({ p });
+    if (p === "custom") { u.set("from", cFrom); u.set("to", cTo); }
+    history.replaceState({}, "", "/reports?" + u);
+  };
+  const draw = (r) => {
+    const devs = r.devices || [];
+    const period = `${fmtDay(r.from)} – ${fmtDay(r.to - 1)}`;
+    const stat = (label, value, sub = "", cls = "") => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${value}</div>${sub ? `<div class="t-sub">${sub}</div>` : ""}</div>`;
+    const rows = devs.map((d, i) => {
+      const has = d.checks.length || d.outages;
+      const detail = d.checks.length ? `<table class="rp-checks"><thead><tr><th>Check</th><th class="num">Alarme</th><th class="num">Kritisch</th><th class="num">Warnung</th><th class="num">Längster</th></tr></thead><tbody>
+          ${d.checks.map((c) => `<tr><td><a href="${checkPath(d.id, c.key)}" data-go>${esc(c.name)}</a></td><td class="num">${c.alerts}</td><td class="num">${durOrDash(c.crit)}</td><td class="num">${durOrDash(c.warn)}</td><td class="num">${durOrDash(c.longest)}</td></tr>`).join("")}</tbody></table>`
+        : `<p class="muted small" style="margin:0">Keine Alarme der Checks – ${d.outages ? "nur Ausfälle der Erreichbarkeit." : "alles in Ordnung."}</p>`;
+      return `<tr class="rp-row ${has ? "rp-has" : ""}" data-i="${i}">
+          <td data-l="Gerät" class="rp-name"><a class="t-main" href="/devices/${enc(d.id)}" data-go>${esc(d.name)}</a><div class="t-sub">${esc([TYPE_LABELS[d.type] || d.type, d.group, d.enabled ? "" : "deaktiviert", d.covered < r.to - r.from - 60 ? `erfasst seit ${fmtDay(r.to - d.covered)}` : ""].filter(Boolean).join(" · "))}</div></td>
+          <td data-l="Verfügbarkeit" class="bar-cell">${availBar(d.availability)}</td>
+          <td data-l="Ausfälle" class="num">${d.outages || '<span class="muted">0</span>'}</td>
+          <td data-l="Ausfallzeit" class="num">${durOrDash(d.downtime)}</td>
+          <td data-l="Längster Ausfall" class="num">${durOrDash(d.longest)}</td>
+          <td data-l="Alarme" class="num">${d.alerts || '<span class="muted">0</span>'}</td>
+          <td data-l="Problemzeit" class="num" title="Zeit, in der mindestens ein Check eine Warnung oder einen kritischen Zustand hatte">${durOrDash(d.problem_time)}</td>
+          <td class="act rp-act">${has ? `<button class="ib sm-ib rp-toggle" type="button" data-toggle="${i}" aria-expanded="false" aria-controls="rp-d-${i}" aria-label="Details zu ${esc(d.name)}">${icon("chevron-down")}</button>` : ""}</td></tr>
+        ${has ? `<tr class="rp-detail" id="rp-d-${i}" hidden><td colspan="8">${detail}</td></tr>` : ""}`;
+    }).join("");
+    const worst = devs.filter((d) => d.availability < 100).length;
+    box.innerHTML = `<div class="rp-print-head"><b>PK95 Monitoring${r.instance ? " · " + esc(r.instance) : ""}</b> – Verfügbarkeitsbericht ${esc(period)}</div>
+      <p class="rp-period muted small">Zeitraum ${esc(fmtTime(r.from, true))} bis ${esc(fmtTime(r.to, true))} · erstellt ${esc(fmtTime(nowSec(), true))}${r.instance ? ` · ${esc(r.instance)}` : ""}</p>
+      <div class="rp-stats">
+        ${stat("Verfügbarkeit", fmtAvail(r.availability), `${devs.length} ${devs.length === 1 ? "Gerät" : "Geräte"}${worst ? `, ${worst} mit Ausfällen` : ", alle ohne Ausfall"}`, "rp-" + (availCls(r.availability) || "ok"))}
+        ${stat("Ausfälle", String(r.outages || 0), r.outages ? "Gerät nicht erreichbar" : "keine")}
+        ${stat("Ausfallzeit", r.downtime > 0 ? esc(fmtUptime(r.downtime)) : "0", "über alle Geräte")}
+        ${stat("Alarme", String(r.alerts || 0), "Warnungen und kritische Zustände")}
+      </div>
+      ${devs.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp rp-table"><thead><tr><th>Gerät</th><th>Verfügbarkeit</th><th class="num">Ausfälle</th><th class="num">Ausfallzeit</th><th class="num">Längster Ausfall</th><th class="num">Alarme</th><th class="num">Problemzeit</th><th><span class="sr-only">Details</span></th></tr></thead><tbody>${rows}</tbody></table></div></div>`
+        : empty("Keine Geräte im Zeitraum", "Geräte erscheinen ab dem Tag, an dem sie angelegt wurden.", "", "chart")}
+      <p class="rp-note muted small">Verfügbarkeit: Anteil der Zeit, in der das Gerät erreichbar war (ohne Alarm der Erreichbarkeit). Wartungszeiten zählen als verfügbar. Problemzeit: Zeit, in der mindestens ein Check eine Warnung oder einen kritischen Zustand hatte. Alarme werden 400 Tage aufbewahrt.</p>`;
+    qsa("[data-toggle]", box).forEach((b) => b.onclick = () => {
+      const row = qs("#rp-d-" + b.dataset.toggle, box), open = row.hidden;
+      row.hidden = !open;
+      b.setAttribute("aria-expanded", open);
+    });
+  };
+  const load = async () => {
+    const my = ++seq;
+    const [a, b] = reportRange(p, cFrom, cTo);
+    if (b <= a) { box.innerHTML = callout("yellow", "Zeitraum prüfen", "Das Ende muss nach dem Beginn liegen."); return; }
+    box.innerHTML = loadingPanel();
+    try {
+      const r = await GET(`/api/report?from=${a}&to=${b}`);
+      if (token === pageToken && my === seq) draw(r);
+    } catch (e) { if (token === pageToken && my === seq) box.innerHTML = callout("red", "Bericht nicht möglich", esc(e.message)); }
+  };
+  qsa("[data-p]", el).forEach((b) => b.onclick = () => {
+    p = b.dataset.p;
+    qsa("[data-p]", el).forEach((x) => x.setAttribute("aria-pressed", x === b));
+    qs("[data-custom]", el).hidden = p !== "custom";
+    syncUrl(); load();
+  });
+  const fromI = qs("[data-from]", el), toI = qs("[data-to]", el);
+  fromI.onchange = toI.onchange = () => { cFrom = fromI.value; cTo = toI.value; if (cFrom && cTo) { syncUrl(); load(); } };
+  // printing shows the details of every device with problems
+  qs("[data-print]", el).onclick = () => window.print();
+  await load();
 };
 
 // ---------- events ----------

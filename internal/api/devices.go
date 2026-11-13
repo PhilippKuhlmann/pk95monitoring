@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -513,6 +514,30 @@ func (s *Server) ackAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w)
+}
+
+// availability returns the availability of all devices from `from` to `to` (unix seconds; default:
+// the last 30 days). Also served to API tokens at /api/v1/report.
+func (s *Server) availability(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	to, _ := strconv.ParseInt(q.Get("to"), 10, 64)
+	from, _ := strconv.ParseInt(q.Get("from"), 10, 64)
+	if to <= 0 {
+		to = time.Now().Unix()
+	}
+	if from <= 0 {
+		from = to - 30*86400
+	}
+	rep, err := s.C.Report(r.Context(), from, to)
+	if errors.Is(err, core.ErrReportPeriod) {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 // unackAlert removes the acknowledgement of an open alert.

@@ -268,6 +268,15 @@ func TestEndToEnd(t *testing.T) {
 	if code := ui.do("POST", "/api/devices/nope/discovery", map[string]any{"accept": []string{"x"}}, nil); code != 404 {
 		t.Errorf("discovery unknown device: %d", code)
 	}
+	// Availability report: default period (30 days), bad periods are 400.
+	var avail core.Report
+	ui.must("GET", "/api/report", nil, &avail)
+	if avail.Devices == nil || avail.To-avail.From < 29*86400 || avail.Instance != "Testkunde" { // devices created just now cover no time yet
+		t.Errorf("report %+v", avail)
+	}
+	if code := ui.do("GET", "/api/report?from=200&to=100", nil, nil); code != 400 {
+		t.Errorf("report with a bad period: %d", code)
+	}
 	var got map[string]json.RawMessage
 	ui.must("GET", "/api/devices/"+pxID, nil, &got)
 	if strings.Contains(string(got["status"]), `"inventory"`) {

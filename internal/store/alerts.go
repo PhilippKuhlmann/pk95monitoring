@@ -127,6 +127,12 @@ func (s *Store) Alerts(ctx context.Context, q AlertQuery) ([]model.Alert, error)
 	return s.queryAlerts(ctx, where+" ORDER BY id DESC LIMIT ?", args...)
 }
 
+// AlertsBetween lists the alerts that overlap the period [from, to) – open ones included –
+// oldest first.
+func (s *Store) AlertsBetween(ctx context.Context, from, to int64) ([]model.Alert, error) {
+	return s.queryAlerts(ctx, "WHERE started < ? AND (ended = 0 OR ended > ?) ORDER BY started, id", to, from)
+}
+
 // PruneAlerts deletes alerts that ended before olderThan (unix seconds). Active alerts stay.
 func (s *Store) PruneAlerts(olderThan int64) error {
 	_, err := s.db.Exec("DELETE FROM alerts WHERE ended > 0 AND ended < ?", olderThan)

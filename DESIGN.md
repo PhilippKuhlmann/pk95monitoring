@@ -336,6 +336,13 @@ run automatically on start), plus:
 Query picks the source by range: ≤ 48 h raw, ≤ 35 d 5-min rollups, else hourly, and buckets
 into the requested step (avg/min/max per bucket).
 
+
+Capacity (load test `go test -tags loadtest -run TestLoad ./internal/store/`, 5000 series ≈ 100 devices with 50
+values, full default retention, Apple M-series laptop): 5.3 GB (raw ≈ 26 B/sample, rollups ≈ 49 B/row); writing a
+minute of samples 0.17 s, the per-minute rollup ≈ 1 s, the hourly rollup ≈ 3 s, the hourly prune ≈ 2 s (writers wait
+meanwhile); chart queries 1 series × 1 year ≈ 9 ms, 16 series × 1 year ≈ 150 ms, 50 sparklines × 6 h ≈ 25 ms.
+A larger page cache (32 MB) did not change the numbers. Typical series per device: agent 15–20, switch 60–90,
+Proxmox cluster 200–300 (guests, disks, storage).
 ## REST API (UI ↔ server)
 
 Session cookie `pk95mon_session`; mutating requests need header `X-PK95: 1` (CSRF guard, as in
@@ -496,6 +503,13 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   (`?tab=acked`, `state=acked`, with who/when and "Aufheben"), Verlauf; the overview lists the open ones and
   links the acknowledged ones.
 - Layout: `.wrap` max 1600 px, centred (as in ProxBackup).
+- Reports `/reports` (`GET /api/report?from=&to=`, unix seconds, default the last 30 days, at most 400 days; also
+  `GET /api/v1/report` for API tokens; `core.Report`): from the alerts in the period – availability per device
+  = share of its covered time (from its creation) without a reach alert, outages (count, total, longest), alerts,
+  problem time (union of the other checks' alerts) and per check alerts, crit/warn time (by the alert's severity)
+  and longest alert; devices least available first, totals weighted by covered time. Maintenance raises no
+  alerts and counts as available. Periods: 7 days, 30 days, this month, last month, custom days (`?p=…&from=&to=`).
+  "Drucken / PDF" prints a clean report (print CSS: no navigation, details of every device with problems).
 - Device list `/devices`: one compact row per device – state, name (+ attached agents) with address, type and
   group below and the first problem in one line (full text as tooltip), check counts with the last contact,
   CPU/RAM/disk bars, "Jetzt prüfen"; the whole row opens the device (edit and delete are on the device page).

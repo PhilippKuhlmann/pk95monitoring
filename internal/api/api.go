@@ -134,6 +134,7 @@ func (s *Server) routes() {
 	a("GET /api/alerts", s.alerts)
 	a("POST /api/alerts/{id}/ack", s.ackAlert)
 	a("POST /api/alerts/{id}/unack", s.unackAlert)
+	a("GET /api/report", s.availability)
 	a("GET /api/events", s.events)
 	a("GET /api/agents", s.agents)
 	a("POST /api/agents/key", s.rotateKey)
@@ -166,6 +167,7 @@ func (s *Server) routes() {
 	x("GET /api/v1/devices", s.v1Devices)
 	x("GET /api/v1/devices/{id}", s.v1Device)
 	x("GET /api/v1/alerts", s.v1Alerts)
+	x("GET /api/v1/report", s.availability)
 
 	m.Handle("/", s.static())
 }
