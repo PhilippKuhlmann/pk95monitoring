@@ -361,19 +361,28 @@ zusätzlich den Agent bekommen. Dann bleibt es **ein Gerät**: Die Agent-Daten (
 Updates …) ergänzen die API-Daten. Bei einem Proxmox-Cluster gehört jeder Agent zu einem Knoten. Das geht für alle
 Gerätearten (Proxmox, SNMP, Netzwerk-Checks).
 
-- **Neu installieren:** Am Gerät „Agent hinzufügen“ → „Neu installieren“ (bei Proxmox den Knoten wählen). Der
+- **Neu installieren:** Am Gerät „Anhängen“ → „Agent neu installieren“ (bei Proxmox den Knoten wählen). Der
   angezeigte Befehl enthält zusätzlich `--device <Geräte-ID> --node <Knoten>` (Windows: `-Device … -Node …`);
   der Agent wird bei der Anmeldung gleich zugeordnet. Ohne `--node` nimmt der Server bei Proxmox den Knoten mit
   dem Namen des Hosts (Kurzname, ohne Groß-/Kleinschreibung).
-- **Vorhandenen Agent zuordnen:** „Agent hinzufügen“ → „Vorhandenen Agent zuordnen“. Passt der Hostname oder eine
+- **Vorhandenen Agent zuordnen:** „Anhängen“ → „Vorhandenen Agent zuordnen“. Passt der Hostname oder eine
   IP-Adresse eines Agents zu einem Gerät oder Proxmox-Knoten, schlägt die Seite des Agents die Zuordnung vor
   („Gehört dieser Server zu …?“).
-- **Anzeige:** Listen und Übersicht zeigen nur das Gerät (mit „+1 Agent“); sein Zustand ist der schlechteste aus
+- **Anzeige:** Listen und Übersicht zeigen nur das Gerät (mit „+1 angehängt“); sein Zustand ist der schlechteste aus
   Gerät und Agents, die Meldung nennt den Knoten (z. B. „pve1: …“). Auf der Geräteseite steht der Agent beim
   Knoten; der Knoten zeigt den Agent als Fakt. Der Agent behält seine eigene Seite, Checks, Schwellwerte, Regeln,
   Alarme und Diagramme (Alarme heißen „Gerät / Knoten“, z. B. „Proxmox-Cluster / pve1“).
 - **Lösen:** Auf der Seite des Agents „Lösen“ – er ist dann wieder ein eigenes Gerät. Wird das Gerät gelöscht,
   werden seine Agents ebenfalls eigenständig.
+
+### Zwei Geräte zusammenführen (z. B. UniFi-Konsole und SNMP)
+
+Wird dasselbe Gerät auf zwei Wegen überwacht – etwa eine Dream Machine als UniFi-Konsole **und** per SNMP, oder ein
+Server-Controller per Redfish und SNMP –, lässt sich das eine an das andere anhängen: am Hauptgerät „Anhängen“ →
+„Anderes Gerät anhängen“. Danach steht in den Listen nur noch das Hauptgerät (Zustand aus beiden), das angehängte
+behält seine Seite, Checks und Alarme („UDM Pro / UDM SNMP“) und lässt sich dort wieder „Lösen“. Haben ein SNMP- oder
+Netzwerk-Gerät und ein anderes Gerät dieselbe Adresse, schlägt die Seite des SNMP-Geräts die Zuordnung vor. Es gibt
+eine Ebene: An ein angehängtes Gerät hängt man nichts weiter; Backup-Server und Microsoft 365 bleiben eigenständig.
 
 ## SNMP
 

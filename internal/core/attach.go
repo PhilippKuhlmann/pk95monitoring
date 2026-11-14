@@ -11,10 +11,11 @@ import (
 	"pk95monitoring/internal/store"
 )
 
-// Attached agents (model.Device.ParentID): an agent device can be attached to another device
-// (Proxmox cluster, SNMP or net device) whose API/SNMP data it complements. The agent keeps
+// Attached devices (model.Device.ParentID): an agent – or another device that monitors the same
+// thing a second way, e.g. the SNMP view of a UniFi console – can be attached to a device
+// (Proxmox cluster, SNMP, net, UniFi …) whose data it complements. The attached device keeps
 // its own checks, alerts and detail page; lists show only the parent, whose state includes
-// the attached agents (see combine).
+// the attached devices (see combine). There is one level: a parent is never attached itself.
 
 const maxNodeLen = 100
 
@@ -195,9 +196,16 @@ func agentHostname(d model.Device) string {
 	return d.Name
 }
 
-// Attach attaches the agent device agentID to the device parentID (node optional; for a
-// Proxmox parent it defaults to the node named like the agent's host). It returns the parent.
-// Field errors ("agent_id", "node") are German; store.ErrNotFound when the parent is unknown.
+// attachable reports whether a device type can be attached to another device or have devices
+// attached: backup servers and Microsoft 365 tenants stand alone.
+func attachable(typ string) bool {
+	return typ != model.TypeM365 && !model.BackupServer(typ)
+}
+
+// Attach attaches the device agentID (an agent or another device) to the device parentID
+// (node optional; for an agent on a Proxmox parent it defaults to the node named like the
+// agent's host). It returns the parent. Field errors ("agent_id", "node") are German;
+// store.ErrNotFound when the parent is unknown.
 func (c *Core) Attach(parentID, agentID, node string) (model.Device, map[string]string, error) {
 	agentID = strings.TrimSpace(agentID)
 	errs := map[string]string{}
@@ -210,28 +218,37 @@ func (c *Core) Attach(parentID, agentID, node string) (model.Device, map[string]
 		return model.Device{}, nil, store.ErrNotFound
 	}
 	a, found := c.devices[agentID]
+	_, parentAttached := c.parentOf(p)
 	switch {
 	case p.Type == model.TypeAgent:
-		errs["agent_id"] = "An einen Agent können keine weiteren Agents angehängt werden."
+		errs["agent_id"] = "An einen Agent kann nichts angehängt werden."
+	case !attachable(p.Type):
+		errs["agent_id"] = "An dieses Gerät kann nichts angehängt werden."
+	case parentAttached:
+		errs["agent_id"] = "Das Gerät ist selbst angehängt – an ein angehängtes Gerät kann nichts weiter angehängt werden."
 	case agentID == "":
-		errs["agent_id"] = "Agent auswählen."
+		errs["agent_id"] = "Gerät auswählen."
 	case !found:
-		errs["agent_id"] = "Agent nicht gefunden."
-	case a.Type != model.TypeAgent:
-		errs["agent_id"] = "Nur Agents können an ein Gerät angehängt werden."
+		errs["agent_id"] = "Gerät nicht gefunden."
+	case a.ID == p.ID:
+		errs["agent_id"] = "Ein Gerät kann nicht an sich selbst angehängt werden."
+	case !attachable(a.Type):
+		errs["agent_id"] = "Dieses Gerät kann nicht angehängt werden."
+	case len(c.childrenOf(a.ID)) > 0:
+		errs["agent_id"] = "An diesem Gerät hängen selbst Geräte – erst dort lösen."
 	}
 	if len(errs) == 0 {
 		var msg string
 		if node, msg = c.checkNode(p, node); msg != "" {
 			errs["node"] = msg
-		} else if node == "" {
+		} else if node == "" && a.Type == model.TypeAgent {
 			node = c.nodeFor(p, agentHostname(a))
 		}
 	}
 	if len(errs) == 0 && node != "" {
 		for _, o := range c.childrenOf(p.ID) {
 			if o.ID != a.ID && strings.EqualFold(o.Node, node) {
-				errs["node"] = fmt.Sprintf("Am Knoten %s ist bereits der Agent %s angehängt.", node, o.Name)
+				errs["node"] = fmt.Sprintf("Am Knoten %s ist bereits %s angehängt.", node, o.Name)
 				break
 			}
 		}
@@ -252,7 +269,12 @@ func (c *Core) Attach(parentID, agentID, node string) (model.Device, map[string]
 	if node != "" {
 		where = " (Knoten " + node + ")"
 	}
-	c.Event("info", p.Name, "Agent angehängt", fmt.Sprintf("Der Agent %s gehört jetzt zu %s%s.", a.Name, p.Name, where), nil, false)
+	what := "Der Agent"
+	title := "Agent angehängt"
+	if a.Type != model.TypeAgent {
+		what, title = "Das Gerät", "Gerät angehängt"
+	}
+	c.Event("info", p.Name, title, fmt.Sprintf("%s %s gehört jetzt zu %s%s.", what, a.Name, p.Name, where), nil, false)
 	return p.Clone(), nil, nil
 }
 
@@ -280,7 +302,11 @@ func (c *Core) Detach(agentID string) (model.Device, error) {
 	}
 	c.devices[a.ID] = a
 	c.mu.Unlock()
-	c.Event("info", a.Name, "Agent gelöst", fmt.Sprintf("Der Agent %s gehört nicht mehr zu %s.", a.Name, parent), nil, false)
+	what, title := "Der Agent", "Agent gelöst"
+	if a.Type != model.TypeAgent {
+		what, title = "Das Gerät", "Gerät gelöst"
+	}
+	c.Event("info", a.Name, title, fmt.Sprintf("%s %s gehört nicht mehr zu %s.", what, a.Name, parent), nil, false)
 	return a.Clone(), nil
 }
 
@@ -305,14 +331,19 @@ func (c *Core) detachChildren(parentID string, now int64) []string {
 
 // Suggest returns the devices an unattached agent probably belongs to: Proxmox clusters with
 // a node named like the agent's host (or with the agent's IP), and devices whose host is the
-// agent's host name or one of its IPs. Empty for attached agents and other device types.
+// agent's host name or one of its IPs. An unattached SNMP or net device without attached
+// devices of its own gets the other devices with the same host (e.g. the UniFi console it
+// is the SNMP view of). Empty otherwise.
 func (c *Core) Suggest(agentID string) []Suggestion {
 	out := []Suggestion{}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a, ok := c.devices[agentID]
-	if !ok || a.Type != model.TypeAgent || c.attached(a) {
+	if !ok || c.attached(a) {
 		return out
+	}
+	if a.Type != model.TypeAgent {
+		return c.suggestSameHost(a)
 	}
 	full := strings.ToLower(strings.TrimSpace(agentHostname(a)))
 	short := shortHost(full)
@@ -371,6 +402,26 @@ func (c *Core) Suggest(agentID string) []Suggestion {
 }
 
 // ---- combined state of a parent and its attached agents ----
+
+// suggestSameHost lists the devices an SNMP or net device a probably complements: devices of
+// another type with the same host that are not attached themselves. Caller holds c.mu.
+func (c *Core) suggestSameHost(a model.Device) []Suggestion {
+	out := []Suggestion{}
+	host := strings.ToLower(strings.TrimSpace(a.Host))
+	if (a.Type != model.TypeSNMP && a.Type != model.TypeNet) || host == "" || len(c.childrenOf(a.ID)) > 0 {
+		return out
+	}
+	for _, p := range c.devices {
+		if p.ID == a.ID || p.Type == model.TypeAgent || p.Type == model.TypeSNMP || p.Type == model.TypeNet || !attachable(p.Type) || c.attached(p) {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(p.Host)) == host {
+			out = append(out, Suggestion{ID: p.ID, Name: p.Name, Type: p.Type})
+		}
+	}
+	slices.SortFunc(out, func(x, y Suggestion) int { return strings.Compare(strings.ToLower(x.Name), strings.ToLower(y.Name)) })
+	return out
+}
 
 // counted reports whether an attached agent counts for its parent's state: disabled agents
 // and agents in maintenance do not.

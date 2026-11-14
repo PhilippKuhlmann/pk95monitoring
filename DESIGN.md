@@ -340,11 +340,16 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    brings new checks, it does not discover them) (events "Neue
    Dienste übernommen" / "Verschwundene Dienste entfernt"). Inventory ≤ 5000 keys per device.
 
-## Attached agents (agent + API on one device)
+## Attached agents and devices (one device, several sources)
 
-`model.Device.ParentID`/`Node` (`internal/core/attach.go`): an agent device can be attached to any non-agent
-device (Proxmox, SNMP, NUT, net). The agent's data complements the parent's API/SNMP data; for a Proxmox cluster
-an agent belongs to a node (`Node` = PVE node name).
+`model.Device.ParentID`/`Node` (`internal/core/attach.go`): an agent device – or another device monitoring the same
+thing another way (the SNMP view of a UniFi console, a controller by Redfish and SNMP) – can be attached to a
+non-agent device. Not attachable (as parent or child): Microsoft 365 and backup servers. One level only: a parent
+must not be attached, a child must not have children, nothing attaches to itself. The child's data complements the
+parent's; for a Proxmox cluster an agent belongs to a node (`Node` = PVE node name; other children get a node only
+when given). `POST /api/devices/{id}/attach {agent_id, node}` takes any device id in `agent_id`; events "Agent/Gerät
+angehängt/gelöst". `GET /api/devices/{id}` has `parent` for every attached device and `suggest` for every
+unattached one.
 
 - The attached agent keeps its own id, checks, metrics, thresholds, rules, alerts and detail page
   (`/devices/<childId>`, with a link back to the parent). `ParentID`/`Node` change only through attach/detach and
@@ -362,7 +367,8 @@ an agent belongs to a node (`Node` = PVE node name).
 - Deleting a parent detaches its agents (they become standalone again; the event says so); deleting an attached
   agent just deletes it.
 - Suggestions (unattached agent): parents whose Proxmox node name/IP, host or IPs match the agent hostname
-  (case-insensitive short name) or IPs.
+  (case-insensitive short name) or IPs. An unattached SNMP or net device without children: attachable devices of
+  another type (not agent, SNMP, net) with the same host that are not attached themselves.
 - Registration with `AgentRegister.DeviceID` (from `pk95agent install --device ID [--node NODE]`): the device must
   exist and must not be an agent, a node must be a known node of a Proxmox parent (else German error, HTTP 400).
   The new or re-registered (same AgentID) agent device gets ParentID/Node; Node defaults for Proxmox parents to the

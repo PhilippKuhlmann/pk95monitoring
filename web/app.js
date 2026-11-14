@@ -194,7 +194,7 @@ const STATES = { ok: ["OK", "green"], warn: ["Warnung", "amber"], crit: ["Kritis
 const SDOT = { ok: "ok", warn: "warning", crit: "error", unknown: "", maintenance: "blue", disabled: "" };
 const RANK = { ok: 0, disabled: 0, maintenance: 0, unknown: 1, warn: 2, crit: 3 };
 // attTag: badge of a device with attached agents (DeviceRow.attached) in lists.
-const attTag = (d) => (int(d.attached) > 0 ? ` <span class="tag att-tag" title="Zugeordnete Agents ergänzen dieses Gerät">+${int(d.attached)} ${int(d.attached) === 1 ? "Agent" : "Agents"}</span>` : "");
+const attTag = (d) => (int(d.attached) > 0 ? ` <span class="tag att-tag" title="Angehängte Agents oder Geräte ergänzen dieses Gerät">+${int(d.attached)} angehängt</span>` : "");
 const statePill = (s, dot = true) => { const [l, t] = STATES[s] || STATES.unknown; return pill(l, t, dot); };
 const sevPill = (s) => (s === "crit" ? pill("Kritisch", "rose") : pill("Warnung", "amber"));
 const OS_LABELS = { linux: "Linux", windows: "Windows", darwin: "macOS" };
@@ -1107,7 +1107,7 @@ PAGES["/devices"] = async (el, token) => {
 async function deleteDevice(d, done) {
   if (!d) return;
   if (await confirmDialog({ title: `${d.name} löschen?`, text: "Das Gerät, seine Messwerte und seine Alarme werden gelöscht. Das lässt sich nicht rückgängig machen." + (d.type === "agent" ? " Der Agent auf dem Server meldet sich danach nicht mehr an – deinstalliere ihn dort mit <code>pk95agent uninstall</code>." : "") +
-    (d.attached > 0 ? ` ${d.attached === 1 ? "Der zugeordnete Agent bleibt" : `Die ${int(d.attached)} zugeordneten Agents bleiben`} als eigenes Gerät erhalten.` : ""), button: "Löschen" }))
+    (d.attached > 0 ? ` ${d.attached === 1 ? "Das angehängte Gerät bleibt" : `Die ${int(d.attached)} angehängten Geräte bleiben`} als eigenes Gerät erhalten.` : ""), button: "Löschen" }))
     await run(null, async () => { await DEL(`/api/devices/${enc(d.id)}`); state.ovAt = 0; if (done) await done(); }, `${d.name} gelöscht.`);
 }
 
@@ -1739,16 +1739,17 @@ PAGES["/devices/:id"] = async (el, token) => {
       dv.group ? esc(dv.group) : "",
       dv.type === "agent" && ag.platform ? esc([ag.platform, ag.platform_version].filter(Boolean).join(" ")) : "",
       `letzter Kontakt <span title="${esc(fmtTime(st.last_poll, true))}">${esc(fmtAgo(st.last_poll))}</span>`,
-      att.length ? `${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : "",
+      att.length ? `${att.length} angehängt` : "",
       (data.windows || []).length ? `<a href="/maintenance" data-go title="${esc(data.windows.map((w) => w.name + ": " + w.schedule).join("\n"))}">${icon("wrench", "ic-inline")}${data.windows.length === 1 ? esc(data.windows[0].name) : `${data.windows.length} Wartungsfenster`}${data.windows[0].next ? `, nächstes ${esc(fmtTime(data.windows[0].next))}` : ""}</a>` : "",
     ].filter(Boolean).join(" · ");
     const mt = dv.maintenance && dv.maintenance.until > nowSec();
     let notes = "";
-    if (par) notes += callout("", `Gehört zu ${par.name}`, `Dieser Agent ergänzt <a href="/devices/${enc(par.id)}" data-go>${esc(par.name)}</a>${dv.node ? ` als Host <b>${esc(dv.node)}</b>` : ""} und wird dort mit angezeigt. Checks, Werte, Schwellwerte und Alarme bleiben die eigenen; Alarme heißen „${esc(par.name)} / ${esc(attLabel(dv))}“.`,
+    if (par) notes += callout("", `Gehört zu ${par.name}`, `${dv.type === "agent" ? "Dieser Agent" : "Dieses Gerät"} ergänzt <a href="/devices/${enc(par.id)}" data-go>${esc(par.name)}</a>${dv.node ? ` als Host <b>${esc(dv.node)}</b>` : ""} und wird dort mit angezeigt. Checks, Werte, Schwellwerte und Alarme bleiben die eigenen; Alarme heißen „${esc(par.name)} / ${esc(attLabel(dv))}“.`,
       `<a class="btn gray sm" href="/devices/${enc(par.id)}" data-go>${icon("back")} Zu ${esc(par.name)}</a><button class="btn gray sm" type="button" data-detach>${icon("eject")} Lösen</button>`);
-    else if (dv.type === "agent") (data.suggest || []).slice(0, 3).forEach((g, i) => {
-      notes += callout("", `Gehört dieser Server zu ${g.name}${g.node ? ` (Knoten ${g.node})` : ""}?`,
-        `Hostname oder IP-Adressen passen zu <b>${esc(g.name)}</b> (${esc(TYPE_LABELS[g.type] || g.type)}). Zugeordnet erscheint der Agent dort als Teil des Geräts – mit seinen eigenen Checks, Werten und Alarmen.`,
+    else (data.suggest || []).slice(0, 3).forEach((g, i) => {
+      const agent = dv.type === "agent";
+      notes += callout("", `Gehört ${agent ? "dieser Server" : "dieses Gerät"} zu ${g.name}${g.node ? ` (Knoten ${g.node})` : ""}?`,
+        `${agent ? "Hostname oder IP-Adressen passen" : "Die Adresse passt"} zu <b>${esc(g.name)}</b> (${esc(TYPE_LABELS[g.type] || g.type)}). Zugeordnet erscheint ${agent ? "der Agent" : "dieses Gerät"} dort als Teil des Geräts – mit eigenen Checks, Werten und Alarmen; in den Listen steht nur noch ${esc(g.name)}.`,
         `<button class="btn sm" type="button" data-suggest="${i}">${icon("link")} Zuordnen</button>`);
     });
     if (mt) notes += callout("", `Wartung bis ${fmtTime(dv.maintenance.until, true)}`, (dv.maintenance.note ? esc(dv.maintenance.note) + " – " : "") + "Alarme und Benachrichtigungen sind bis dahin stumm, die Werte werden weiter aufgezeichnet.", `<button class="btn gray sm" type="button" data-maint-end>${icon("stop")} Wartung beenden</button>`);
@@ -1758,7 +1759,7 @@ PAGES["/devices/:id"] = async (el, token) => {
     if (dv.type === "agent" && !st.last_poll) notes += callout("", "Wartet auf den Agent", "Der Agent hat noch keinen Bericht geschickt. Läuft der Dienst <code>pk95agent</code> auf dem Server?");
     head.innerHTML = pageHead(`${esc(dv.name)} ${statePill(s)}`, sub,
       `<button class="btn gray" type="button" data-poll ${dv.enabled === false ? "disabled" : ""}>${icon("refresh")} Jetzt prüfen</button>
-       ${dv.type !== "agent" && dv.type !== "m365" ? `<button class="btn gray" type="button" data-attach>${icon("desktop")} Agent hinzufügen</button>` : ""}
+       ${dv.type !== "agent" && dv.type !== "m365" && !par ? `<button class="btn gray" type="button" data-attach>${icon("link")} Anhängen</button>` : ""}
        <button class="btn gray" type="button" data-maint>${icon("wrench")} Wartung</button>
        <button class="btn gray" type="button" data-edit>${icon("pencil")} Bearbeiten</button>
        <button class="ib red" type="button" data-del title="Löschen" aria-label="Gerät löschen">${icon("trash")}</button>`, par ? [`/devices/${enc(par.id)}`, par.name] : ["/devices", "Geräte"]) + notes;
@@ -1778,7 +1779,7 @@ PAGES["/devices/:id"] = async (el, token) => {
     if (ab) ab.onclick = () => attachDialog(data.device, view(), reload);
     const db = qs("[data-detach]", head);
     if (db) db.onclick = async () => {
-      if (!(await confirmDialog({ title: `${dv.name} von ${par.name} lösen?`, text: "Der Agent ist danach wieder ein eigenes Gerät in der Liste. Seine Werte, Einstellungen und Alarme bleiben erhalten.", button: "Lösen", tone: "", ic: "eject" }))) return;
+      if (!(await confirmDialog({ title: `${dv.name} von ${par.name} lösen?`, text: `${dv.type === "agent" ? "Der Agent" : "Das Gerät"} ist danach wieder ein eigenes Gerät in der Liste. Werte, Einstellungen und Alarme bleiben erhalten.`, button: "Lösen", tone: "", ic: "eject" }))) return;
       run(db, async () => { await POST(`/api/devices/${enc(id)}/detach`); seriesCache.clear(); await reload(); }, `${dv.name} ist wieder ein eigenes Gerät.`);
     };
     qsa("[data-suggest]", head).forEach((b) => b.onclick = () => {
@@ -2023,26 +2024,43 @@ function maintenanceDialog(dv, done) {
 function attachDialog(dv, st, done) {
   const nodes = (st.checks || []).filter((c) => c.key.startsWith("pve:node:")).map((c) => c.key.slice("pve:node:".length)).sort((a, b) => a.localeCompare(b, "de", { numeric: true }));
   const withNode = dv.type === "proxmox" && nodes.length > 0;
-  let free = null, cmdSeq = 0;
+  let free = null, cmdSeq = 0, devs = null;
   const d = formDialog({
-    title: `Agent hinzufügen: ${dv.name}`, ic: "desktop", button: "Zuordnen", cls: "wide",
-    text: "Der Agent ergänzt die Daten dieses Geräts um Werte aus dem Betriebssystem – CPU, Arbeitsspeicher, Platten, Dienste und Updates. Er behält eigene Checks, Schwellwerte und Alarme und wird hier mit angezeigt.",
+    title: `An ${dv.name} anhängen`, ic: "link", button: "Zuordnen", cls: "wide",
+    text: "Ein Agent oder ein anderes Gerät ergänzt die Daten dieses Geräts – z. B. ein Agent die Werte aus dem Betriebssystem oder die SNMP-Abfrage einer UniFi-Konsole deren API-Daten. Es behält eigene Checks, Schwellwerte und Alarme, steht in den Listen aber nur noch hier.",
     fields: [
-      { name: "mode", type: "radio", value: "new", options: [["new", "Neu installieren", "Befehl auf dem Server ausführen – der Agent meldet sich direkt für dieses Gerät an."], ["existing", "Vorhandenen Agent zuordnen", "Ein schon angemeldeter Agent, der noch zu keinem Gerät gehört."]] },
+      { name: "mode", type: "radio", value: "new", options: [["new", "Agent neu installieren", "Befehl auf dem Server ausführen – der Agent meldet sich direkt für dieses Gerät an."], ["existing", "Vorhandenen Agent zuordnen", "Ein schon angemeldeter Agent, der noch zu keinem Gerät gehört."],
+        ["device", "Anderes Gerät anhängen", "Ein Gerät, das dasselbe auf anderem Weg überwacht – z. B. per SNMP."]] },
       ...(withNode ? [{ name: "node", label: "Knoten", type: "select", value: "", options: [["", "Automatisch"], ...nodes.map((n) => [n, n])], hint: "Auf welchem Proxmox-Knoten läuft der Agent? Automatisch: der Knoten mit dem Hostnamen des Servers." }] : []),
       { name: "agent_id", label: "Agent", type: "select", options: [["", "Lade …"]], wide: true },
+      { name: "device_id", label: "Gerät", type: "select", options: [["", "Lade …"]], wide: true, hint: "Nur Geräte, an denen selbst nichts hängt." },
     ],
     extra: `<div class="att-cmds" data-att-cmds aria-live="polite"></div>`,
     onMount: (dl) => {
       const form = qs("form", dl), sb = qs('button[type="submit"]', dl), cmds = qs("[data-att-cmds]", dl);
       const nodeSel = qs('[name="node"]', dl), agSel = qs('[name="agent_id"]', dl);
       const mode = () => formValues(form).mode || "new";
+      const loadDevs = async () => {
+        if (devs !== null) return;
+        devs = [];
+        try {
+          const r = await GET("/api/devices");
+          devs = (r.devices || []).filter((x) => x.id !== dv.id && x.type !== "agent" && x.type !== "m365" && !int(x.attached)).sort(byName);
+        } catch (e) { /* the list stays empty */ }
+        const sel = qs('[name="device_id"]', dl);
+        sel.innerHTML = devs.length ? [`<option value="">Bitte wählen …</option>`, ...devs.map((x) => `<option value="${esc(x.id)}">${esc(x.name)} · ${esc(TYPE_LABELS[x.type] || x.type)}${x.host ? ` (${esc(x.host)})` : ""}</option>`)].join("")
+          : `<option value="">Kein passendes Gerät</option>`;
+        show();
+      };
       const show = () => {
-        const ex = mode() === "existing";
+        const m = mode(), ex = m === "existing", dvm = m === "device";
         qs('[data-field="agent_id"]', dl).hidden = !ex;
-        cmds.hidden = ex;
-        sb.textContent = ex ? "Zuordnen" : "Fertig";
-        sb.disabled = ex && free !== null && !free.length;
+        qs('[data-field="device_id"]', dl).hidden = !dvm;
+        if (nodeSel) qs('[data-field="node"]', dl).hidden = dvm;
+        cmds.hidden = ex || dvm;
+        sb.textContent = ex || dvm ? "Zuordnen" : "Fertig";
+        sb.disabled = (ex && free !== null && !free.length) || (dvm && devs !== null && !devs.length);
+        if (dvm) loadDevs();
         if (nodeSel) {
           const opt0 = qs('option[value=""]', nodeSel);
           if (opt0) opt0.textContent = ex ? "Kein bestimmter Knoten" : "Automatisch";
@@ -2092,6 +2110,16 @@ function attachDialog(dv, st, done) {
       qs('[name="mode"]:checked', dl).focus();
     },
     submit: async (v) => {
+      if (v.mode === "device") {
+        if (!v.device_id) throw Object.assign(new Error("Bitte ein Gerät auswählen."), { fields: { device_id: "Bitte ein Gerät auswählen." } });
+        const x = (devs || []).find((y) => y.id === v.device_id);
+        try { await POST(`/api/devices/${enc(dv.id)}/attach`, { agent_id: v.device_id, node: "" }); }
+        catch (e) { if (e.fields && e.fields.agent_id) e.fields.device_id = e.fields.agent_id; throw e; }
+        seriesCache.clear(); state.ovAt = 0;
+        toast(`${x ? x.name : "Das Gerät"} gehört jetzt zu ${dv.name}.`);
+        await done();
+        return;
+      }
       if (v.mode !== "existing") return; // "Fertig": the agent attaches itself when it registers
       if (!v.agent_id) throw Object.assign(new Error("Bitte einen Agent auswählen."), { fields: { agent_id: "Bitte einen Agent auswählen." } });
       const a = (free || []).find((x) => x.id === v.agent_id);
@@ -2814,7 +2842,7 @@ function ckSummary(st, att, view) {
   const acked = checks.filter((c) => c.acked).length;
   const quiet = checks.filter((c) => c.mode === "quiet").length, fresh = checks.filter(isNew).length, gone = (st.vanished || []).length;
   const hidden = (st.hidden || []).filter((h) => !h.pending).length;
-  return `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${acked ? ` · ${acked} quittiert` : ""}${fresh ? ` · ${fresh} neu` : ""}${gone ? ` · ${gone} verschwunden` : ""}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : ""}</span>${view === "cards" ? `<span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span>` : ""}${viewSeg(view)}</div>`;
+  return `<div class="ck-summary">${Object.entries(counts).filter(([, n]) => n).map(([k, n]) => `<span class="flex" style="gap:6px"><span class="sdot ${SDOT[k]}"></span>${n} ${esc(k === "warn" && n !== 1 ? "Warnungen" : STATES[k][0])}</span>`).join("")}<span class="muted">· ${checks.length} ${checks.length === 1 ? "Check" : "Checks"}${acked ? ` · ${acked} quittiert` : ""}${fresh ? ` · ${fresh} neu` : ""}${gone ? ` · ${gone} verschwunden` : ""}${quiet ? ` · ${quiet} nur Anzeige` : ""}${hidden ? ` · ${hidden} ausgeblendet` : ""}${att.length ? ` · ${att.length} angehängt` : ""}</span>${view === "cards" ? `<span class="muted ck-hint">Für den Verlauf einen Check anklicken.</span>` : ""}${viewSeg(view)}</div>`;
 }
 const dvNotes = (dv) => (dv.notes ? `<div class="panel tight dv-notes"><span class="muted small">Notizen</span><div>${esc(dv.notes)}</div></div>` : "");
 

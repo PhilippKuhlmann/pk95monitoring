@@ -863,7 +863,7 @@ func (c *Core) DeleteDevice(id string) error {
 	c.closeDeviceAlerts(id, now)
 	delete(c.devices, id)
 	delete(c.rt, id)
-	freed := c.detachChildren(id, now) // its attached agents become standalone devices
+	freed := c.detachChildren(id, now) // its attached devices become standalone devices
 	c.mu.Unlock()
 	c.forgetCollector(d)
 	// Wait for writes that saw the device before it was removed (metrics of a running poll,
@@ -879,7 +879,7 @@ func (c *Core) DeleteDevice(id string) error {
 	}
 	body := fmt.Sprintf("%s (%s) wird nicht mehr überwacht.", d.Name, typeLabel(d.Type))
 	if len(freed) > 0 {
-		body += " Angehängte Agents sind jetzt eigenständige Geräte: " + strings.Join(freed, ", ") + "."
+		body += " Angehängte Geräte sind jetzt eigenständig: " + strings.Join(freed, ", ") + "."
 	}
 	c.Event("info", d.Name, "Gerät gelöscht", body, nil, false)
 	return nil

@@ -63,7 +63,8 @@ func (s *Server) getDevice(w http.ResponseWriter, r *http.Request) {
 			list = append(list, attachedOut{Device: redactDevice(a), Status: s.C.Status(a.ID)})
 		}
 		out["attached"] = list
-	} else if p, err := s.C.Device(d.ParentID); d.ParentID != "" && err == nil && p.Type != model.TypeAgent {
+	}
+	if p, err := s.C.Device(d.ParentID); d.ParentID != "" && err == nil && p.Type != model.TypeAgent {
 		out["parent"] = parentOut{ID: p.ID, Name: p.Name, Type: p.Type}
 	} else {
 		out["suggest"] = s.C.Suggest(id)
