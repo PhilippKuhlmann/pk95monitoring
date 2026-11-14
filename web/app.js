@@ -284,6 +284,7 @@ const METRIC_LABELS = {
   "fan.rpm": ["Lüfter", "rpm"],
   "temp": ["Temperatur", "°C"],
   "power.watts": ["Leistungsaufnahme", "W"],
+  "forecast.days": ["Voll in", "d"],
   "printer.toner": ["Toner", "%"],
   "printer.pages": ["Gedruckte Seiten", ""],
   "custom": ["Eigener Wert", ""],
@@ -2186,6 +2187,13 @@ function bindRowLinks(root) {
 const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
+// fullIn: "voll in 23 Tagen" from the storage forecast of a check ("" without one).
+function fullIn(c) {
+  const d = mval(c, "forecast.days");
+  if (!isNum(d)) return "";
+  const n = Math.round(d);
+  return n < 1 ? "voll in weniger als einem Tag" : `voll in ${n} ${n === 1 ? "Tag" : "Tagen"}`;
+}
 function tableKind(key) {
   if (key.startsWith("pve:node:")) return "node";
   if (/^pve:(vm|ct):/.test(key) || key.startsWith("hv:vm:")) return "guest";
@@ -2368,7 +2376,7 @@ function cardValue(c) {
     return has("disk.temp") ? { text: fmtVal(v("disk.temp"), "°C"), sub, spark: sp("disk.temp") } : { text: `Verschleiß ${fmtPct(v("disk.wearout"))}`, sub, bar: v("disk.wearout"), spark: sp("disk.wearout") };
   }
   if (has("zfs.usage")) {
-    const sub = [has("zfs.frag") ? `Fragmentierung ${fmtPct(v("zfs.frag"))}` : "", has("zfs.scrub_age") ? `Scrub vor ${fmtNum(v("zfs.scrub_age"), 0)} Tagen` : "", v("zfs.errors") > 0 ? `${fmtNum(v("zfs.errors"), 0)} Fehler` : ""].filter(Boolean).join(" · ");
+    const sub = [fullIn(c), has("zfs.frag") ? `Fragmentierung ${fmtPct(v("zfs.frag"))}` : "", has("zfs.scrub_age") ? `Scrub vor ${fmtNum(v("zfs.scrub_age"), 0)} Tagen` : "", v("zfs.errors") > 0 ? `${fmtNum(v("zfs.errors"), 0)} Fehler` : ""].filter(Boolean).join(" · ");
     return { text: fmtPct(v("zfs.usage")), sub, bar: v("zfs.usage"), spark: sp("zfs.usage") };
   }
   if (has("repl.age")) return { word: true, text: cap1(String(c.msg || "").split(",")[0]), sub: fa.Zeitplan ? `Zeitplan ${fa.Zeitplan}` : "" };
@@ -2379,7 +2387,8 @@ function cardValue(c) {
   for (const n of ["disk", "storage"]) {
     if (!has(n + ".usage")) continue;
     const used = v(n + ".used"), tot = v(n + ".total");
-    return { text: fmtPct(v(n + ".usage")), sub: isNum(used) && tot > 0 ? `${fmtBytes(Math.max(0, tot - used))} frei von ${fmtBytes(tot)}` : "", bar: v(n + ".usage"), spark: sp(n + ".usage") };
+    const sub = [isNum(used) && tot > 0 ? `${fmtBytes(Math.max(0, tot - used))} frei von ${fmtBytes(tot)}` : "", fullIn(c)].filter(Boolean).join(" · ");
+    return { text: fmtPct(v(n + ".usage")), sub, bar: v(n + ".usage"), spark: sp(n + ".usage") };
   }
   if (has("guest.cpu")) return { text: fmtPct(v("guest.cpu")), sub: has("guest.mem") ? `Arbeitsspeicher ${fmtPct(v("guest.mem"))}` : "", spark: sp("guest.cpu") };
   if (has("printer.toner")) return { text: fmtPct(v("printer.toner")), sub: "Füllstand", bar: v("printer.toner"), low: true, spark: sp("printer.toner") };
@@ -2562,7 +2571,7 @@ const KIND_VIEWS = {
     return `<tr class="row-link" ${rowLink(dv.id, c)}>${td("Zustand", ckPill(c))}
       ${td("Speicher", `${ckLink(dv.id, c, `<b>${esc(c.name)}</b>`)}${pendingTag(c)}${reasonText(c) || isQuiet(c) && MUTED_TITLE[c.muted] ? `<div class="t-sub">${reasonHTML(c)}</div>` : ""}`)}
       ${td("Belegung", (u ? pctBar(u.v) : '<span class="muted">—</span>') + (used && tot ? `<div class="t-sub">${fmtBytes(used.v)} von ${fmtBytes(tot.v)}</div>` : ""), "bar-cell")}
-      ${td("Frei", used && tot ? esc(fmtBytes(Math.max(0, tot.v - used.v))) : "—", "num small")}${u ? sparkTd(dv.id, c, u.n) : `<td class="spark-cell"></td>`}${actTd(c)}</tr>`;
+      ${td("Frei", (used && tot ? esc(fmtBytes(Math.max(0, tot.v - used.v))) : "—") + (fullIn(c) ? `<div class="t-sub ${mval(c, "forecast.days") < 30 ? "warn-ink" : ""}">${esc(fullIn(c))}</div>` : ""), "num small")}${u ? sparkTd(dv.id, c, u.n) : `<td class="spark-cell"></td>`}${actTd(c)}</tr>`;
   })),
   port: (list, dv) => portView(list, dv),
   toner: (list, dv) => `<div class="toner-list">${[...list].sort(stateFirst).map((c) => { const t = mval(c, "printer.toner"); return `<div class="toner row-link" ${rowLink(dv.id, c)}><a class="toner-name row-main" href="${checkPath(dv.id, c.key)}" data-go data-fk="r:${esc(c.key)}"><span class="toner-dot ${esc(tonerColor(c.name))}"></span>${esc(c.name.replace(/^Toner\s+/, ""))}</a>${levelBar(t, "", isQuiet(c) ? "" : c.state)}<span${isQuiet(c) && MUTED_TITLE[c.muted] ? ` class="ck-muted" title="${MUTED_TITLE[c.muted]}"` : ""}>${ckPill(c, false)}</span><span>${modeBtn(c)}</span></div>`; }).join("")}</div>`,
@@ -3541,6 +3550,7 @@ const EXPLAIN = {
   "zfs.errors": { what: "Lese-, Schreib- und Prüfsummenfehler der Platten im Pool (aus `zpool status`).",
     why: "ZFS hat beschädigte oder nicht lesbare Daten entdeckt. Mit Redundanz repariert ZFS sie selbst – die Ursache (Platte, Kabel, Controller oder Arbeitsspeicher) bleibt aber bestehen.",
     todo: ["Auf dem Server `zpool status -v <pool>` ansehen: Welche Platte zählt Fehler?", "SMART-Werte dieser Platte und das Kabel prüfen.", "Nach der Behebung `zpool clear <pool>` ausführen und einen Scrub starten."] },
+  "forecast.days": { what: "In wie vielen Tagen der Speicher voll ist, wenn er so weiterwächst wie in den letzten 14 Tagen (Trend der Belegung; nach einer Bereinigung zählt nur die Zeit danach).", why: "Die Warnung bei 85 % kommt bei schnell wachsenden Datenlaufwerken oft zu spät. Die Prognose meldet sich einen Monat vorher (Warnung unter 30, kritisch unter 7 Tagen).", todo: ["Prüfen, was wächst (Protokolle, Sicherungen, Papierkorb, Schattenkopien, Snapshots).", "Aufräumen oder den Speicher rechtzeitig vergrößern.", "Wächst der Speicher planmäßig, die Grenzen unter Einstellungen → Schwellwerte (Messwert forecast.days) am Gerät anpassen."] },
   "zfs.usage": { what: "Die Belegung des ZFS-Pools.",
     why: "ZFS wird ab etwa 80 % Belegung deutlich langsamer, weil es schwerer freie Blöcke findet. Bei 100 % können VMs hängen bleiben, und selbst das Löschen wird mühsam.",
     todo: ["Alte Snapshots und Sicherungen löschen.", "Nicht mehr genutzte VM-Festplatten entfernen.", "Den Pool erweitern."] },
@@ -4335,31 +4345,32 @@ PAGES["/expiry"] = async (el, token) => {
   const soon = (r, lim) => days(r) != null && days(r) < lim;
   const stat = (label, v, sub, cls) => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${v}</div><div class="t-sub">${sub}</div></div>`;
   const expired = rows.filter((r) => soon(r, 0)).length, in30 = rows.filter((r) => soon(r, 30) && !soon(r, 0)).length;
-  const certs = rows.filter((r) => r.kind === "cert").length, doms = rows.filter((r) => r.kind === "domain").length;
+  const certs = rows.filter((r) => r.kind === "cert").length, doms = rows.filter((r) => r.kind === "domain").length, full = rows.filter((r) => r.kind === "storage").length;
   const left = (r) => {
     const d = days(r);
     if (d == null) return '<span class="muted">kein Datum</span>';
-    const txt = d < 0 ? `seit ${-d} ${d === -1 ? "Tag" : "Tagen"} abgelaufen` : d === 0 ? "läuft heute ab" : `noch ${d} ${d === 1 ? "Tag" : "Tage"}`;
+    const txt = r.kind === "storage" ? (d < 1 ? "voll in unter einem Tag" : `voll in ${d} ${d === 1 ? "Tag" : "Tagen"}`) :
+      d < 0 ? `seit ${-d} ${d === -1 ? "Tag" : "Tagen"} abgelaufen` : d === 0 ? "läuft heute ab" : `noch ${d} ${d === 1 ? "Tag" : "Tage"}`;
     return `<span class="${d < 14 ? "bad" : d < 30 ? "warn-ink" : ""}">${txt}</span>`;
   };
-  el.innerHTML = pageHead("Ablaufdaten", "Zertifikate und Domains aller Geräte – was als Nächstes abläuft, steht oben.") +
+  el.innerHTML = pageHead("Ablaufdaten", "Zertifikate, Domains und Speicher, der bald voll ist – was als Nächstes abläuft, steht oben.") +
     `<div class="rp-stats">
       ${stat("Abgelaufen", expired, "Zertifikate und Domains", expired ? "rp-bad" : "rp-ok")}
-      ${stat("In den nächsten 30 Tagen", in30, "rechtzeitig verlängern", in30 ? "rp-warn" : "rp-ok")}
-      ${stat("Zertifikate", certs, "aus HTTPS- und TLS-Checks", "")}
-      ${stat("Domains", doms, "aus Domain-Checks", "")}
+      ${stat("In den nächsten 30 Tagen", in30, "verlängern oder Platz schaffen", in30 ? "rp-warn" : "rp-ok")}
+      ${stat("Zertifikate und Domains", certs + doms, `${certs} Zertifikate · ${doms} Domains`, "")}
+      ${stat("Speicher läuft voll", full, "in den nächsten 90 Tagen", full ? "rp-warn" : "rp-ok")}
     </div>` +
-    (rows.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp exp-table"><thead><tr><th>Zustand</th><th>Was</th><th>Gerät</th><th>Gültig bis</th><th>Restlaufzeit</th><th>Aussteller / Registrar</th></tr></thead><tbody>
+    (rows.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp exp-table"><thead><tr><th>Zustand</th><th>Was</th><th>Gerät</th><th>Gültig bis</th><th>Restlaufzeit</th><th>Details</th></tr></thead><tbody>
       ${rows.map((r) => `<tr class="dt-row" data-href="${checkPath(r.device_id, r.check_key)}">
         <td data-l="Zustand">${r.acked ? pill("Quittiert", "green", true) : statePill(r.state)}</td>
-        <td data-l="Was"><a class="t-main" href="${checkPath(r.device_id, r.check_key)}" data-go>${icon(r.kind === "domain" ? "globe" : "lock", "ic-inline")}${esc(r.name)}</a>${r.state !== "ok" ? `<div class="t-sub">${esc(r.message)}</div>` : ""}</td>
+        <td data-l="Was"><a class="t-main" href="${checkPath(r.device_id, r.check_key)}" data-go>${icon(r.kind === "domain" ? "globe" : r.kind === "storage" ? "database" : "lock", "ic-inline")}${esc(r.name)}</a>${r.state !== "ok" ? `<div class="t-sub">${esc(r.message)}</div>` : ""}</td>
         <td data-l="Gerät">${esc(r.device)}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
-        <td data-l="Gültig bis" class="nowrap">${r.until ? esc(r.until.slice(0, 10)) : "—"}</td>
+        <td data-l="${r.kind === "storage" ? "Voll am" : "Gültig bis"}" class="nowrap">${r.until ? esc(r.until.slice(0, 10)) : "—"}${r.kind === "storage" ? '<div class="t-sub">Prognose</div>' : ""}</td>
         <td data-l="Restlaufzeit" class="nowrap">${left(r)}</td>
-        <td data-l="Aussteller / Registrar" class="small">${esc(r.detail || "—")}</td></tr>`).join("")}
+        <td data-l="Details" class="small">${esc(r.detail || "—")}</td></tr>`).join("")}
       </tbody></table></div></div>
-      <p class="muted small" style="margin:0 12px">Zertifikate prüfen HTTP(S)- und TLS-Checks, Domains der Check „Domain-Ablauf“ (unter Gerät → Bearbeiten → Netzwerk-Checks). Warnung ab 21 bzw. 30 Tagen, kritisch ab 7 bzw. 14 Tagen – änderbar unter Einstellungen → Schwellwerte.</p>`
-      : `<div class="panel">${empty("Noch keine Zertifikate oder Domains", "Lege an einem Gerät einen Netzwerk-Check an: „HTTP(S)“ oder „TLS-Zertifikat“ für Zertifikate, „Domain-Ablauf“ für Domains.", "", "calendar")}</div>`);
+      <p class="muted small" style="margin:0 12px">Zertifikate prüfen HTTP(S)- und TLS-Checks, Domains der Check „Domain-Ablauf“ (unter Gerät → Bearbeiten → Netzwerk-Checks). Warnung ab 21 bzw. 30 Tagen, kritisch ab 7 bzw. 14 Tagen. Speicher: Prognose aus dem Trend der letzten 14 Tage (Festplatten, Proxmox-Speicher, ZFS, Repositories), Warnung unter 30, kritisch unter 7 Tagen. Alle Grenzen änderbar unter Einstellungen → Schwellwerte.</p>`
+      : `<div class="panel">${empty("Nichts läuft ab", "Zertifikate und Domains erscheinen hier, sobald ein Gerät einen Netzwerk-Check „HTTP(S)“, „TLS-Zertifikat“ oder „Domain-Ablauf“ hat. Speicher erscheint, wenn er nach dem Trend der letzten 14 Tage in weniger als 90 Tagen voll ist.", "", "calendar")}</div>`);
   bindRowLinks(el);
 };
 

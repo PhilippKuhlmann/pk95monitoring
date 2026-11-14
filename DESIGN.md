@@ -242,7 +242,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    Proxmox health defaults: `cpu.iowait` 10/25 % (5×), `disk.temp` 60/70 °C (2×), `disk.wearout` 90/98 %,
    `disk.spare` below 20/10 %, `disk.pending` 1/10, `disk.reallocated`, `disk.uncorrectable`, `disk.media_errors`
    warn from 1, `zfs.usage` 80/90 %, `zfs.errors` warn from 1, `zfs.scrub_age` warn from 35 days.
-   Hyper-V: `checkpoint.age` 7/30 days.
+   Hyper-V: `checkpoint.age` 7/30 days. Storage forecast: `forecast.days` below 30/7 days.
 3. Threshold state needs `Count` consecutive bad values (`CheckStatus.Pending`), going back to ok
    is immediate. Native states (service stopped …) are immediate.
 4. Effective check state = worst(native, thresholds). `CheckStatus.Reason` e.g.
@@ -455,6 +455,19 @@ Audit on `/` (user and token, privilege separation). TLS: pinned SHA-256 fingerp
 CAs. Version or datastore list failing = reach crit with a German message (401 token rejected, 403 role missing,
 certificate, port 8007). Changing or deleting the device drops the cached client and snapshots.
 
+## Storage forecast (`core/forecast.go`)
+
+`forecastTick` (Run loop, every hour, first run at the first silence tick) reads the series `disk.usage`,
+`storage.usage` and `zfs.usage` with a check key and a sample in the last day (`store.LatestSeries`) and their hourly
+averages of the last 14 days (`store.Query`, chunks of 200 series). `growthRate`: points after the last drop of more
+than 3 percentage points; at least 24 points spanning 2 days; least squares slope in points per day; below 0.05 =
+no forecast. The rates are kept in `Core.growth` (memory only, guarded by `mu`). `evaluate` calls `withForecast`
+first: for every fill level metric with a rate, `forecast.days` = (100 − current value) / rate (≤ 365, rounded to
+0.1, same instance, unit d) is added to the check status (not stored as samples) with the facts "Voll voraussichtlich"
+(date) and "Zuwachs" ("1,2 % pro Tag"; prefixed with the instance when a check has several fill levels). Checks that
+already have the fact "Voll voraussichtlich" (PBS datastores) are left alone. Default threshold: below 30 warn,
+below 7 crit (label "Voll in"). The demo disk E: of fs01 grows 1.1 points per day from the demo start.
+
 ## Redfish (server hardware)
 
 Device type `redfish` – an ordinary device (device list, state, inventory). `RedfishConfig {port (443), username,
@@ -563,8 +576,10 @@ Authenticated:
   job_type, state, acked, mode, message (threshold reason first)}`; storages = `veeam:repo:*`, `pbs:ds:*` `{device_id, device,
   check_key, name, usage, used, total, state, message}`.
 - `GET /api/expiry` → `{rows:[ExpiryRow]}`: every check with `cert.days` or `domain.days` (and domain checks
-  without a date), soonest first – `{device_id, device, group, check_key, name, kind: cert|domain, days (null =
-  unknown), until, detail (issuer / registrar), state, acked, message}`.
+  without a date) and every check with `forecast.days` ≤ 90 (kind storage, the smallest one), soonest first –
+  `{device_id, device, group, check_key, name, kind: cert|domain|storage, days (null = unknown), until (storage:
+  fact "Voll voraussichtlich"), detail (issuer / registrar / "<usage> belegt · Zuwachs <rate> % pro Tag"), state,
+  acked, message}`.
 - `GET /api/update` → UpdateInfo `{current, latest, tag, available, notes, url, published, checked, error, auto_check,
   helper, helper_mode, phase (requested|running|done|failed), phase_tag, started, finished, log, can_install, reason,
   repo}`; `PUT /api/update {auto_check}`; `POST /api/update/check` (502 with the reason when GitHub fails);
@@ -816,8 +831,9 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   "Handlungsbedarf" (`pk95mon-bak-filter`) / "Alle", table of `GET /api/backups` and the backup targets with
   their fill level and the backup servers (Veeam and PBS; add/edit open the device dialog of their type); refreshes every minute.
   Nav "Sicherungen" after "Updates". Check pages of separate checks lead back to their page.
-- Page `/expiry` (nav "Ablaufdaten"): stat tiles and the `GET /api/expiry` table (certificates of HTTP(S)/TLS
-  checks and Proxmox nodes, domains), soonest first.
+- Page `/expiry` (nav "Ablaufdaten"): stat tiles (expired, next 30 days, certificates and domains, storage running
+  full) and the `GET /api/expiry` table (certificates of HTTP(S)/TLS checks and Proxmox nodes, domains, storage
+  forecasts "voll in N Tagen"), soonest first. Cards and the storage table show "voll in N Tagen" under the fill level.
 - Device list `/devices`: one compact row per device – state, name (+ attached agents) with address, type and
   group below and the first problem in one line (full text as tooltip), check counts with the last contact,
   CPU/RAM/disk bars, "Jetzt prüfen"; the whole row opens the device (edit and delete are on the device page).

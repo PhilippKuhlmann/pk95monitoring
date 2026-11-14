@@ -29,6 +29,7 @@ type simDisk struct {
 	mount, fs, dev string
 	total          float64 // bytes
 	pct, amp       float64 // usage in % and its daily swing
+	grow           float64 // percentage points per day since the demo started (storage forecast)
 }
 
 type simService struct {
@@ -60,6 +61,7 @@ type simAgent struct {
 	rules               []model.CheckRule // demo check rules (quiet / off)
 	parent, node        string            // attached to this demo device (and its node)
 	hyperV              []simVM           // windows: VMs of a Hyper-V host
+	ref                 int64             // demo start: growing disks are at pct then
 }
 
 // simVM is a demo Hyper-V VM; checkpoint and replication times are relative to t.
@@ -76,7 +78,7 @@ type simVM struct {
 func demoAgents(now time.Time) []*simAgent {
 	day := int64(86400)
 	t := now.Unix()
-	return []*simAgent{
+	list := []*simAgent{
 		{id: "demo-dc01", name: "dc01", group: groupServer, ip: "10.0.0.11", os: "windows",
 			platform: "Microsoft Windows Server 2022 Standard", ver: "10.0.20348 Build 20348", kernel: "10.0.20348 Build 20348",
 			cpuModel: "Intel(R) Xeon(R) Silver 4314 CPU @ 2.40GHz", cores: 4, threads: 4, memGB: 16,
@@ -93,7 +95,7 @@ func demoAgents(now time.Time) []*simAgent {
 			cpuModel: "Intel(R) Xeon(R) Silver 4314 CPU @ 2.40GHz", cores: 4, threads: 4, memGB: 8,
 			cpuBase: 9, cpuAmp: 6, memBase: 64, memAmp: 5,
 			disks: []simDisk{{mount: "C:", fs: "NTFS", total: 80 * gib, pct: 61, amp: 0.3},
-				{mount: "E:", fs: "NTFS", total: 2048 * gib, pct: 72, amp: 1.5}},
+				{mount: "E:", fs: "NTFS", total: 2048 * gib, pct: 72, amp: 1.5, grow: 1.1}},
 			iface: "Ethernet0", rxBase: 1.2e6, txBase: 2.8e6, services: []string{"Spooler"},
 			known: map[string]simService{"Spooler": {"Druckwarteschlange", false}, "LanmanServer": {"Server", true},
 				"W32Time": {"Windows-Zeitgeber", true}, "VeeamBackupSvc": {"Veeam Backup Service", true},
@@ -158,6 +160,10 @@ func demoAgents(now time.Time) []*simAgent {
 				{id: "6f1c2a8e-0005-4c55-9a1e-3b7d2f0a1105", name: "test-win11", state: "Off", autoStart: "Nothing", procs: 4, memGB: 8},
 			}},
 	}
+	for _, a := range list {
+		a.ref = t
+	}
+	return list
 }
 
 // hyperVReport is the Hyper-V state of a demo host at t (what hyperv.Script would print).
@@ -320,7 +326,7 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 	}
 
 	for i, d := range a.disks {
-		p := round2(clamp(d.pct+d.amp*a.wave(t, 4+float64(i)), 0, 100))
+		p := round2(clamp(d.pct+d.amp*a.wave(t, 4+float64(i))+d.grow*float64(t-a.ref)/86400, 0, 100))
 		used := math.Round(d.total * p / 100)
 		f := map[string]string{"Dateisystem": d.fs}
 		if d.dev != "" {

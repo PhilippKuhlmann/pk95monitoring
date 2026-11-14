@@ -66,6 +66,7 @@ var metricLabels = map[string][2]string{
 	"ups.output":         {"Ausgangsspannung", "V"},
 	"temp":               {"Temperatur", "°C"},
 	"power.watts":        {"Leistungsaufnahme", "W"},
+	"forecast.days":      {"Voll in", "d"},
 	"fan.rpm":            {"Lüfter", "rpm"},
 	"printer.toner":      {"Toner", "%"},
 	"printer.pages":      {"Gedruckte Seiten", ""},
@@ -219,6 +220,7 @@ func thresholdsOf(ch model.Check, lists ...[]model.Threshold) thrResult {
 // (Count consecutive bad values, back to ok immediately), then worst(native, thresholds),
 // then the check mode (a quiet check shows ok and keeps the bad state in Muted).
 func (c *Core) evaluate(d model.Device, rt *devState, prev map[string]model.CheckStatus, ch model.Check, now int64, global []model.Threshold) model.CheckStatus {
+	ch = c.withForecast(d.ID, ch, now)
 	native := ch.State
 	if model.Rank(native) == 1 || native == "" {
 		native = model.StateUnknown

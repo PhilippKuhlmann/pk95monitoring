@@ -31,7 +31,7 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
 - **Sicherungen:** letzte Sicherung jedes Proxmox-Gasts (auch auf PBS), Proxmox Backup Server direkt (Datastores,
   Verifizierung, Sicherungsgruppen, Sync-/Prune-/Verify-Jobs), Veeam Backup & Replication (Jobs, ausgefallene Läufe,
   Repositories) und eine eigene Seite mit allen Sicherungen.
-- **Übersichten:** Update-Stand aller Server, Systemprotokolle (Windows und Linux) mit Regeln und Ausnahmen, Ablaufdaten aller Zertifikate und Domains, Verfügbarkeitsberichte
+- **Übersichten:** Update-Stand aller Server, Systemprotokolle (Windows und Linux) mit Regeln und Ausnahmen, Ablaufdaten aller Zertifikate und Domains samt Speicherprognose („voll in 23 Tagen“), Verfügbarkeitsberichte
   (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,
   Hysterese, Quittieren und Wartung – spontan oder als wiederkehrendes Wartungsfenster für Geräte und Ordner
@@ -470,6 +470,17 @@ Eine Regel nennt einen Check-Schlüssel (`snmp:if:Gi1/0/1`) oder ein Muster mit 
 - **Switch:** Alle Ports überwachen, aber Ports dürfen offline gehen – das ist der Standard. Für Ports, deren
   Ausfall zählt, „Alarm bei Link-Ausfall“ in der SNMP-Konfiguration wählen; unwichtige Ports (z. B.
   `snmp:if:vlan*`) bei Bedarf ausblenden.
+
+## Speicherprognose
+
+Für jede Festplatte (Agent), jeden Proxmox-Speicher, ZFS-Pool und jedes Veeam-Repository berechnet der Server
+stündlich aus dem Verlauf der letzten 14 Tage, wie schnell der Speicher wächst, und daraus, **in wie vielen Tagen er
+voll ist** (Messwert `forecast.days`). Unter 30 Tagen gibt es eine Warnung, unter 7 Tagen einen kritischen Alarm –
+lange bevor die 85-%-Grenze greift. Eine Bereinigung (Belegung fällt um mehr als 3 Prozentpunkte) startet den Trend
+neu; gebraucht werden mindestens zwei Tage Verlauf danach. Stabiler oder schrumpfender Speicher und Prognosen über
+ein Jahr erscheinen nicht. Die Karte zeigt „voll in N Tagen“, die Fakten „Voll voraussichtlich“ und „Zuwachs“, die
+Seite **Ablaufdaten** listet allen Speicher, der in den nächsten 90 Tagen voll ist. Proxmox-Backup-Server-Datastores
+behalten ihre eigene Schätzung des Backup-Servers.
 
 ## Schwellwerte und Alarme
 

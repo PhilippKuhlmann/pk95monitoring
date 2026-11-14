@@ -196,6 +196,10 @@ type Core struct {
 	digests map[string]int64      // rule ID → end of the last summarised quiet time
 	// winActive is the start of the running occurrence per window (for the begin/end events).
 	winActive map[string]int64
+	// growth is the storage growth in percentage points per day by forecastKey (forecast.go).
+	growth    map[string]float64
+	fcNext    time.Time   // next forecast run (Run goroutine only)
+	fcRunning atomic.Bool // a forecast run is in progress
 
 	// pmu serializes the store writes of device data that happen outside mu (statuses,
 	// metrics, LastSeen) against DeleteDevice, so a deleted device leaves nothing behind.

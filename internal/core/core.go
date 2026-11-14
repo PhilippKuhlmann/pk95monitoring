@@ -207,6 +207,7 @@ func (c *Core) Run(ctx context.Context) {
 			c.renotify()
 			c.notifyTick()
 			c.updateTick(ctx)
+			c.forecastTick()
 			if c.centralReset.Swap(false) {
 				c.centralNext = time.Time{}
 			}

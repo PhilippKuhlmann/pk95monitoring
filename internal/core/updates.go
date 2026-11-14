@@ -105,17 +105,20 @@ type ExpiryRow struct {
 	Group    string   `json:"group,omitempty"`
 	CheckKey string   `json:"check_key"`
 	Name     string   `json:"name"`
-	Kind     string   `json:"kind"` // cert, domain
+	Kind     string   `json:"kind"` // cert, domain, storage (full within forecastListDays)
 	Days     *float64 `json:"days"` // nil = no expiry date known
 	Until    string   `json:"until,omitempty"`
-	Detail   string   `json:"detail,omitempty"` // issuer or registrar
+	Detail   string   `json:"detail,omitempty"` // issuer, registrar or growth
 	State    string   `json:"state"`
 	Acked    bool     `json:"acked,omitempty"`
 	Message  string   `json:"message"`
 }
 
-// Expiry lists the certificates and domains of all enabled devices, soonest first (unknown
-// dates last).
+// forecastListDays: storage that is full within this many days is listed on "Ablaufdaten".
+const forecastListDays = 90
+
+// Expiry lists the certificates and domains of all enabled devices and the storage that is
+// full within forecastListDays (forecast.go), soonest first (unknown dates last).
 func (c *Core) Expiry() []ExpiryRow {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -129,9 +132,13 @@ func (c *Core) Expiry() []ExpiryRow {
 			r := ExpiryRow{DeviceID: id, Device: c.displayName(d), Group: d.Group, CheckKey: cs.Key, Name: cs.Name,
 				State: cs.State, Acked: cs.Acked, Message: cs.Message}
 			for _, m := range cs.Metrics {
-				if m.Name == "cert.days" || m.Name == "domain.days" {
+				switch {
+				case m.Name == "cert.days" || m.Name == "domain.days":
 					v := m.Value
 					r.Days, r.Kind = &v, strings.TrimSuffix(m.Name, ".days")
+				case m.Name == forecastMetric && m.Value <= forecastListDays && (r.Days == nil || m.Value < *r.Days):
+					v := m.Value
+					r.Days, r.Kind = &v, "storage"
 				}
 			}
 			if _, ok := cs.Facts["RDAP-Server"]; ok {
@@ -145,6 +152,15 @@ func (c *Core) Expiry() []ExpiryRow {
 				}
 			case "domain":
 				r.Until, r.Detail = cs.Facts["Läuft ab"], cs.Facts["Registrar"]
+			case "storage":
+				r.Until = cs.Facts[factFull]
+				r.Detail = "Zuwachs " + cs.Facts["Zuwachs"]
+				for _, m := range cs.Metrics {
+					if slices.Contains(forecastSources, m.Name) {
+						r.Detail = fmtValue(m.Value, "%") + " belegt · " + r.Detail
+						break
+					}
+				}
 			default:
 				continue
 			}
