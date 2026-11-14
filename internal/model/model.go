@@ -49,6 +49,7 @@ const (
 	TypeVeeam   = "veeam"   // Veeam Backup & Replication server, polled over its REST API
 	TypePBS     = "pbs"     // Proxmox Backup Server, polled over its REST API
 	TypeRedfish = "redfish" // server hardware over its management controller (iDRAC, iLO, XCC …) via Redfish
+	TypeM365    = "m365"    // Microsoft 365 / Entra ID tenant, polled over Microsoft Graph
 )
 
 // Device is one monitored thing. Stored as JSON (store kind "device").
@@ -80,6 +81,7 @@ type Device struct {
 	Veeam   *VeeamConfig   `json:"veeam,omitempty"`
 	PBS     *PBSConfig     `json:"pbs,omitempty"`
 	Redfish *RedfishConfig `json:"redfish,omitempty"`
+	M365    *M365Config    `json:"m365,omitempty"`
 	Agent   *AgentConfig   `json:"agent,omitempty"`
 
 	// Checks are additional network checks; they work for every device type.
@@ -113,6 +115,10 @@ func (d Device) Clone() Device {
 	if d.Redfish != nil {
 		r := *d.Redfish
 		d.Redfish = &r
+	}
+	if d.M365 != nil {
+		m := *d.M365
+		d.M365 = &m
 	}
 	if d.PBS != nil {
 		p := *d.PBS
@@ -266,6 +272,9 @@ func (d Device) PollInterval() int {
 	if d.Interval > 0 {
 		return d.Interval
 	}
+	if d.Type == TypeM365 {
+		return 300 // a cloud API: every five minutes is plenty
+	}
 	return 60
 }
 
@@ -347,6 +356,14 @@ type RedfishConfig struct {
 	Username    string `json:"username"`
 	Password    string `json:"password,omitempty"`
 	Fingerprint string `json:"fingerprint"` // SHA-256 of the controller certificate (pinning); empty = system CAs
+}
+
+// M365Config polls a Microsoft 365 tenant over Microsoft Graph with an app registration
+// (client credentials) that has read-only application permissions.
+type M365Config struct {
+	TenantID string `json:"tenant_id"` // directory (tenant) ID or a verified domain
+	ClientID string `json:"client_id"` // application (client) ID
+	Secret   string `json:"secret,omitempty"`
 }
 
 // BackupServer reports whether a device type is a backup server (managed on the page
@@ -631,6 +648,11 @@ func DefaultThresholds() []Threshold {
 		// Active Directory: inbound replication older than half a day / a day; Kerberos fails beyond 5 minutes of clock offset
 		{Metric: "ad.repl_age", Warn: f(12), Crit: f(24)},
 		{Metric: "ad.time_offset", Warn: f(60), Crit: f(240)},
+		// Microsoft 365: Entra Connect syncs every 30 minutes; app secrets and certificates
+		// expiring within a month (warn) or a week (crit); a trial or ending subscription
+		{Metric: "m365.sync_age", Warn: f(3), Crit: f(12)},
+		{Metric: "m365.cred_days", Warn: f(30), Crit: f(7), Below: true},
+		{Metric: "m365.sub_days", Warn: f(14), Crit: f(3), Below: true},
 		// Proxmox hardware and storage health
 		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
 		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},

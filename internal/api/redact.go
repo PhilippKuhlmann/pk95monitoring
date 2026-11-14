@@ -54,6 +54,12 @@ type redfishOut struct {
 	HasPassword bool   `json:"has_password"`
 }
 
+type m365Out struct {
+	model.M365Config
+	Secret    string `json:"secret"`
+	HasSecret bool   `json:"has_secret"`
+}
+
 type deviceOut struct {
 	model.Device
 	Proxmox *proxmoxOut `json:"proxmox,omitempty"`
@@ -62,6 +68,7 @@ type deviceOut struct {
 	Veeam   *veeamOut   `json:"veeam,omitempty"`
 	PBS     *pbsOut     `json:"pbs,omitempty"`
 	Redfish *redfishOut `json:"redfish,omitempty"`
+	M365    *m365Out    `json:"m365,omitempty"`
 }
 
 func redactDevice(d model.Device) deviceOut {
@@ -105,7 +112,12 @@ func redactDevice(d model.Device) deviceOut {
 		c.Password = ""
 		out.Redfish = &redfishOut{RedfishConfig: c, HasPassword: r.Password != ""}
 	}
-	out.Device.Proxmox, out.Device.SNMP, out.Device.NUT, out.Device.Veeam, out.Device.PBS, out.Device.Redfish = nil, nil, nil, nil, nil, nil
+	if m := d.M365; m != nil {
+		c := *m
+		c.Secret = ""
+		out.M365 = &m365Out{M365Config: c, HasSecret: m.Secret != ""}
+	}
+	out.Device.Proxmox, out.Device.SNMP, out.Device.NUT, out.Device.Veeam, out.Device.PBS, out.Device.Redfish, out.Device.M365 = nil, nil, nil, nil, nil, nil, nil
 	return out
 }
 

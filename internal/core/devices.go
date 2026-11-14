@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pk95monitoring/internal/collect/m365"
 	"pk95monitoring/internal/collect/netcheck"
 	"pk95monitoring/internal/collect/nut"
 	"pk95monitoring/internal/collect/pbs"
@@ -171,7 +172,7 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 // Values are compared as printed, so a nil and an empty list are the same.
 func collectChanged(a, b model.Device) bool {
 	show := func(d model.Device) string {
-		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam), deref(d.PBS), deref(d.Redfish))
+		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam), deref(d.PBS), deref(d.Redfish), deref(d.M365))
 		if d.Agent != nil {
 			s += fmt.Sprintf("|%v|%v|%v", d.Agent.Services, d.Agent.WatchAutoServices, d.Agent.IgnoreServices)
 		}
@@ -205,6 +206,8 @@ func typeLabel(t string) string {
 		return "Proxmox Backup Server"
 	case model.TypeRedfish:
 		return "Hardware (Redfish)"
+	case model.TypeM365:
+		return "Microsoft 365"
 	}
 	return t
 }
@@ -228,7 +231,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		errs["notes"] = "Höchstens 4000 Zeichen."
 	}
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish, model.TypeM365:
 	case model.TypeAgent:
 		if old == nil {
 			errs["type"] = "Agents werden bei der Installation des Agents automatisch angelegt."
@@ -279,6 +282,11 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		validateRedfish(d, old, errs)
 	} else {
 		d.Redfish = nil
+	}
+	if d.Type == model.TypeM365 {
+		validateM365(d, old, errs)
+	} else {
+		d.M365 = nil
 	}
 	if d.Type == model.TypeAgent && old != nil {
 		in := d.Agent
@@ -563,6 +571,8 @@ func (c *Core) forgetCollector(d model.Device) {
 		c.PBS.Forget(d.ID)
 	case model.TypeRedfish:
 		c.Redfish.Forget(d.ID)
+	case model.TypeM365:
+		c.M365.Forget(d.ID)
 	}
 }
 
@@ -674,6 +684,50 @@ func validateRedfish(d *model.Device, old *model.Device, errs map[string]string)
 	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(r.Fingerprint)); f != "" && !fpRe.MatchString(f) {
 		errs["redfish.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
 	}
+}
+
+// tenantRe matches a tenant given as a domain (contoso.onmicrosoft.com).
+var tenantRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$`)
+
+func validateM365(d *model.Device, old *model.Device, errs map[string]string) {
+	if d.M365 == nil {
+		d.M365 = &model.M365Config{}
+	}
+	m := d.M365
+	if m.Secret == "" && old != nil && old.M365 != nil {
+		m.Secret = old.M365.Secret
+	}
+	m.TenantID, m.ClientID, m.Secret = strings.TrimSpace(m.TenantID), strings.TrimSpace(m.ClientID), strings.TrimSpace(m.Secret)
+	switch {
+	case m.TenantID == "":
+		errs["m365.tenant_id"] = "Mandanten-ID (Verzeichnis-ID) angeben."
+	case !m365.GUIDRe.MatchString(m.TenantID) && (len(m.TenantID) > 253 || !tenantRe.MatchString(m.TenantID)):
+		errs["m365.tenant_id"] = "Mandanten-ID (GUID) oder eine Domain des Mandanten, z. B. kunde.onmicrosoft.com."
+	}
+	switch {
+	case m.ClientID == "":
+		errs["m365.client_id"] = "Anwendungs-ID (Client-ID) der App-Registrierung angeben."
+	case !m365.GUIDRe.MatchString(m.ClientID):
+		errs["m365.client_id"] = "Die Anwendungs-ID ist eine GUID, z. B. 1b2c3d4e-…"
+	}
+	switch {
+	case m.Secret == "":
+		errs["m365.secret"] = "Wert des geheimen Clientschlüssels angeben."
+	case len(m.Secret) > 256 || strings.ContainsAny(m.Secret, " \r\n\t\x00"):
+		errs["m365.secret"] = "Ungültiger geheimer Schlüssel."
+	}
+}
+
+// TestM365 signs in to a tenant and tries every area. When cfg.Secret is empty and id names
+// an existing Microsoft 365 device, the stored secret is used.
+func (c *Core) TestM365(ctx context.Context, id string, cfg model.M365Config) (m365.TestResult, error) {
+	if cfg.Secret == "" && id != "" {
+		if d, err := c.Device(id); err == nil && d.M365 != nil {
+			cfg.Secret = d.M365.Secret
+		}
+	}
+	cfg.TenantID, cfg.ClientID, cfg.Secret = strings.TrimSpace(cfg.TenantID), strings.TrimSpace(cfg.ClientID), strings.TrimSpace(cfg.Secret)
+	return c.M365.Test(ctx, cfg)
 }
 
 // TestRedfish logs in to a management controller and reads the system. When cfg.Password is

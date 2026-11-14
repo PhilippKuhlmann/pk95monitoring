@@ -817,6 +817,36 @@ func (s *Server) testRedfish(w http.ResponseWriter, r *http.Request) {
 		"power": res.Power, "firmware": res.Firmware, "message": ""})
 }
 
+// testM365 signs in to a Microsoft 365 tenant and tries every area: {id, m365}.
+func (s *Server) testM365(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID   string           `json:"id"`
+		M365 model.M365Config `json:"m365"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	errs := map[string]string{}
+	if strings.TrimSpace(req.M365.TenantID) == "" {
+		errs["m365.tenant_id"] = "Mandanten-ID angeben."
+	}
+	if strings.TrimSpace(req.M365.ClientID) == "" {
+		errs["m365.client_id"] = "Anwendungs-ID angeben."
+	}
+	if fieldErrs(w, errs) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	res, err := s.C.TestM365(ctx, req.ID, req.M365)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "tenant": res.Tenant, "domain": res.Domain, "sync": res.Sync,
+		"licenses": res.Licenses, "apps": res.Apps, "missing": res.Missing, "message": ""})
+}
+
 // backups lists the backups of all devices (page "Sicherungen").
 func (s *Server) backups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.C.Backups())

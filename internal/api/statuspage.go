@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"pk95monitoring/internal/core"
@@ -20,20 +21,26 @@ type statusPageOut struct {
 	Path    string            `json:"path"` // "/status/<token>", "" before the first save
 	URL     string            `json:"url"`  // full link with the public URL; "" without one (the UI uses its origin)
 	Preview core.PublicStatus `json:"preview"`
+	// Templates are the ready-made services with what they would use now.
+	Templates []core.StatusTemplate `json:"templates"`
+	Message   string                `json:"message,omitempty"` // after a template: what was created
 }
 
-func (s *Server) statusPageOut(w http.ResponseWriter, r *http.Request, p core.StatusPage) {
+func (s *Server) statusPageOut(w http.ResponseWriter, r *http.Request, p core.StatusPage, msg ...string) {
 	prev, err := s.C.StatusPreview(r.Context())
 	if err != nil {
 		internalErr(w, "status page preview", err)
 		return
 	}
-	out := statusPageOut{Page: p, Preview: prev}
+	out := statusPageOut{Page: p, Preview: prev, Templates: s.C.StatusTemplates()}
 	if p.Token != "" {
 		out.Path = "/status/" + p.Token
 		if u := s.C.PublicURL(); u != "" {
 			out.URL = u + out.Path
 		}
+	}
+	if len(msg) > 0 {
+		out.Message = msg[0]
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -62,6 +69,41 @@ func (s *Server) putStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.statusPageOut(w, r, saved)
+}
+
+// statusTemplate adds a ready-made service: {id, url}.
+func (s *Server) statusTemplate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID  string `json:"id"`
+		URL string `json:"url"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	p, msg, errs, err := s.C.ApplyStatusTemplate(req.ID, req.URL)
+	if fieldErrs(w, errs) {
+		return
+	}
+	if err != nil {
+		internalErr(w, "status page template", err)
+		return
+	}
+	s.statusPageOut(w, r, p, msg)
+}
+
+// statusCatalog lists the devices of a service with their checks: ?devices=a,b&folders=x.
+func (s *Server) statusCatalog(w http.ResponseWriter, r *http.Request) {
+	split := func(v string) []string {
+		out := []string{}
+		for _, x := range strings.Split(v, ",") {
+			if x = strings.TrimSpace(x); x != "" && len(out) < 1000 {
+				out = append(out, x)
+			}
+		}
+		return out
+	}
+	q := r.URL.Query()
+	writeJSON(w, http.StatusOK, map[string]any{"devices": s.C.StatusCatalog(split(q.Get("devices")), split(q.Get("folders")))})
 }
 
 func (s *Server) rotateStatusToken(w http.ResponseWriter, r *http.Request) {

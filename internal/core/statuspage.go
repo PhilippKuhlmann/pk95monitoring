@@ -30,6 +30,7 @@ const (
 	maxStatusText       = 500
 	maxComponentName    = 80
 	maxComponentNote    = 200
+	maxStatusChecks     = 300 // check selections per service
 )
 
 // Status page service modes: what makes a service look disturbed.
@@ -78,6 +79,31 @@ type StatusComponent struct {
 	Mode    string   `json:"mode"` // StatusOutage, StatusAll
 	Devices []string `json:"devices"`
 	Folders []string `json:"folders"` // with subfolders; attached agents always count
+	// Checks narrows the service to these checks of its devices (empty = the devices as a
+	// whole); a device without a matching check is left out. A device that is unreachable
+	// counts as a failure of all its selected checks.
+	Checks []StatusCheck `json:"checks"`
+}
+
+// StatusCheck selects checks of a service: by key (pattern with *) and/or check group.
+type StatusCheck struct {
+	Device string `json:"device,omitempty"` // "" = every device of the service
+	Key    string `json:"key,omitempty"`    // check key or pattern, e.g. "ad:*", "net:ab12cd"
+	Group  string `json:"group,omitempty"`  // check group, e.g. "Active Directory"
+}
+
+// matches reports whether the selection takes check cs of device devID.
+func (r StatusCheck) matches(devID string, cs model.CheckStatus) bool {
+	if r.Device != "" && r.Device != devID {
+		return false
+	}
+	if r.Key != "" && !model.GlobMatch(r.Key, cs.Key) {
+		return false
+	}
+	if r.Group != "" && !strings.EqualFold(r.Group, cs.Group) {
+		return false
+	}
+	return r.Key != "" || r.Group != ""
 }
 
 func (p StatusPage) clone() StatusPage {
@@ -85,6 +111,7 @@ func (p StatusPage) clone() StatusPage {
 	for i := range p.Components {
 		p.Components[i].Devices = slices.Clone(p.Components[i].Devices)
 		p.Components[i].Folders = slices.Clone(p.Components[i].Folders)
+		p.Components[i].Checks = slices.Clone(p.Components[i].Checks)
 	}
 	return p
 }
@@ -121,8 +148,10 @@ type PublicComponent struct {
 	// while the service has no devices.
 	Availability *float64    `json:"availability"`
 	History      []StatusDay `json:"history"` // oldest first, today last
-	// Members is the number of devices behind the service (admin preview only).
+	// Members and Units are the devices and selected checks behind the service (admin
+	// preview only; Units is 0 for a service without check selection).
 	Members int `json:"members,omitempty"`
+	Units   int `json:"units,omitempty"`
 }
 
 // StatusDay is one day of a service's history.
@@ -230,6 +259,26 @@ func (c *Core) SaveStatusPage(p StatusPage) (StatusPage, map[string]string, erro
 		if len(cp.Devices)+len(cp.Folders) == 0 {
 			errs[key("targets")] = "Mindestens ein Gerät oder einen Ordner wählen."
 		}
+		refs := []StatusCheck{}
+		for _, r := range cp.Checks {
+			r.Device, r.Key, r.Group = strings.TrimSpace(r.Device), strings.TrimSpace(r.Key), strings.TrimSpace(r.Group)
+			if r.Key == "" && r.Group == "" {
+				continue
+			}
+			if _, ok := c.devices[r.Device]; r.Device != "" && !ok {
+				continue // the device is gone
+			}
+			if len(r.Key) > 300 || len(r.Group) > 100 {
+				errs[key("checks")] = "Ungültige Check-Auswahl."
+			}
+			if !slices.Contains(refs, r) {
+				refs = append(refs, r)
+			}
+		}
+		if len(refs) > maxStatusChecks {
+			errs[key("checks")] = fmt.Sprintf("Höchstens %d ausgewählte Checks.", maxStatusChecks)
+		}
+		cp.Checks = refs
 		if cp.ID == "" || ids[cp.ID] || len(cp.ID) > 16 {
 			cp.ID = newID(6)
 		}
@@ -336,11 +385,13 @@ func (c *Core) StatusPreview(ctx context.Context) (PublicStatus, error) {
 }
 
 // member is a device behind a service with the alerts of the history period. reach: the
-// device has a reachability check (net devices have none: their critical checks are the outage).
+// device has a reachability check (net devices have none: their critical checks are the
+// outage). units are the keys of its selected checks (services with a check selection).
 type member struct {
 	d      model.Device
 	alerts []model.Alert
 	reach  bool
+	units  []string
 }
 
 // buildStatus computes the public view of p.
@@ -355,9 +406,7 @@ func (c *Core) buildStatus(ctx context.Context, p StatusPage, preview bool) (Pub
 	}
 	byDev := map[string][]model.Alert{}
 	for _, a := range alerts {
-		if !model.SeparateCheck(a.CheckKey) { // updates, event logs and backups have their own pages
-			byDev[a.DeviceID] = append(byDev[a.DeviceID], a)
-		}
+		byDev[a.DeviceID] = append(byDev[a.DeviceID], a)
 	}
 	out := PublicStatus{Title: p.Title, Intro: p.Intro, Days: statusDays, Updated: nowU,
 		Components: []PublicComponent{}, Maintenance: []PublicMaint{}}
@@ -372,18 +421,30 @@ func (c *Core) buildStatus(ctx context.Context, p StatusPage, preview bool) (Pub
 	members := make([][]member, len(p.Components))
 	for i, cp := range p.Components {
 		for _, d := range c.devices {
-			if d.Enabled && c.targetMatches(cp.Devices, cp.Folders, d) {
-				m := member{d: d, alerts: byDev[d.ID]}
-				if rt := c.rt[d.ID]; rt != nil {
-					m.reach = slices.ContainsFunc(rt.st.Checks, func(cs model.CheckStatus) bool { return cs.Key == reachKey })
-				}
-				members[i] = append(members[i], m)
+			if !d.Enabled || !c.targetMatches(cp.Devices, cp.Folders, d) {
+				continue
 			}
+			m := member{d: d, alerts: byDev[d.ID]}
+			if rt := c.rt[d.ID]; rt != nil {
+				for _, cs := range rt.st.Checks {
+					m.reach = m.reach || cs.Key == reachKey
+					if slices.ContainsFunc(cp.Checks, func(r StatusCheck) bool { return r.matches(d.ID, cs) }) {
+						m.units = append(m.units, cs.Key)
+					}
+				}
+			}
+			if len(cp.Checks) > 0 && len(m.units) == 0 {
+				continue // none of the selected checks on this device
+			}
+			members[i] = append(members[i], m)
 		}
 		pc := c.componentNow(cp, members[i], nowU)
 		pc.History, pc.Availability = componentHistory(cp, members[i], first, statusDays, nowU)
 		if preview {
 			pc.Members = len(members[i])
+			for _, m := range members[i] {
+				pc.Units += len(m.units)
+			}
 		}
 		out.Components = append(out.Components, pc)
 	}
@@ -436,6 +497,34 @@ func (c *Core) componentNow(cp StatusComponent, ms []member, now int64) PublicCo
 		}
 		rt := c.rt[m.d.ID]
 		if rt == nil {
+			continue
+		}
+		if len(cp.Checks) > 0 {
+			// every selected check counts on its own; an unreachable device fails them all
+			reach, _ := rt.check(reachKey)
+			for _, k := range m.units {
+				cs, _ := rt.check(k)
+				if m.reach && reach.State == model.StateCrit {
+					cs = reach
+				}
+				switch devStateOf(cs) {
+				case model.StateCrit:
+					known++
+					down++
+					earliest(cs.Since)
+				case model.StateWarn:
+					known++
+					if cp.Mode == StatusAll {
+						limited++
+						earliest(cs.Since)
+					} else {
+						okN++
+					}
+				case model.StateOK:
+					known++
+					okN++
+				}
+			}
 			continue
 		}
 		if cp.Mode == StatusOutage {
@@ -491,8 +580,12 @@ func (c *Core) componentNow(cp StatusComponent, ms []member, now int64) PublicCo
 }
 
 // componentHistory returns the daily history of a service over days days from first and its
-// availability. Outages (reach alerts) are disruptions; with StatusAll critical alerts too,
-// and warnings limitations. Several devices with a problem at once count once.
+// availability. A service consists of units: its devices, or its selected checks. A unit
+// fails while its device is unreachable, while its selected check is critical, or – for a
+// whole device – while it is critical with StatusAll (or has no reachability check).
+// StatusOutage: all units failing at once is a disruption, some of them a limitation
+// ("teilweise gestört"). StatusAll: any failing unit is a disruption, warnings limitations.
+// The availability counts the disruptions.
 func componentHistory(cp StatusComponent, ms []member, first time.Time, days int, now int64) ([]StatusDay, *float64) {
 	hist := make([]StatusDay, days)
 	start := int64(0)
@@ -502,23 +595,63 @@ func componentHistory(cp StatusComponent, ms []member, first time.Time, days int
 		}
 	}
 	from := max(first.Unix(), start)
-	var down, limited []span
+	clip := func(a model.Alert) (span, bool) {
+		end := a.Ended
+		if end == 0 {
+			end = now
+		}
+		s := span{max(a.Started, from), min(end, now)}
+		return s, s.to > s.from
+	}
+	var units [][]span // failing spans per unit
+	var limited []span
 	for _, m := range ms {
+		var reach []span
 		for _, a := range m.alerts {
-			end := a.Ended
-			if end == 0 {
-				end = now
+			if s, ok := clip(a); ok && a.CheckKey == reachKey {
+				reach = append(reach, s)
 			}
-			s := span{max(a.Started, from), min(end, now)}
-			if s.to <= s.from {
-				continue
+		}
+		if len(cp.Checks) == 0 {
+			fail := slices.Clone(reach)
+			for _, a := range m.alerts {
+				s, ok := clip(a)
+				if !ok || a.CheckKey == reachKey || model.SeparateCheck(a.CheckKey) {
+					continue // updates, event logs and backups have their own pages
+				}
+				switch {
+				case a.Severity == model.StateCrit && (cp.Mode == StatusAll || !m.reach):
+					fail = append(fail, s)
+				case cp.Mode == StatusAll:
+					limited = append(limited, s)
+				}
 			}
-			switch {
-			case a.CheckKey == reachKey, (cp.Mode == StatusAll || !m.reach) && a.Severity == model.StateCrit:
-				down = append(down, s)
-			case cp.Mode == StatusAll:
-				limited = append(limited, s)
+			units = append(units, fail)
+			continue
+		}
+		for _, k := range m.units {
+			fail := slices.Clone(reach)
+			for _, a := range m.alerts {
+				if s, ok := clip(a); ok && a.CheckKey == k {
+					if a.Severity == model.StateCrit {
+						fail = append(fail, s)
+					} else if cp.Mode == StatusAll {
+						limited = append(limited, s)
+					}
+				}
 			}
+			units = append(units, fail)
+		}
+	}
+	var down []span
+	if cp.Mode == StatusAll || len(units) <= 1 {
+		for _, u := range units {
+			down = append(down, u...)
+		}
+	} else {
+		down = intersectAll(units)
+		for _, u := range units {
+			limited = append(limited, u...)
 		}
 	}
 	for i := range hist {
@@ -528,7 +661,7 @@ func componentHistory(cp StatusComponent, ms []member, first time.Time, days int
 		if len(ms) > 0 && d1.Unix() > start && d0.Unix() <= now {
 			lo, hi := max(d0.Unix(), from), min(d1.Unix(), now)
 			day.Down = overlap(down, lo, hi)
-			day.Limited = overlap(limited, lo, hi)
+			day.Limited = max(overlap(limited, lo, hi)-day.Down, 0)
 			switch {
 			case day.Down > 0:
 				day.State = PubCrit
@@ -545,6 +678,46 @@ func componentHistory(cp StatusComponent, ms []member, first time.Time, days int
 	}
 	av := 100 * float64(now-from-overlap(down, from, now)) / float64(now-from)
 	return hist, &av
+}
+
+// mergeSpans sorts spans and joins overlapping ones.
+func mergeSpans(list []span) []span {
+	l := slices.Clone(list)
+	slices.SortFunc(l, func(a, b span) int { return int(a.from - b.from) })
+	var out []span
+	for _, s := range l {
+		if n := len(out); n > 0 && s.from <= out[n-1].to {
+			out[n-1].to = max(out[n-1].to, s.to)
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// intersectAll returns the times covered by every unit.
+func intersectAll(units [][]span) []span {
+	if len(units) == 0 {
+		return nil
+	}
+	cur := mergeSpans(units[0])
+	for _, u := range units[1:] {
+		other := mergeSpans(u)
+		var next []span
+		for i, j := 0, 0; i < len(cur) && j < len(other); {
+			lo, hi := max(cur[i].from, other[j].from), min(cur[i].to, other[j].to)
+			if lo < hi {
+				next = append(next, span{lo, hi})
+			}
+			if cur[i].to < other[j].to {
+				i++
+			} else {
+				j++
+			}
+		}
+		cur = next
+	}
+	return cur
 }
 
 // overlap is the length of the union of spans within [lo, hi).
@@ -625,4 +798,14 @@ func overallState(list []PublicComponent) (string, string) {
 		return PubOK, "Alle Dienste betriebsbereit"
 	}
 	return PubUnknown, "Keine aktuellen Daten"
+}
+
+// check returns the status of check key.
+func (rt *devState) check(key string) (model.CheckStatus, bool) {
+	for _, cs := range rt.st.Checks {
+		if cs.Key == key {
+			return cs, true
+		}
+	}
+	return model.CheckStatus{}, false
 }

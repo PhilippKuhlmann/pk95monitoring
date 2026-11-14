@@ -66,6 +66,14 @@ func TestRedactDevice(t *testing.T) {
 		t.Errorf("redfish %v", rm)
 	}
 
+	ms := model.Device{ID: "m", Type: model.TypeM365, M365: &model.M365Config{TenantID: "t", ClientID: "c", Secret: "graph-s3cret"}}
+	if b, _ := json.Marshal(redactDevice(ms)); strings.Contains(string(b), "graph-s3cret") {
+		t.Errorf("Microsoft 365 secret in %s", b)
+	}
+	if mm := toMap(t, redactDevice(ms))["m365"].(map[string]any); mm["has_secret"] != true || mm["client_id"] != "c" {
+		t.Errorf("m365 %v", mm)
+	}
+
 	pb := model.Device{ID: "b", Type: model.TypePBS, PBS: &model.PBSConfig{Port: 8007, TokenID: "mon@pbs!pk95", Secret: "pbs-s3cret"}}
 	if b, _ := json.Marshal(redactDevice(pb)); strings.Contains(string(b), "pbs-s3cret") {
 		t.Errorf("PBS secret in %s", b)

@@ -22,6 +22,9 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
 - **Server-Hardware über den Management-Controller** (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro per Redfish):
   Netzteile und Redundanz, Lüfter, Temperaturen, Arbeitsspeicher, Prozessoren, RAID-Controller, Volumes und Platten –
   ohne Software auf dem Server, auch wenn das Betriebssystem steht.
+- **Microsoft 365 / Entra ID** über Microsoft Graph: Entra-Connect-Synchronisierung, Lizenzen (frei, überbelegt,
+  Kulanzzeit, Testversionen), ablaufende Geheimnisse und Zertifikate von App-Registrierungen, Domains und der
+  Microsoft-Dienststatus.
 - **USV über einen NUT-Server** (Network UPS Tools, z. B. UniFi UPS): Akku, Restlaufzeit, Last, Spannungen,
   Leistung, Temperaturen und Status (Netz-/Batteriebetrieb, Akku schwach, Akku tauschen, Überlast …).
 - **Agent und API kombiniert:** Ein Agent lässt sich einem per API oder SNMP abgefragten Gerät zuordnen (z. B.
@@ -420,6 +423,42 @@ Der Management-Port muss vom Monitoring aus per HTTPS erreichbar sein.
   = kritisch, Ausfall vorhergesagt = Warnung, Verschleiß bei SSDs als `disk.wearout`). Die Plattenliste wird alle
   fünf Minuten gelesen. Ältere HPE-Firmware ohne die Standard-Ressource „Storage“ liefert keine RAID-Checks.
 
+## Microsoft 365 / Entra ID
+
+Ein Mandant je Gerät, abgefragt über **Microsoft Graph** mit einer eigenen App-Registrierung, die nur lesen darf.
+Unter **Geräte → Hinzufügen → Microsoft 365 / Entra ID** Mandanten-ID, Anwendungs-ID und den Wert des geheimen
+Clientschlüssels eintragen und „Verbindung testen“ – der Test zeigt Mandant, Lizenzprodukte, Apps und fehlende
+Berechtigungen.
+
+App-Registrierung anlegen (Entra Admin Center → App-Registrierungen → Neue Registrierung), unter
+**API-Berechtigungen → Microsoft Graph → Anwendungsberechtigungen** hinzufügen und die **Administratorzustimmung
+erteilen**:
+
+| Berechtigung | wofür |
+|---|---|
+| `Organization.Read.All` | Mandant, Entra-Connect-Synchronisierung, Lizenzen (Pflicht) |
+| `Domain.Read.All` | Domains und ihre Verifizierung |
+| `LicenseAssignment.Read.All` | Abonnements (Testversionen, Ablauf) |
+| `Application.Read.All` | Geheimnisse und Zertifikate der App-Registrierungen |
+| `ServiceHealth.Read.All` | Microsoft-Dienststatus |
+
+Fehlt eine, meldet der Check **Berechtigungen** eine Warnung – der Rest läuft weiter. Benutzer, Postfächer und Dateien
+liest das Monitoring nicht. Abgefragt wird alle 5 Minuten; Lizenzen, Apps und Domains alle 30 Minuten.
+
+- **Mandant:** Name, Standarddomain, verifizierte Domains; eine nicht verifizierte Domain = Warnung.
+- **Entra Connect Sync** (nur mit Synchronisierung aus dem lokalen AD): Alter der letzten Synchronisierung
+  (`m365.sync_age`, Warnung ab 3, kritisch ab 12 Stunden; normal alle 30 Minuten), letzte Kennwort-Synchronisierung.
+- **Lizenzen:** je Produkt zugewiesen, vorhanden und frei (`m365.lic_free`, ohne Standard-Grenze); überbelegt oder
+  abgelaufen mit Kulanzzeit = Warnung, gesperrt = kritisch. Testversionen und auslaufende Abonnements zählen herunter
+  (`m365.sub_days`, Warnung unter 14, kritisch unter 3 Tagen). Kostenlose Self-Service-Produkte erscheinen nicht.
+- **App-Registrierungen:** je App mit Geheimnis oder Zertifikat die Restlaufzeit des am längsten gültigen
+  (`m365.cred_days`, Warnung unter 30, kritisch unter 7 Tagen) – auch die App des Monitorings selbst. Apps, deren
+  Geheimnisse alle seit über 30 Tagen abgelaufen sind, gelten als stillgelegt.
+- **Microsoft-Dienststatus:** gestörte Dienste mit der Meldungsnummer (z. B. EX123456); eingeschränkt = Warnung,
+  Ausfall = kritisch. Hinweise von Microsoft werden nur gezählt.
+
+App-Geheimnisse und auslaufende Abonnements stehen auch auf der Seite **Ablaufdaten**.
+
 ## Proxmox Backup Server
 
 Direkt über die API (HTTPS, Port 8007) mit einem API-Token: unter **Sicherungen → Proxmox Backup Server** Host,
@@ -509,9 +548,23 @@ betriebsbereit“, „Einzelne Dienste eingeschränkt“, „Störung …“, �
 
 - **Dienste** fasst du aus Geräten und Ordnern zusammen (z. B. „Dateiablage“ = fs01 + NAS). Auf der Seite stehen nur
   Name und Beschreibung des Dienstes – nie Gerätenamen, Adressen, Checks oder Meldungen.
+- **Nur ausgewählte Checks:** Statt ganzer Geräte zählen nur bestimmte Checks oder ganze Check-Gruppen, z. B. für
+  „Windows-Anmeldung“ nur die Gruppe „Active Directory“ der Domänencontroller – ein voller Datenträger oder ein
+  Ereignis im Protokoll stört dann nicht. Eine ganze Gruppe nimmt später neue Checks mit. Ist ein Gerät nicht
+  erreichbar, zählen seine Checks als ausgefallen.
+- **Vorlagen** legen fertige Dienste an:
+  - **Internet:** legt (falls noch nicht vorhanden) das Gerät „Internet“ an – Ping zu 1.1.1.1 und 8.8.8.8, eine
+    DNS-Auflösung und die Microsoft-Testseite. Fällt alles aus, ist es eine Störung, fällt ein Teil aus „Teilweise
+    gestört“.
+  - **Webseite:** fragt nach der Adresse und legt ein Gerät mit HTTPS-Prüfung und Domain-Ablauf an (oder nutzt ein
+    vorhandenes); für den Dienst zählt die HTTPS-Prüfung.
+  - **Windows-Anmeldung:** alle Domänencontroller (Agent), nur ihre Active-Directory-Checks.
+  - **Microsoft 365:** der Microsoft-Dienststatus der Mandanten.
+  - **Drucken:** die per SNMP überwachten Drucker (nur Erreichbarkeit).
 - **Als gestört zeigen bei:** „Nur Ausfälle“ (Standard) – ein Gerät ist nicht erreichbar oder sein Agent schweigt (bei Netzwerk-Checks:
   ein kritischer Check);
-  fehlen nur einige Geräte, heißt es „Teilweise gestört“. „Alle Probleme“ – jeder kritische Alarm ist eine
+  fehlen nur einige Geräte (oder ausgewählte Checks), heißt es „Teilweise gestört“ – im Verlauf gelb, nur ein
+  vollständiger Ausfall ist rot und zählt gegen die Verfügbarkeit. „Alle Probleme“ – jeder kritische Alarm ist eine
   Störung, jede Warnung eine Einschränkung (auch ein gestoppter Dienst oder eine gestörte AD-Replikation).
 - **Wartung:** Ein Gerät in Wartung zeigt „Wartungsarbeiten“. Wartungsfenster mit „Auf der Statusseite ankündigen“
   stehen dort ab 14 Tage vorher mit Name, Notiz, Zeit und den betroffenen Diensten.

@@ -74,6 +74,8 @@ func backfill(c *core.Core, agents []*simAgent, now time.Time) error {
 				checks, _ = c.PBS.Collect(ctx, d)
 			case model.TypeRedfish:
 				checks, _ = c.Redfish.Collect(ctx, d)
+			case model.TypeM365:
+				checks, _ = c.M365.Collect(ctx, d)
 			}
 			for _, nc := range d.Checks {
 				checks = append(checks, netcheck.Run(ctx, nc, d.Host))

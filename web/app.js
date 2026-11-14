@@ -188,8 +188,8 @@ function groupBy(list, keyFn) {
 const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { numeric: true });
 
 // ---------- labels ----------
-const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server", redfish: "Hardware (Redfish)" };
-const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive", redfish: "cpu" };
+const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server", redfish: "Hardware (Redfish)", m365: "Microsoft 365" };
+const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive", redfish: "cpu", m365: "apps" };
 const STATES = { ok: ["OK", "green"], warn: ["Warnung", "amber"], crit: ["Kritisch", "rose"], unknown: ["Unbekannt", ""], maintenance: ["Wartung", "blue"], disabled: ["Deaktiviert", ""] };
 const SDOT = { ok: "ok", warn: "warning", crit: "error", unknown: "", maintenance: "blue", disabled: "" };
 const RANK = { ok: 0, disabled: 0, maintenance: 0, unknown: 1, warn: 2, crit: 3 };
@@ -287,6 +287,10 @@ const METRIC_LABELS = {
   "forecast.days": ["Voll in", "d"],
   "ad.repl_age": ["Letzte AD-Replikation vor", "h"],
   "ad.time_offset": ["Zeitabweichung zum PDC", "s"],
+  "m365.sync_age": ["Letzte Entra-Connect-Synchronisierung vor", "h"],
+  "m365.cred_days": ["Restlaufzeit App-Geheimnis", "d"],
+  "m365.sub_days": ["Restlaufzeit Abonnement", "d"],
+  "m365.lic_free": ["Freie Lizenzen", ""],
   "printer.toner": ["Toner", "%"],
   "printer.pages": ["Gedruckte Seiten", ""],
   "custom": ["Eigener Wert", ""],
@@ -1108,6 +1112,7 @@ function addDevice(done) {
       ["snmp", "SNMP-Gerät", "Switch, USV, Drucker, NAS – Schnittstellen, Akku, Toner, Speicher."],
       ["nut", "USV (NUT-Server)", "USV über Network UPS Tools, z. B. UniFi-USV – Akku, Restlaufzeit, Last, Spannungen."],
       ["redfish", "Server-Hardware (iDRAC, iLO, XCC)", "Über den Management-Controller per Redfish – Netzteile, Lüfter, Temperaturen, RAID und Platten, auch wenn das Betriebssystem steht."],
+      ["m365", "Microsoft 365 / Entra ID", "Mandant über Microsoft Graph – Entra-Connect-Sync, Lizenzen, ablaufende App-Geheimnisse, Domains und der Microsoft-Dienststatus."],
       ["net", "Netzwerk / Website", "Ping, HTTP(S), TCP-Port, DNS und TLS-Zertifikat – ohne Software auf dem Ziel."]] }],
     submit: async (v) => {
       if (v.type === "agent") { go("/agents"); return; }
@@ -1254,21 +1259,23 @@ function deviceForm(dev, type, done) {
   const vb = d0.veeam || { port: 9419, username: "", fingerprint: "" };
   const pb = d0.pbs || { port: 8007, token_id: "", fingerprint: "" };
   const rf = d0.redfish || { port: 443, username: "", fingerprint: "" };
+  const ms = d0.m365 || { tenant_id: "", client_id: "" };
   const groups = [...new Set([...(state.groups || []), ...(d0.group ? [d0.group] : [])])].sort((a, b) => a.localeCompare(b, "de"));
   const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs" || type === "redfish";
-  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", redfish: "z. B. iDRAC hv01", agent: "" }[type];
+  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", redfish: "z. B. iDRAC hv01", m365: "z. B. Microsoft 365", agent: "" }[type];
   const fields = [
     { name: "name", label: "Name", value: d0.name, required: true, placeholder: namePh },
     { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : type === "redfish" ? "Management-Controller (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
       placeholder: type === "net" ? "optional, z. B. 192.168.1.1" : "192.168.1.10",
       hint: type === "agent" ? "Meldet der Agent selbst; nur für Ping-Checks und die Anzeige." : type === "net" ? "Standardziel für Ping-Checks ohne eigenes Ziel." : type === "nut" ? "Die USV selbst (z. B. UniFi) oder der Server, an dem sie per USB hängt." : "" },
     { name: "group", label: "Gruppe", value: d0.group, list: "dl-groups", placeholder: "z. B. Server, Netzwerk" },
-    { name: "interval", label: type === "agent" ? "Meldeintervall (s)" : "Intervall (s)", type: "number", min: 0, value: d0.interval || "", placeholder: "60", hint: "Leer = 60 Sekunden." },
+    { name: "interval", label: type === "agent" ? "Meldeintervall (s)" : "Intervall (s)", type: "number", min: 0, value: d0.interval || "", placeholder: type === "m365" ? "300" : "60", hint: type === "m365" ? "Leer = 300 Sekunden. Lizenzen, Apps und Domains liest der Server nur alle 30 Minuten neu." : "Leer = 60 Sekunden." },
     { name: "notes", label: "Notizen", type: "textarea", value: d0.notes, wide: true, rows: 2, placeholder: "z. B. Standort, Ansprechpartner, Besonderheiten" },
     { name: "enabled", label: "Aktiv", type: "checkbox", value: d0.enabled !== false, hint: "Ausgeschaltet wird nichts abgefragt." },
     { name: "no_alerts", label: "Keine Alarme", type: "checkbox", value: d0.no_alerts, hint: "Zustände werden angezeigt, aber es gibt keine Alarme und Benachrichtigungen." },
     { name: "auto_accept", label: "Neue Dienste automatisch überwachen", type: "checkbox", value: d0.auto_accept, hint: "Sonst erscheinen später gefundene Dienste unter „Neu gefunden“ und lösen erst nach dem Übernehmen Alarme aus." },
   ];
+  if (type === "m365") fields.splice(fields.findIndex((f) => f.name === "host"), 1); // a cloud tenant has no host
   let extra = `<datalist id="dl-groups">${groups.map((g) => `<option value="${esc(g)}"></option>`).join("")}</datalist>`;
   if (type === "proxmox") {
     extra += `<div class="section"><div class="section-title">Proxmox VE</div><div class="form-grid">
@@ -1352,14 +1359,28 @@ function deviceForm(dev, type, done) {
         <p class="hint">Der Management-Port (meist ein eigenes Netz) muss vom Monitoring aus per HTTPS erreichbar sein. Gelesen werden Netzteile, Lüfter, Temperaturen, Arbeitsspeicher, Prozessoren und die RAID-Controller mit Volumes und Platten.</p></details>
     </div></div>`;
   }
+  if (type === "m365") {
+    extra += `<div class="section"><div class="section-title">Microsoft 365 (App-Registrierung)</div><div class="form-grid">
+      ${field({ name: "m365.tenant_id", label: "Mandanten-ID (Verzeichnis-ID)", required: true, value: ms.tenant_id, mono: true, placeholder: "00000000-0000-0000-0000-000000000000", hint: "Oder eine Domain des Mandanten, z. B. kunde.onmicrosoft.com." })}
+      ${field({ name: "m365.client_id", label: "Anwendungs-ID (Client-ID)", required: true, value: ms.client_id, mono: true, placeholder: "00000000-0000-0000-0000-000000000000" })}
+      ${field({ name: "m365.secret", label: "Geheimer Clientschlüssel (Wert)", type: "password", required: !ms.has_secret, placeholder: ms.has_secret ? "unverändert lassen" : "", wide: true, hint: "Der Wert des Geheimnisses, nicht seine ID." })}
+      <div class="field wide"><div class="flex"><button class="btn gray" type="button" data-test-m365>${icon("signal")} Verbindung testen</button></div><div class="test-out" data-test-out></div></div>
+      <details class="howto wide"><summary>So legst du die App-Registrierung an</summary>
+        <ol class="hint"><li>Im <b>Microsoft Entra Admin Center</b> unter Anwendungen → App-Registrierungen → <b>Neue Registrierung</b>, z. B. „PK95 Monitoring“, nur Konten in diesem Verzeichnis.</li>
+          <li><b>API-Berechtigungen</b> → Berechtigung hinzufügen → Microsoft Graph → <b>Anwendungsberechtigungen</b>: <code>Organization.Read.All</code>, <code>Domain.Read.All</code>, <code>LicenseAssignment.Read.All</code>, <code>Application.Read.All</code>, <code>ServiceHealth.Read.All</code> – dann <b>Administratorzustimmung erteilen</b>.</li>
+          <li><b>Zertifikate &amp; Geheimnisse</b> → Neuer geheimer Clientschlüssel (z. B. 24 Monate) und den <b>Wert</b> sofort kopieren – er wird nur einmal angezeigt.</li>
+          <li>Mandanten-ID (Verzeichnis-ID) und Anwendungs-ID stehen auf der Übersicht der App.</li></ol>
+        <p class="hint">Alle Rechte sind nur lesend; Benutzer, Postfächer und Dateien liest das Monitoring nicht. Wann das Geheimnis dieser App abläuft, überwacht es selbst mit – rechtzeitig ein neues anlegen und hier eintragen.</p></details>
+    </div></div>`;
+  }
   extra += `<div class="section"><div class="section-title">Netzwerk-Checks</div>
     <div class="hint">${type === "net" ? "Ein Netzwerk-Gerät besteht aus seinen Checks. Ping ohne Ziel prüft den Host des Geräts." : "Zusätzliche Prüfungen von hier aus, z. B. ob die Weboberfläche antwortet oder das Zertifikat bald abläuft."}</div>
     <div class="ed-rows" data-checks></div>
     <div class="flex"><button class="btn gray sm" type="button" data-add-check>${icon("plus")} Check hinzufügen</button></div></div>`;
 
   let nc, oids, ifs;
-  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", pbs: "Proxmox Backup Server hinzufügen", redfish: "Server-Hardware hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
-  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", pbs: "Datastores, Sicherungsgruppen, Verifizierung und Jobs eines Proxmox Backup Servers über einen API-Token mit Leserechten.", redfish: "Hardware eines Servers über seinen Management-Controller (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro) per Redfish.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
+  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", pbs: "Proxmox Backup Server hinzufügen", redfish: "Server-Hardware hinzufügen", m365: "Microsoft 365 hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
+  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", pbs: "Datastores, Sicherungsgruppen, Verifizierung und Jobs eines Proxmox Backup Servers über einen API-Token mit Leserechten.", redfish: "Hardware eines Servers über seinen Management-Controller (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro) per Redfish.", m365: "Ein Microsoft-365-Mandant über Microsoft Graph – mit einer eigenen App-Registrierung, die nur lesen darf.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
   const pxValues = (v) => ({
     port: Number(v["proxmox.port"]) || 8006, token_id: (v["proxmox.token_id"] || "").trim(), secret: v["proxmox.secret"] || "",
     fingerprint: (v["proxmox.fingerprint"] || "").trim(), watch_guests: v["proxmox.watch_guests"] || "onboot",
@@ -1380,6 +1401,9 @@ function deviceForm(dev, type, done) {
   const rfValues = (v) => ({
     port: Number(v["redfish.port"]) || 443, username: (v["redfish.username"] || "").trim(), password: v["redfish.password"] || "", fingerprint: (v["redfish.fingerprint"] || "").trim(),
   });
+  const msValues = (v) => ({
+    tenant_id: (v["m365.tenant_id"] || "").trim(), client_id: (v["m365.client_id"] || "").trim(), secret: (v["m365.secret"] || "").trim(),
+  });
   const nuValues = (v) => ({
     port: Number(v["nut.port"]) || 3493, ups: (v["nut.ups"] || "").trim(), username: (v["nut.username"] || "").trim(), password: v["nut.password"] || "",
   });
@@ -1388,7 +1412,7 @@ function deviceForm(dev, type, done) {
     button: edit ? "Speichern" : "Hinzufügen",
     onMount: (d) => {
       const form = qs("form", d);
-      const host = () => (qs('[name="host"]', d).value || "").trim();
+      const host = () => ((qs('[name="host"]', d) || {}).value || "").trim();
       nc = netChecksEditor(qs("[data-checks]", d), d0.checks, host);
       qs("[data-add-check]", d).onclick = () => nc.add(type === "net" ? "ping" : "http");
       if (type === "net" && !edit && !(d0.checks || []).length) { nc.add("ping"); qs('[name="name"]', d).focus(); }
@@ -1515,6 +1539,22 @@ function deviceForm(dev, type, done) {
           } catch (e) { out.innerHTML = ""; showErrors(d, e); }
         });
       }
+      if (type === "m365") {
+        const tb = qs("[data-test-m365]", d), out = qs("[data-test-out]", d);
+        tb.onclick = () => run(tb, async () => {
+          showErrors(d, null);
+          out.innerHTML = `<span class="spinner"></span> melde an …`;
+          try {
+            const r = await POST("/api/test/m365", { id: dev ? dev.id : "", m365: msValues(formValues(form)) });
+            if (r.ok === false) { out.innerHTML = `${pill("Fehler", "rose")} <span class="bad">${esc(r.message || "Anmeldung fehlgeschlagen.")}</span>`; return; }
+            const miss = r.missing || [];
+            out.innerHTML = `${pill("Verbunden", "green", true)} <span><b>${esc(r.tenant)}</b>${r.domain ? ` · ${esc(r.domain)}` : ""} · ${int(r.licenses)} ${r.licenses === 1 ? "Lizenzprodukt" : "Lizenzprodukte"} · ${int(r.apps)} ${r.apps === 1 ? "App" : "Apps"} mit Geheimnis${r.sync ? " · Entra Connect" : ""}</span>` +
+              (miss.length ? `<div class="t-sub warn-ink">Es fehlen Berechtigungen (Administratorzustimmung?): ${miss.map((x) => `<code>${esc(x)}</code>`).join(", ")}</div>` : `<div class="t-sub">Alle Berechtigungen vorhanden.</div>`);
+            const nm = qs('[name="name"]', d);
+            if (!nm.value.trim() && r.tenant) nm.value = `Microsoft 365 ${r.tenant}`;
+          } catch (e) { out.innerHTML = ""; showErrors(d, e); }
+        });
+      }
       if (type === "nut") {
         const tb = qs("[data-test-nut]", d), out = qs("[data-test-out]", d), box = qs("[data-nut-ups]", d);
         const upsInput = qs('[name="nut.ups"]', d);
@@ -1567,6 +1607,7 @@ function deviceForm(dev, type, done) {
       if (type === "veeam") out.veeam = vbValues(v);
       if (type === "pbs") out.pbs = pbValues(v);
       if (type === "redfish") out.redfish = rfValues(v);
+      if (type === "m365") out.m365 = msValues(v);
       const r = edit ? await PUT(`/api/devices/${enc(dev.id)}`, out) : await POST("/api/devices", out);
       state.ovAt = 0;
       toast(edit ? "Gespeichert." : `${out.name} hinzugefügt – die erste Abfrage läuft.`);
@@ -1663,7 +1704,7 @@ PAGES["/devices/:id"] = async (el, token) => {
     if (dv.type === "agent" && !st.last_poll) notes += callout("", "Wartet auf den Agent", "Der Agent hat noch keinen Bericht geschickt. Läuft der Dienst <code>pk95agent</code> auf dem Server?");
     head.innerHTML = pageHead(`${esc(dv.name)} ${statePill(s)}`, sub,
       `<button class="btn gray" type="button" data-poll ${dv.enabled === false ? "disabled" : ""}>${icon("refresh")} Jetzt prüfen</button>
-       ${dv.type !== "agent" ? `<button class="btn gray" type="button" data-attach>${icon("desktop")} Agent hinzufügen</button>` : ""}
+       ${dv.type !== "agent" && dv.type !== "m365" ? `<button class="btn gray" type="button" data-attach>${icon("desktop")} Agent hinzufügen</button>` : ""}
        <button class="btn gray" type="button" data-maint>${icon("wrench")} Wartung</button>
        <button class="btn gray" type="button" data-edit>${icon("pencil")} Bearbeiten</button>
        <button class="ib red" type="button" data-del title="Löschen" aria-label="Gerät löschen">${icon("trash")}</button>`, par ? [`/devices/${enc(par.id)}`, par.name] : ["/devices", "Geräte"]) + notes;
@@ -2187,7 +2228,7 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Microsoft 365", "Lizenzen", "App-Registrierungen", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 // fullIn: "voll in 23 Tagen" from the storage forecast of a check ("" without one).
@@ -2398,6 +2439,10 @@ function cardValue(c) {
   if (has("guest.cpu")) return { text: fmtPct(v("guest.cpu")), sub: has("guest.mem") ? `Arbeitsspeicher ${fmtPct(v("guest.mem"))}` : "", spark: sp("guest.cpu") };
   if (has("printer.toner")) return { text: fmtPct(v("printer.toner")), sub: "Füllstand", bar: v("printer.toner"), low: true, spark: sp("printer.toner") };
   if (has("temp")) { const m = firstMetric(c, (x) => x.n === "temp" && isNum(x.v)); return { text: fmtVal(m.v, "°C"), sub: m.i && !String(c.name).includes(m.i) ? m.i : "Temperatur", spark: sp("temp") }; }
+  if (has("m365.sync_age")) return { word: true, text: `vor ${fmtAgeH(v("m365.sync_age"))}`, sub: "letzte Synchronisierung aus dem lokalen AD", spark: sp("m365.sync_age") };
+  if (has("m365.cred_days")) { const d = Math.floor(v("m365.cred_days")); return { word: true, text: d < 0 ? "abgelaufen" : `noch ${d} ${d === 1 ? "Tag" : "Tage"}`, sub: fa["Gültig bis"] ? `${d < 0 ? "seit" : "bis"} ${fa["Gültig bis"]}` : "" }; }
+  if (has("m365.sub_days")) { const d = Math.floor(v("m365.sub_days")); return { word: true, text: d < 0 ? "beendet" : `endet in ${d} ${d === 1 ? "Tag" : "Tagen"}`, sub: String(c.msg || "").split(" · ").find((x) => x.includes("zugewiesen")) || "" }; }
+  if (has("m365.lic_free")) { const f = int(v("m365.lic_free")); return { word: true, text: f < 0 ? `${-f} zu viel zugewiesen` : `${f} frei`, sub: String(c.msg || "").split(" · ").find((x) => x.includes("zugewiesen")) || "" }; }
   if (has("ad.repl_age")) return { word: true, text: `vor ${fmtAgeH(v("ad.repl_age"))}`, sub: "letzte erfolgreiche Replikation", spark: sp("ad.repl_age") };
   if (has("ad.time_offset")) return { text: fmtVal(v("ad.time_offset"), "s"), sub: "Abweichung zum PDC-Emulator", spark: sp("ad.time_offset") };
   if (has("power.watts")) return { text: fmtVal(v("power.watts"), "W"), sub: "Leistungsaufnahme", spark: sp("power.watts") };
@@ -3558,6 +3603,10 @@ const EXPLAIN = {
     why: "ZFS hat beschädigte oder nicht lesbare Daten entdeckt. Mit Redundanz repariert ZFS sie selbst – die Ursache (Platte, Kabel, Controller oder Arbeitsspeicher) bleibt aber bestehen.",
     todo: ["Auf dem Server `zpool status -v <pool>` ansehen: Welche Platte zählt Fehler?", "SMART-Werte dieser Platte und das Kabel prüfen.", "Nach der Behebung `zpool clear <pool>` ausführen und einen Scrub starten."] },
   "ad.repl_age": { what: "Wie viele Stunden die letzte erfolgreiche eingehende Replikation von diesem Partner-Domänencontroller zurückliegt (älteste Partition).", why: "Repliziert ein DC nicht mehr, laufen Kennwörter, Konten und Gruppenrichtlinien auseinander – Anmeldungen schlagen an einem Standort fehl. Nach der Tombstone-Lebensdauer (meist 180 Tage) darf der Partner gar nicht mehr replizieren.", todo: ["Auf dem DC „repadmin /showrepl“ und „repadmin /replsummary“ ausführen.", "Erreichbarkeit, DNS-Auflösung und Firewall (RPC, Port 135 und dynamische Ports) zum Partner prüfen.", "Nach der Ursache „repadmin /syncall /AdeP“ ausführen."] },
+  "m365.sync_age": { what: "Wie viele Stunden die letzte Synchronisierung von Entra Connect (oder Cloud Sync) aus dem lokalen Active Directory zurückliegt. Normal läuft sie alle 30 Minuten.", why: "Steht die Synchronisierung, kommen neue Mitarbeiter, Kennwortänderungen, Sperrungen und Gruppenänderungen nicht in Microsoft 365 an – ausgeschiedene Mitarbeiter können sich weiter anmelden.", todo: ["Auf dem Entra-Connect-Server den Dienst „Microsoft Azure AD Sync“ (ADSync) prüfen und starten.", "Im Synchronization Service Manager die letzten Läufe und Fehler ansehen.", "In PowerShell „Start-ADSyncSyncCycle -PolicyType Delta“ ausführen.", "Ist das Konto des Connectors abgelaufen oder gesperrt? Ist der Server aktuell (alte Versionen werden abgeschaltet)?"] },
+  "m365.cred_days": { what: "Wie viele Tage das Geheimnis oder Zertifikat der App-Registrierung noch gültig ist (das am längsten gültige zählt).", why: "Läuft es ab, hört die Anwendung schlagartig auf zu funktionieren – Scan-to-Mail, Sicherungen, Schnittstellen oder dieses Monitoring.", todo: ["Im Entra Admin Center unter App-Registrierungen → Zertifikate & Geheimnisse ein neues Geheimnis anlegen.", "Den neuen Wert in der Anwendung eintragen (bei dieser Überwachung: am Gerät unter Bearbeiten).", "Das alte Geheimnis danach löschen. Wird die App nicht mehr gebraucht, die App-Registrierung entfernen."] },
+  "m365.sub_days": { what: "In wie vielen Tagen das Abonnement endet – angezeigt für Testversionen und Abonnements, die abgelaufen oder gesperrt sind.", why: "Endet es, verlieren die Benutzer die Lizenz: erst Kulanzzeit, dann gesperrt, am Ende werden Daten gelöscht.", todo: ["Im Microsoft 365 Admin Center unter Abrechnung → Ihre Produkte das Abonnement verlängern oder kaufen.", "Bei einer Testversion entscheiden, ob sie in ein bezahltes Abonnement übergehen soll.", "Wird das Produkt nicht mehr gebraucht, die Lizenzen den Benutzern entziehen."] },
+  "m365.lic_free": { what: "Wie viele Lizenzen dieses Produkts noch frei sind (gekauft minus zugewiesen).", why: "Ohne freie Lizenz lässt sich kein neuer Mitarbeiter einrichten; zu viele freie Lizenzen kosten Geld.", todo: ["Vor einem Neuzugang rechtzeitig Lizenzen nachkaufen.", "Lizenzen ausgeschiedener Mitarbeiter entziehen.", "Eine Warnschwelle für wenige freie Lizenzen am Gerät unter Schwellwerte (Messwert m365.lic_free, unterhalb) setzen."] },
   "ad.time_offset": { what: "Wie viele Sekunden die Uhr des Domänencontrollers vom PDC-Emulator abweicht.", why: "Kerberos lehnt Anmeldungen ab, wenn Uhren mehr als 5 Minuten auseinanderliegen.", todo: ["Mit „w32tm /query /status“ die Zeitquelle prüfen.", "Mit „w32tm /resync /rediscover“ neu synchronisieren.", "Auf virtuellen DCs die Zeitsynchronisierung des Hypervisors abschalten (Hyper-V: Integrationsdienst „Zeitsynchronisierung“)."] },
   "forecast.days": { what: "In wie vielen Tagen der Speicher voll ist, wenn er so weiterwächst wie in den letzten 14 Tagen (Trend der Belegung; nach einer Bereinigung zählt nur die Zeit danach).", why: "Die Warnung bei 85 % kommt bei schnell wachsenden Datenlaufwerken oft zu spät. Die Prognose meldet sich einen Monat vorher (Warnung unter 30, kritisch unter 7 Tagen).", todo: ["Prüfen, was wächst (Protokolle, Sicherungen, Papierkorb, Schattenkopien, Snapshots).", "Aufräumen oder den Speicher rechtzeitig vergrößern.", "Wächst der Speicher planmäßig, die Grenzen unter Einstellungen → Schwellwerte (Messwert forecast.days) am Gerät anpassen."] },
   "zfs.usage": { what: "Die Belegung des ZFS-Pools.",
@@ -4355,30 +4404,33 @@ PAGES["/expiry"] = async (el, token) => {
   const stat = (label, v, sub, cls) => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${v}</div><div class="t-sub">${sub}</div></div>`;
   const expired = rows.filter((r) => soon(r, 0)).length, in30 = rows.filter((r) => soon(r, 30) && !soon(r, 0)).length;
   const certs = rows.filter((r) => r.kind === "cert").length, doms = rows.filter((r) => r.kind === "domain").length, full = rows.filter((r) => r.kind === "storage").length;
+  const apps = rows.filter((r) => r.kind === "app").length, lics = rows.filter((r) => r.kind === "license").length;
+  const KIND_ICON = { domain: "globe", storage: "database", app: "key", license: "apps" };
   const left = (r) => {
     const d = days(r);
     if (d == null) return '<span class="muted">kein Datum</span>';
     const txt = r.kind === "storage" ? (d < 1 ? "voll in unter einem Tag" : `voll in ${d} ${d === 1 ? "Tag" : "Tagen"}`) :
+      r.kind === "license" ? (d < 0 ? "beendet" : `endet in ${d} ${d === 1 ? "Tag" : "Tagen"}`) :
       d < 0 ? `seit ${-d} ${d === -1 ? "Tag" : "Tagen"} abgelaufen` : d === 0 ? "läuft heute ab" : `noch ${d} ${d === 1 ? "Tag" : "Tage"}`;
     return `<span class="${d < 14 ? "bad" : d < 30 ? "warn-ink" : ""}">${txt}</span>`;
   };
-  el.innerHTML = pageHead("Ablaufdaten", "Zertifikate, Domains und Speicher, der bald voll ist – was als Nächstes abläuft, steht oben.") +
+  el.innerHTML = pageHead("Ablaufdaten", "Zertifikate, Domains, App-Geheimnisse und Abonnements von Microsoft 365 und Speicher, der bald voll ist – was als Nächstes abläuft, steht oben.") +
     `<div class="rp-stats">
-      ${stat("Abgelaufen", expired, "Zertifikate und Domains", expired ? "rp-bad" : "rp-ok")}
+      ${stat("Abgelaufen", expired, "Zertifikate, Domains, Geheimnisse", expired ? "rp-bad" : "rp-ok")}
       ${stat("In den nächsten 30 Tagen", in30, "verlängern oder Platz schaffen", in30 ? "rp-warn" : "rp-ok")}
-      ${stat("Zertifikate und Domains", certs + doms, `${certs} Zertifikate · ${doms} Domains`, "")}
+      ${stat(apps + lics ? "Überwacht" : "Zertifikate und Domains", certs + doms + apps + lics, `${certs} Zertifikate · ${doms} Domains${apps + lics ? ` · ${apps} App-Geheimnisse${lics ? ` · ${lics} Abonnements` : ""}` : ""}`, "")}
       ${stat("Speicher läuft voll", full, "in den nächsten 90 Tagen", full ? "rp-warn" : "rp-ok")}
     </div>` +
     (rows.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp exp-table"><thead><tr><th>Zustand</th><th>Was</th><th>Gerät</th><th>Gültig bis</th><th>Restlaufzeit</th><th>Details</th></tr></thead><tbody>
       ${rows.map((r) => `<tr class="dt-row" data-href="${checkPath(r.device_id, r.check_key)}">
         <td data-l="Zustand">${r.acked ? pill("Quittiert", "green", true) : statePill(r.state)}</td>
-        <td data-l="Was"><a class="t-main" href="${checkPath(r.device_id, r.check_key)}" data-go>${icon(r.kind === "domain" ? "globe" : r.kind === "storage" ? "database" : "lock", "ic-inline")}${esc(r.name)}</a>${r.state !== "ok" ? `<div class="t-sub">${esc(r.message)}</div>` : ""}</td>
+        <td data-l="Was"><a class="t-main" href="${checkPath(r.device_id, r.check_key)}" data-go>${icon(KIND_ICON[r.kind] || "lock", "ic-inline")}${esc(r.name)}</a>${r.state !== "ok" ? `<div class="t-sub">${esc(r.message)}</div>` : ""}</td>
         <td data-l="Gerät">${esc(r.device)}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
         <td data-l="${r.kind === "storage" ? "Voll am" : "Gültig bis"}" class="nowrap">${r.until ? esc(r.until.slice(0, 10)) : "—"}${r.kind === "storage" ? '<div class="t-sub">Prognose</div>' : ""}</td>
         <td data-l="Restlaufzeit" class="nowrap">${left(r)}</td>
         <td data-l="Details" class="small">${esc(r.detail || "—")}</td></tr>`).join("")}
       </tbody></table></div></div>
-      <p class="muted small" style="margin:0 12px">Zertifikate prüfen HTTP(S)- und TLS-Checks, Domains der Check „Domain-Ablauf“ (unter Gerät → Bearbeiten → Netzwerk-Checks). Warnung ab 21 bzw. 30 Tagen, kritisch ab 7 bzw. 14 Tagen. Speicher: Prognose aus dem Trend der letzten 14 Tage (Festplatten, Proxmox-Speicher, ZFS, Repositories), Warnung unter 30, kritisch unter 7 Tagen. Alle Grenzen änderbar unter Einstellungen → Schwellwerte.</p>`
+      <p class="muted small" style="margin:0 12px">Zertifikate prüfen HTTP(S)- und TLS-Checks, Domains der Check „Domain-Ablauf“ (unter Gerät → Bearbeiten → Netzwerk-Checks). Warnung ab 21 bzw. 30 Tagen, kritisch ab 7 bzw. 14 Tagen. Speicher: Prognose aus dem Trend der letzten 14 Tage (Festplatten, Proxmox-Speicher, ZFS, Repositories), Warnung unter 30, kritisch unter 7 Tagen. Microsoft 365: Geheimnisse und Zertifikate von App-Registrierungen (Warnung unter 30, kritisch unter 7 Tagen) sowie Testversionen und auslaufende Abonnements (14 bzw. 3 Tage). Alle Grenzen änderbar unter Einstellungen → Schwellwerte.</p>`
       : `<div class="panel">${empty("Nichts läuft ab", "Zertifikate und Domains erscheinen hier, sobald ein Gerät einen Netzwerk-Check „HTTP(S)“, „TLS-Zertifikat“ oder „Domain-Ablauf“ hat. Speicher erscheint, wenn er nach dem Trend der letzten 14 Tage in weniger als 90 Tagen voll ist.", "", "calendar")}</div>`);
   bindRowLinks(el);
 };
@@ -4784,20 +4836,125 @@ const SP_MODES = [
   ["all", "Alle Probleme", "Jeder kritische Alarm gilt als Störung, jede Warnung als Einschränkung – z. B. auch ein gestoppter Dienst oder eine gestörte Replikation."],
 ];
 
-// statusComponentDialog creates (cp = null) or edits a service of the status page.
+// scRefText describes a check selection that the picker cannot show as a box (all devices or
+// a pattern, e.g. from a template).
+function scRefText(r, names) {
+  const what = r.group && r.key ? `Gruppe „${r.group}“, ${r.key}` : r.group ? `Gruppe „${r.group}“` : r.key;
+  return `${what} – ${r.device ? names[r.device] || r.device : "auf allen Geräten"}`;
+}
+const SC_DOT = { ok: "green", warn: "amber", crit: "rose" };
+const scRefLabel = (cp, names) => {
+  const refs = cp.checks || [];
+  if (!refs.length) return "";
+  const groups = [...new Set(refs.filter((r) => r.group).map((r) => r.group))];
+  const keys = refs.filter((r) => !r.group).length;
+  return [groups.length ? `Gruppe ${groups.map((g) => `„${g}“`).join(", ")}` : "", keys ? `${keys} ${keys === 1 ? "Check" : "Checks"}` : ""].filter(Boolean).join(" · ");
+};
+
+// statusComponentDialog creates (cp = null) or edits a service of the status page: its
+// devices and folders and, optionally, only some of their checks.
 function statusComponentDialog(cp, devices, groups, save) {
-  cp = cp || { mode: "outage", devices: [], folders: [] };
+  cp = cp || { mode: "outage", devices: [], folders: [], checks: [] };
+  const names = Object.fromEntries(devices.map((d) => [d.id, d.name]));
+  const refs = cp.checks || [];
+  // selections the boxes show: a group or an exact key of one device
+  const boxable = (r) => r.device && ((r.group && !r.key) || (r.key && !r.group && !r.key.includes("*")));
+  let extra = refs.filter((r) => !boxable(r));
+  const sel = new Set(refs.filter(boxable).map((r) => (r.group ? `g|${r.device}|${r.group}` : `k|${r.device}|${r.key}`)));
+  const pickHTML = `<span class="fl">Was zählt?</span>
+    <div class="seg" role="group" aria-label="Was zählt"><button type="button" data-scm="all" aria-pressed="${!refs.length}">Ganze Geräte</button><button type="button" data-scm="pick" aria-pressed="${!!refs.length}">Nur ausgewählte Checks</button></div>
+    <span class="hint" data-scm-hint></span>
+    <div data-sc-extra></div><div class="pick-list sc-pick" data-sc-checks hidden></div><span class="err" hidden></span>`;
   return formDialog({
     title: cp.name ? `Dienst „${cp.name}“` : "Neuer Dienst", ic: "globe",
-    text: "Ein Dienst fasst die Geräte zusammen, die deine Kunden als eine Sache kennen – z. B. „E-Mail“ oder „Warenwirtschaft“. Auf der Statusseite stehen nur Name und Beschreibung, nie die Geräte.",
+    text: "Ein Dienst fasst zusammen, was deine Kunden als eine Sache kennen – z. B. „E-Mail“ oder „Windows-Anmeldung“. Auf der Statusseite stehen nur Name und Beschreibung, nie Geräte oder Checks.",
     fields: [
       { name: "name", label: "Name", value: cp.name, required: true, placeholder: "z. B. Dateiablage", wide: true },
       { name: "note", label: "Beschreibung (optional)", value: cp.note, placeholder: "z. B. Laufwerke S: und P:", wide: true },
       { name: "mode", label: "Als gestört zeigen bei", type: "radio", value: cp.mode, options: SP_MODES },
       { type: "html", name: "targets", wide: true, html: targetPicker(devices, groups, targetSet(cp), "Geräte dahinter") },
+      { type: "html", name: "checks", wide: true, html: pickHTML },
     ],
-    onMount: bindTargetPicker,
-    submit: (v, dl) => save({ ...cp, name: v.name, note: v.note, mode: v.mode, ...pickedTargets(dl) }),
+    onMount: (dl) => {
+      bindTargetPicker(dl);
+      let mode = refs.length ? "pick" : "all", seq = 0, timer = null, loaded = false;
+      const box = qs("[data-sc-checks]", dl), hint = qs("[data-scm-hint]", dl);
+      const remember = () => qsa("[data-scc]:checked, [data-scg]:checked", box).forEach((x) => sel.add(x.dataset.scc || x.dataset.scg));
+      const drawExtra = () => {
+        qs("[data-sc-extra]", dl).innerHTML = mode === "pick" && extra.length ? `<div class="sc-extra">${extra.map((r, i) => `<span class="mchip">${esc(scRefText(r, names))} <button class="ib xs" type="button" data-sc-x="${i}" title="Entfernen" aria-label="Auswahl entfernen">${icon("x")}</button></span>`).join("")}</div>` : "";
+        qsa("[data-sc-x]", dl).forEach((b) => b.onclick = () => { extra = extra.filter((_, k) => k !== +b.dataset.scX); drawExtra(); });
+      };
+      const sync = () => qsa("[data-scg]", box).forEach((g) => qsa(`[data-scc][data-in="${CSS.escape(g.dataset.scg)}"]`, box).forEach((c) => { c.disabled = g.checked; if (g.checked) c.checked = true; }));
+      const load = async () => {
+        const my = ++seq;
+        remember();
+        loaded = false;
+        const t = pickedTargets(dl);
+        if (!t.devices.length && !t.folders.length) { box.innerHTML = `<span class="muted small">Erst oben Geräte oder Ordner wählen.</span>`; return; }
+        box.innerHTML = `<span class="spinner"></span>`;
+        const r = await GET(`/api/statuspage/checks?devices=${enc(t.devices.join(","))}&folders=${enc(t.folders.join(","))}`);
+        if (my !== seq) return;
+        box.innerHTML = (r.devices || []).map((d) => {
+          const byGroup = {};
+          for (const c of d.checks) (byGroup[c.group || "Sonstiges"] ||= []).push(c);
+          return `<div class="sc-dev"><div class="sc-dev-name">${esc(d.name)}</div>${Object.entries(byGroup).map(([g, cs]) => {
+            const gk = `g|${d.id}|${g}`;
+            return `<div class="sc-grp"><label class="check"><input type="checkbox" data-scc-g data-scg="${esc(gk)}" ${sel.has(gk) ? "checked" : ""}><span><b>${esc(g)}</b> <span class="muted small">ganze Gruppe, auch neue Checks</span></span></label>
+              <div class="sc-chks">${cs.map((c) => { const ck = `k|${d.id}|${c.key}`; return `<label class="check sc-chk"><input type="checkbox" data-scc="${esc(ck)}" data-in="${esc(gk)}" ${sel.has(ck) ? "checked" : ""}><span><span class="dot ${SC_DOT[c.state] || ""}"></span> ${esc(c.name)}</span></label>`; }).join("")}</div></div>`;
+          }).join("")}${d.checks.length ? "" : `<span class="muted small">Noch keine Checks – erst nach der ersten Abfrage.</span>`}</div>`;
+        }).join("") || `<span class="muted small">Keine aktiven Geräte.</span>`;
+        qsa("[data-scg]", box).forEach((g) => g.addEventListener("change", () => { if (!g.checked) sel.delete(g.dataset.scg); else sel.add(g.dataset.scg); sync(); }));
+        qsa("[data-scc]", box).forEach((c) => c.addEventListener("change", () => { if (!c.checked) sel.delete(c.dataset.scc); }));
+        sync();
+        loaded = true;
+      };
+      const show = () => {
+        qsa("[data-scm]", dl).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.scm === mode)));
+        box.hidden = mode !== "pick";
+        hint.textContent = mode === "pick" ? "Nur diese Checks zählen. Ist ein Gerät nicht erreichbar, zählt es trotzdem als Ausfall. Eine ganze Gruppe nimmt auch später neue Checks mit." : "Jedes Gerät zählt als Ganzes.";
+        drawExtra();
+        if (mode === "pick") load();
+      };
+      qsa("[data-scm]", dl).forEach((b) => b.onclick = () => { mode = b.dataset.scm; show(); });
+      qsa("[data-t]", dl).forEach((x) => x.addEventListener("change", () => { if (mode === "pick") { clearTimeout(timer); timer = setTimeout(load, 300); } }));
+      dl._scPicked = () => {
+        if (mode !== "pick") return [];
+        const ks = loaded ? [...qsa("[data-scg]:checked", box).map((g) => g.dataset.scg), ...qsa("[data-scc]:checked:not(:disabled)", box).map((c) => c.dataset.scc)] : [...sel];
+        const out = [...extra];
+        for (const k of ks) {
+          const [kind, device, ...rest] = k.split("|");
+          out.push(kind === "g" ? { device, group: rest.join("|") } : { device, key: rest.join("|") });
+        }
+        if (!out.length) throw Object.assign(new Error("Bitte die markierten Felder prüfen."), { fields: { checks: "Mindestens einen Check oder eine Gruppe wählen – oder „Ganze Geräte“." } });
+        return out;
+      };
+      show();
+    },
+    submit: (v, dl) => save({ ...cp, name: v.name, note: v.note, mode: v.mode, ...pickedTargets(dl), checks: dl._scPicked() }),
+  });
+}
+
+// statusTemplateDialog adds a ready-made service.
+function statusTemplateDialog(templates, done) {
+  const ready = templates.filter((t) => t.ready), notReady = templates.filter((t) => !t.ready);
+  return formDialog({
+    title: "Dienst aus Vorlage", ic: "sparkles", button: "Hinzufügen",
+    text: "Vorlagen suchen sich die passenden Geräte selbst – oder legen die Überwachung an, die es dafür noch nicht gibt.",
+    fields: [
+      { name: "tpl", type: "radio", value: (ready[0] || {}).id, options: ready.map((t) => [t.id, t.name, `${t.text} ${t.hint}`]) },
+      { name: "url", label: "Adresse der Webseite", value: "", mono: true, placeholder: "https://www.muster-gmbh.de", wide: true },
+      ...(notReady.length ? [{ type: "html", name: "later", wide: true, html: `<span class="fl">Noch nicht möglich</span><ul class="hint sc-later">${notReady.map((t) => `<li><b>${esc(t.name)}:</b> ${esc(t.hint)}</li>`).join("")}</ul>` }] : []),
+    ],
+    onMount: (dl) => {
+      const show = () => { qs('[data-field="url"]', dl).hidden = (formValues(qs("form", dl)).tpl !== "website"); };
+      qsa('[name="tpl"]', dl).forEach((x) => x.addEventListener("change", show));
+      show();
+    },
+    submit: async (v) => {
+      const r = await POST("/api/statuspage/template", { id: v.tpl, url: v.tpl === "website" ? v.url : "" });
+      toast(r.message || "Dienst angelegt.");
+      await done(r);
+    },
   });
 }
 
@@ -4835,12 +4992,12 @@ PAGES["/statuspage"] = async (el, token) => {
             ${link ? `${codeBlock(link)}<div class="flex mt"><button class="btn gray sm" type="button" data-rotate>${icon("refresh")} Neuer Link</button><span class="muted small">Macht den bisherigen Link ungültig.</span></div>`
               : `<p class="muted small">Der Link entsteht beim ersten Speichern.</p>`}
           </div></div>
-        <div class="panel"><div class="panel-head"><div class="panel-title">Dienste</div><div class="actions"><button class="btn sm" type="button" data-sc-new>${icon("plus")} Dienst</button></div></div>
+        <div class="panel"><div class="panel-head"><div class="panel-title">Dienste</div><div class="actions"><button class="btn gray sm" type="button" data-sc-tpl>${icon("sparkles")} Vorlage</button><button class="btn sm" type="button" data-sc-new>${icon("plus")} Dienst</button></div></div>
           ${comps.length ? `<p class="panel-intro">In dieser Reihenfolge auf der Seite. Wartungsfenster erscheinen dort, wenn sie „Auf der Statusseite ankündigen“ haben (<a href="/maintenance" data-go>Wartungsfenster</a>).</p>
-            ${comps.map((c, i) => `<div class="spc-row"><div class="grow"><b>${esc(c.name)}</b> ${pill(c.mode === "all" ? "Alle Probleme" : "Nur Ausfälle")}${c.note ? `<div class="muted small">${esc(c.note)}</div>` : ""}<div class="small">${windowTargets(c, names) || "—"}</div></div>
+            ${comps.map((c, i) => `<div class="spc-row"><div class="grow"><b>${esc(c.name)}</b> ${pill(c.mode === "all" ? "Alle Probleme" : "Nur Ausfälle")}${c.note ? `<div class="muted small">${esc(c.note)}</div>` : ""}<div class="small">${windowTargets(c, names) || "—"}${(c.checks || []).length ? ` · <span class="muted">nur ${esc(scRefLabel(c, names))}</span>` : ""}</div></div>
               <div class="flex nowrap"><button class="ib spc-up" type="button" data-sc-up="${i}" title="Nach oben" aria-label="${esc(c.name)} nach oben" ${i === 0 ? "disabled" : ""}>${icon("chevron-down")}</button><button class="ib" type="button" data-sc-down="${i}" title="Nach unten" aria-label="${esc(c.name)} nach unten" ${i === comps.length - 1 ? "disabled" : ""}>${icon("chevron-down")}</button>
               <button class="ib" type="button" data-sc-edit="${i}" title="Bearbeiten" aria-label="${esc(c.name)} bearbeiten">${icon("pencil")}</button><button class="ib" type="button" data-sc-del="${i}" title="Löschen" aria-label="${esc(c.name)} löschen">${icon("trash")}</button></div></div>`).join("")}`
-            : empty("Noch keine Dienste", "Lege an, was deine Kunden kennen – z. B. „E-Mail“, „Dateiablage“ oder „Internet“ – und ordne die Geräte dahinter zu.", `<button class="btn" type="button" data-sc-new2>${icon("plus")} Dienst anlegen</button>`, "globe")}
+            : empty("Noch keine Dienste", "Lege an, was deine Kunden kennen – z. B. „E-Mail“, „Dateiablage“ oder „Internet“ – und ordne die Geräte dahinter zu.", `<div class="flex"><button class="btn" type="button" data-sc-tpl2>${icon("sparkles")} Aus Vorlage</button><button class="btn gray" type="button" data-sc-new2>${icon("plus")} Dienst anlegen</button></div>`, "globe")}
         </div></div>
         <div class="panel"><div class="panel-head"><div class="panel-title">Vorschau</div></div>
           <p class="panel-intro">So sieht es gerade aus. Die Zahl der Geräte siehst nur du.</p>
@@ -4864,6 +5021,7 @@ PAGES["/statuspage"] = async (el, token) => {
       toast("Dienst gespeichert.");
     });
     qsa("[data-sc-new], [data-sc-new2]", el).forEach((b) => b.onclick = () => edit());
+    qsa("[data-sc-tpl], [data-sc-tpl2]", el).forEach((b) => b.onclick = () => statusTemplateDialog(data.templates || [], async (r) => { data = r; if (token === pageToken) draw(); }));
     qsa("[data-sc-edit]", el).forEach((b) => b.onclick = () => edit(+b.dataset.scEdit));
     const move = (i, j) => { const list = comps.slice(); [list[i], list[j]] = [list[j], list[i]]; return saveComponents(list); };
     qsa("[data-sc-up]", el).forEach((b) => b.onclick = () => run(b, () => move(+b.dataset.scUp, +b.dataset.scUp - 1)));

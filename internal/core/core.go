@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"pk95monitoring/internal/agentdist"
+	"pk95monitoring/internal/collect/m365"
 	"pk95monitoring/internal/collect/nut"
 	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
@@ -70,7 +71,7 @@ func New(st *store.Store, opt Options) (*Core, error) {
 	c := &Core{
 		St: st, Opt: opt, Started: time.Now().Unix(),
 		Agents:  agentdist.NewCatalog(opt.AgentDir, opt.Version),
-		Proxmox: proxmox.New(), SNMP: snmp.New(), NUT: nut.New(), Veeam: veeam.New(), PBS: pbs.New(), Redfish: redfish.New(),
+		Proxmox: proxmox.New(), SNMP: snmp.New(), NUT: nut.New(), Veeam: veeam.New(), PBS: pbs.New(), Redfish: redfish.New(), M365: m365.New(),
 		Notify: notify.Send, Mail: notify.SendMail, Now: time.Now,
 		devices: map[string]model.Device{}, rt: map[string]*devState{}, open: map[string]*openAlert{},
 		windows: map[string]MaintWindow{}, winActive: map[string]int64{},

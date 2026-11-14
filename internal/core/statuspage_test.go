@@ -126,10 +126,11 @@ func TestStatusPagePublic(t *testing.T) {
 	if fs.State != PubOK || fs.Members != 0 || len(fs.History) != statusDays || fs.History[statusDays-1].Day != "2026-11-11" {
 		t.Fatalf("Dateiablage %+v", fs)
 	}
-	if d := fs.History[26]; d.Day != "2026-11-08" || d.State != PubCrit || d.Down != 1800 {
+	// one of the two servers was down: a partial outage, no disruption
+	if d := fs.History[26]; d.Day != "2026-11-08" || d.State != PubWarn || d.Down != 0 || d.Limited != 1800 {
 		t.Fatalf("outage day %+v", d)
 	}
-	if fs.Availability == nil || *fs.Availability > 99.99 || *fs.Availability < 99.9 {
+	if fs.Availability == nil || *fs.Availability != 100 {
 		t.Fatalf("availability %v", fs.Availability)
 	}
 	if web := s.Components[1]; web.History[26].State != PubOK || web.Availability == nil || *web.Availability != 100 {
@@ -171,7 +172,7 @@ func TestStatusPagePublic(t *testing.T) {
 	if s.State != PubWarn || s.Text != "Einzelne Dienste eingeschränkt" {
 		t.Fatalf("overall %+v", s)
 	}
-	if today := fs.History[statusDays-1]; today.State != PubCrit || today.Down == 0 {
+	if today := fs.History[statusDays-1]; today.State != PubWarn || today.Limited == 0 {
 		t.Fatalf("today %+v", today)
 	}
 
@@ -235,5 +236,104 @@ func TestStatusOutageWithoutReach(t *testing.T) {
 	}
 	if srv := s.Components[1]; srv.State != PubOK {
 		t.Errorf("agent with a critical check %+v", srv)
+	}
+}
+
+func TestStatusChecksAndTemplates(t *testing.T) {
+	e := newEnv(t, Options{})
+	ad := func(state string) []model.Check {
+		return []model.Check{
+			{Key: "ad:dc", Name: "Domänencontroller", Group: "Active Directory", State: model.StateOK},
+			{Key: "ad:repl:dc9", Name: "Replikation von DC9", Group: "Active Directory", State: state},
+			{Key: "svc", Name: "Dienst", Group: "Dienste", State: model.StateCrit},
+		}
+	}
+	a := e.agentDevice(t, "dc-a", nil)
+	b := e.agentDevice(t, "dc-b", nil)
+	e.report(t, a, ad(model.StateOK)...)
+	e.report(t, b, ad(model.StateOK)...)
+	ctx := context.Background()
+
+	tpl := map[string]StatusTemplate{}
+	for _, x := range e.c.StatusTemplates() {
+		tpl[x.ID] = x
+	}
+	if !tpl[TplLogon].Ready || !strings.HasPrefix(tpl[TplLogon].Hint, "2 Domänencontroller: dc-a, dc-b") || tpl[TplM365].Ready ||
+		!tpl[TplInternet].Ready || !strings.HasPrefix(tpl[TplInternet].Hint, "Legt das Gerät") || tpl[TplWebsite].Input != "url" {
+		t.Fatalf("templates %+v", tpl)
+	}
+	if _, _, errs, _ := e.c.ApplyStatusTemplate(TplM365, ""); errs["template"] == "" {
+		t.Error("Microsoft 365 without a tenant")
+	}
+	p, msg, errs, err := e.c.ApplyStatusTemplate(TplLogon, "")
+	if err != nil || len(errs) > 0 || msg != "Dienst „Windows-Anmeldung“ angelegt." {
+		t.Fatalf("logon: %v %v %q", errs, err, msg)
+	}
+	if cp := p.Components[0]; len(cp.Devices) != 2 || len(cp.Checks) != 1 || cp.Checks[0].Group != "Active Directory" {
+		t.Fatalf("logon service %+v", cp)
+	}
+	// the critical service check is not selected; one of four AD checks failing is partial
+	pv, _ := e.c.StatusPreview(ctx)
+	if c0 := pv.Components[0]; c0.State != PubOK || c0.Members != 2 || c0.Units != 4 {
+		t.Fatalf("logon ok %+v", c0)
+	}
+	e.report(t, a, ad(model.StateCrit)...)
+	pv, _ = e.c.StatusPreview(ctx)
+	if c0 := pv.Components[0]; c0.State != PubWarn || c0.Text != "Teilweise gestört" {
+		t.Fatalf("logon partial %+v", c0)
+	}
+	if _, _, errs, _ := e.c.ApplyStatusTemplate(TplLogon, ""); errs["template"] == "" {
+		t.Error("the same service twice")
+	}
+
+	// internet: the device is created once and found afterwards
+	p, msg, errs, err = e.c.ApplyStatusTemplate(TplInternet, "")
+	if err != nil || len(errs) > 0 || !strings.Contains(msg, "Neues Gerät „Internet“") {
+		t.Fatalf("internet: %v %v %q", errs, err, msg)
+	}
+	inet := p.Components[1]
+	dev, err := e.c.Device(inet.Devices[0])
+	if err != nil || dev.Type != model.TypeNet || len(dev.Checks) != 4 || inet.Checks[0].Key != "net:*" {
+		t.Fatalf("internet device %+v %+v %v", dev, inet, err)
+	}
+	for _, x := range e.c.StatusTemplates() {
+		if x.ID == TplInternet && x.Hint != "Nutzt das vorhandene Gerät „Internet“." {
+			t.Errorf("internet hint after creation: %q", x.Hint)
+		}
+	}
+
+	// web site: address normalized, a device with HTTP and domain check
+	if _, _, errs, _ := e.c.ApplyStatusTemplate(TplWebsite, "ftp://muster.de"); errs["url"] == "" {
+		t.Error("ftp accepted")
+	}
+	p, msg, errs, err = e.c.ApplyStatusTemplate(TplWebsite, "muster-gmbh.de")
+	if err != nil || len(errs) > 0 || !strings.Contains(msg, "„Webseite muster-gmbh.de“") {
+		t.Fatalf("website: %v %v %q", errs, err, msg)
+	}
+	web := p.Components[2]
+	wd, _ := e.c.Device(web.Devices[0])
+	if web.Note != "muster-gmbh.de" || len(wd.Checks) != 2 || wd.Checks[0].Target != "https://muster-gmbh.de/" || web.Checks[0].Key != wd.Checks[0].Key() {
+		t.Fatalf("website %+v %+v", web, wd.Checks)
+	}
+
+	// catalog: checks of the service's devices without reach and inventory
+	cat := e.c.StatusCatalog([]string{a}, nil)
+	if len(cat) != 1 || cat[0].Name != "dc-a" || len(cat[0].Checks) != 3 || cat[0].Checks[0].Group != "Active Directory" {
+		t.Fatalf("catalog %+v", cat)
+	}
+	// a selection of a device that is deleted is dropped on the next save
+	_, _, _ = e.c.SaveStatusPage(StatusPage{Components: []StatusComponent{{Name: "x", Devices: []string{a}, Checks: []StatusCheck{{Device: "gone", Key: "svc"}, {Key: " "}, {Device: a, Key: "svc"}}}}})
+	if got := e.c.StatusPage().Components[0].Checks; len(got) != 1 || got[0].Device != a {
+		t.Errorf("checks after save %+v", got)
+	}
+}
+
+func TestIntersectAll(t *testing.T) {
+	got := intersectAll([][]span{{{0, 10}, {20, 30}}, {{5, 25}}, {{0, 100}}})
+	if len(got) != 2 || got[0] != (span{5, 10}) || got[1] != (span{20, 25}) {
+		t.Errorf("intersection %v", got)
+	}
+	if intersectAll([][]span{{{0, 10}}, nil}) != nil {
+		t.Error("a unit without failures")
 	}
 }

@@ -61,7 +61,7 @@
     return `<section class="sp-comp">
       <div class="sp-comp-head">
         <div class="grow"><h3 class="sp-name">${esc(c.name)}</h3>${c.note ? `<div class="sp-note">${esc(c.note)}</div>` : ""}
-          ${preview ? `<div class="sp-note">${c.members ? `${c.members} ${c.members === 1 ? "Gerät" : "Geräte"}` : "Keine aktiven Geräte"}</div>` : ""}</div>
+          ${preview ? `<div class="sp-note">${c.members ? `${c.members} ${c.members === 1 ? "Gerät" : "Geräte"}${c.units ? ` · ${c.units} ${c.units === 1 ? "Check" : "Checks"}` : ""}` : "Keine aktiven Geräte"}</div>` : ""}</div>
         <div class="sp-state ${esc(c.state)}"><span class="sp-dot"></span>${esc(c.text)}${sub ? `<span class="sp-since">${esc(sub)}</span>` : ""}</div>
       </div>
       ${bars(c, days)}

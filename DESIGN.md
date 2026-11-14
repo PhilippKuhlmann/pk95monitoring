@@ -29,6 +29,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/veeam` | Veeam Backup & Replication 12+ REST client + collector (jobs, repositories) |
 | `internal/collect/pbs` | Proxmox Backup Server REST client + collector (datastores, verification, groups, tasks) |
 | `internal/collect/redfish` | Redfish client + collector for server management controllers (iDRAC, iLO, XCC …) |
+| `internal/collect/m365` | Microsoft Graph client (client credentials) + collector for a Microsoft 365 / Entra ID tenant |
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
 | `internal/eventrules` | System log rules (Windows event log, Linux journal): built-in rules, merge, validation, XPath and journalctl queries, evaluation (pure Go; used by agent, core and demo) |
@@ -45,6 +46,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/fake/fakeveeam` | simulated Veeam REST API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakepbs` | simulated Proxmox Backup Server API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakeredfish` | simulated Redfish controller shaped like a Dell iDRAC 9 (httptest TLS) – used by tests and demo |
+| `internal/fake/fakegraph` | simulated Entra token endpoint + Microsoft Graph (tenant "Muster GmbH", httptest) – used by tests and demo |
 | `web/` | SPA: `index.html`, `app.js`, `style.css` (copied), `theme.js`, `logo.svg`, `fonts/` |
 | `deploy/updater.sh` | update helper on the Docker host (systemd path unit; see "Server update") |
 | `Dockerfile`, `docker-compose.yml` | image (linux/amd64, linux/arm64) with the server and the agent binaries for linux/amd64, linux/arm64, windows/amd64 |
@@ -153,6 +155,12 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | redfish | `rf:ctrl:<storage>` | Controller <model> | RAID: storage health and its StorageControllers; facts Modell, Firmware, Volumes, Platten. Storage without volumes and drives (onboard SATA) left out; storage tree cached 5 min |
 | redfish | `rf:vol:<storage>:<volume>` | Volume <name> (<RAID>) | RAID: health; operation Rebuild = warn with progress |
 | redfish | `rf:drive:<storage>:<drive>` | Platte <name> | Platten: health (crit "Platte ausgefallen"), FailurePredicted = warn; `disk.wearout` = 100 − PredictedMediaLifeLeftPercent |
+| m365 | `m365:tenant` | Mandant | Microsoft 365: name, default domain, verified domains; an unverified domain = warn |
+| m365 | `m365:sync` | Entra Connect Sync | Microsoft 365 (only with `onPremisesSyncEnabled`): `m365.sync_age`; never synced = warn |
+| m365 | `m365:health` | Microsoft-Dienststatus | Microsoft 365: services in serviceInterruption = crit, serviceDegradation/investigating/restoring/verifying/extendedRecovery = warn, with the oldest open incident; advisories counted |
+| m365 | `m365:perm` | Berechtigungen | Microsoft 365: areas answered with 403 = warn naming the permission |
+| m365 | `m365:sku:<part number lower>` | product name | Lizenzen: consumed/enabled+warning, `m365.lic_free`; capabilityStatus Warning = warn, Suspended/LockedOut = crit, over-assigned = warn; `m365.sub_days` for trials and ending subscriptions. Skipped: Deleted, appliesTo ≠ User, ≥ 10000 units (free SKUs), no units |
+| m365 | `m365:app:<appId lower>` | app name | App-Registrierungen: `m365.cred_days` of the credential valid longest; apps without credentials or all expired > 30 days left out |
 | pbs | `pbs:task:<worker_type>:<worker_id>` | "<Typ> <worker_id>" | newest finished task of the last 7 days per job for verificationjob, verify, syncjob, prunejob, prune, garbage_collection: `OK` ok, `WARNINGS…` warn, else crit (status in the message); "Läuft gerade" prefix while one runs; `job.age` (h); facts Typ, Letzter Lauf, Ergebnis. Task list not readable: `pbs:tasks` unknown |
 | snmp | `snmp:system` | System | System (facts: Name, Beschreibung, Standort, Kontakt, Profil, Laufzeit, plus Modell, Seriennummer (printer, UPS, NAS, UniFi), Firmware (UniFi), DSM-Version (Synology) from the profile; metric `uptime`) |
 | snmp | `snmp:cpu`, `snmp:mem` | CPU / Arbeitsspeicher | System |
@@ -234,6 +242,10 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `temp` | °C | `System`, Synology diskID, `Batterie` (UPS), `USV` (nut `ups.temperature`; several UPS: `<ups>/USV`, `<ups>/Batterie`), UniFi `Sensor N`, Redfish sensor name | snmp, nut, redfish |
 | `fan.rpm` | rpm | fan name (`Lüfter N`) | snmp (UniFi), redfish |
 | `power.watts` | W | – | redfish (power consumption) |
+| `m365.sync_age` | h | – | m365 Entra Connect (default warn 3, crit 12) |
+| `m365.cred_days` | d | – | m365 app secret/certificate (default below 30 warn, below 7 crit; kind `app` on "Ablaufdaten") |
+| `m365.sub_days` | d | – | m365 trial or ending subscription (below 14 warn, below 3 crit; kind `license` on "Ablaufdaten") |
+| `m365.lic_free` | – | – | m365 free licenses (no default threshold) |
 | `poe.power`, `poe.budget` | W | | snmp `snmp:poe` (consumption, nominal power of the PSE) |
 | `poe.usage` | % | | snmp `snmp:poe` (default threshold warn 85, crit 95) |
 | `poe.port` | W | ifName | snmp (ports that deliver PoE; per-port value from the vendor table) |
@@ -484,23 +496,49 @@ A public, read-only page for the customer behind a secret link. Configuration `S
 notice, notice_level (info|warn|crit), notice_at (set when notice or level changes), components:[{id, name, note,
 mode (outage|all), devices:[id], folders:[path]}] (≤ 30), updated}`. Members of a service: its enabled devices,
 the devices in its folders (and subfolders) and the agents attached to either (`targetMatches`, shared with the
-maintenance windows).
+maintenance windows). `checks:[{device?, key?, group?}]` narrows a service to checks (key glob with `*`, check group,
+both = both must match; device "" = every member); members without a matching check are left out. A service
+consists of units: its members, or with `checks` every selected check of every member (an unreachable member fails
+all its units).
 
-Current state per service (members in maintenance or without status are left out). `outage`: a member whose
+Current state per service (members in maintenance or without status are left out). Selected checks: crit = down
+(also with `outage`), warn = limited with `all`. Whole devices with `outage`: a member whose
 `reach` check is crit is down (a member without a reach check, e.g. a net device, when its state is crit); some down = warn
 "Teilweise gestört", all down = crit "Störung". `all`: device state crit = "Störung", warn = "Eingeschränkt".
 Otherwise "Wartungsarbeiten" (any member in maintenance, with `until`), "Betriebsbereit" or "Keine aktuellen
-Daten". `since` = earliest start of the problem. History: 30 local days from the alerts (separate checks left out):
-`reach` alerts are disruptions, with `all` (or for a member without a reach check) also crit alerts, with `all` warn alerts limitations; unions over the members;
-days before the oldest member's creation are `none`. Availability = covered time without disruption. Public
+Daten". `since` = earliest start of the problem. History: 30 local days from the alerts. A unit fails during `reach` alerts of its
+member and crit alerts of its check (whole devices: crit alerts with `all` or without a reach check; separate checks
+left out); warn alerts are limitations with `all`. `outage`: all units failing at once (`intersectAll`) is a
+disruption, the rest of their failures a limitation; `all`: any failing unit is a disruption. Days before the oldest
+member's creation are `none`. Availability = covered time without disruption. Public
 maintenance: enabled windows with `public: true` that run or start within 14 days, with the services they affect.
 Overall: crit (all services crit = "Größere Störung") > warn > maint > ok; unknown only when nothing else is known.
+
+Templates (`core/statustemplates.go`): `internet` (finds a net device pinging 1.1.1.1 and 8.8.8.8 or creates
+"Internet": those pings, DNS www.microsoft.com, HTTP msftconnecttest.com with keyword; service with `net:*` of it),
+`website` (input URL, normalized to https://…/; finds a device with that HTTP check or creates "Webseite <host>" with
+HTTP + domain check; service with the HTTP check), `logon` (devices with `ad:dc`, group "Active Directory"), `m365`
+(m365 devices, `m365:health`, mode all), `printing` (devices with `snmp:printer`, whole devices). A service with the
+same name and note is refused. Devices are created through `SaveDevice`.
 
 `PublicStatus` = `{title, intro?, notice?:{level, text, at}, state, text, components:[{name, note?, state, text,
 since?, until?, availability (null without members), history:[{day, state, down, limited}], members? (preview
 only)}], maintenance:[{name, note?, start, end, running, components:[name]}], days, updated}` – no device ids,
 names, hosts, checks or messages. Cached 30 s; saving or a new token drops the cache. Events "Statusseite
 eingeschaltet/ausgeschaltet", "Hinweis auf der Statusseite", "Neuer Link für die Statusseite".
+
+## Microsoft 365 (`collect/m365`)
+
+Device type `m365` – a device without host (default interval 300 s). `M365Config {tenant_id (GUID or domain),
+client_id (GUID), secret}`; the secret is never sent to the UI (`has_secret`). Token: client credentials at
+`<login>/{tenant}/oauth2/v2.0/token` with scope `<graph>/.default`, cached until 5 minutes before expiry (a 401 drops
+it); AADSTS codes become German messages (90002 tenant, 700016 app, 7000215 invalid secret, 7000222 expired secret).
+Reads Graph v1.0 every poll: `/organization`, `/admin/serviceAnnouncement/healthOverviews` and
+`issues?$filter=isResolved eq false`; every 30 minutes: `/domains`, `/subscribedSkus`, `/directory/subscriptions`,
+`/applications?$select=appId,displayName,passwordCredentials,keyCredentials` (all pages via `@odata.nextLink`, only
+on the Graph host). `/organization` failing = reach crit (403: "Organization.Read.All" missing); other areas with 403
+are listed in `m365:perm`. `Collector.LoginURL`/`GraphURL` default to the global cloud; the demo points them at
+`fakegraph`.
 
 ## Redfish (server hardware)
 
@@ -606,7 +644,10 @@ Authenticated:
 - `GET /api/statuspage` → `{page: StatusPage, path: "/status/<token>" ("" before the first save), url (with the
   public URL, else ""), preview: PublicStatus with members}`; `PUT /api/statuspage` (StatusPage; the token is
   ignored) → same (422 on title, intro, notice, notice_level, components, `components.N.name|note|mode|targets`);
-  `POST /api/statuspage/token` → same with a new token. Page `/statuspage` (nav "Statusseite"): settings with the
+  `POST /api/statuspage/token` → same with a new token; the answer also has `templates:[{id, name, text, hint, ready,
+  input?}]`. `POST /api/statuspage/template {id, url?}` → same plus `message` (422 on `url` or `template`).
+  `GET /api/statuspage/checks?devices=a,b&folders=x` → `{devices:[{id, name, group, checks:[{key, name, group,
+  state}]}]}` (the members a service with these targets would have; reach and inventory left out). Page `/statuspage` (nav "Statusseite"): settings with the
   link (copy, "Neuer Link"), the services (dialog with mode and folder/device pick list, order arrows) and a
   preview drawn by `PK95Status.render` from `status.js` (loaded by index.html too).
 - `GET /api/updates` → `{rows:[UpdateRow]}`: every `updates` / `pve:updates:<node>` check of the enabled devices,
@@ -670,6 +711,8 @@ Authenticated:
   the stored one); `POST /api/probe {host, port: 9419}` fetches the certificate fingerprint as for Proxmox.
 - `POST /api/test/pbs {id?, host, pbs}` → `{ok, version, datastores:[name], message}` (empty secret with id = the
   stored one; no datastore visible = error "Rolle Audit"); fingerprint via `POST /api/probe {host, port: 8007}`.
+- `POST /api/test/m365 {id?, m365}` → `{ok, tenant, domain, sync, licenses, apps, missing:[permission], message}`
+  (empty secret with id = the stored one).
 - `POST /api/test/redfish {id?, host, redfish}` → `{ok, vendor, model, serial, power, firmware, message}` (empty
   password with id = the stored one); fingerprint via `POST /api/probe {host, port: 443}`.
 - `POST /api/test/nut {id?, host, nut}` → `{ok, server, ups:[{name, desc, model, status}], message}` (empty
@@ -796,7 +839,7 @@ the end are down and stay ok), a UniFi USW-Pro-24-PoE `demo-unifi` (10.0.0.3, gr
 unifi; PoE on 12 ports, LLDP neighbors, fans, temperatures; "Alarm bei Link-Ausfall" on 0/13–0/15, 0/24–0/26),
 a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port updated on every start), a Veeam
 server `demo-veeam` on `fakeveeam` (jobs with success, warning, failure and a disabled one; a NAS and an S3
-repository; config updated on every start), a Dell iDRAC `demo-idrac` on `fakeredfish` (PowerEdge R650: power supply 2 without input, redundancy lost,
+repository; config updated on every start), a Microsoft 365 tenant `demo-m365` on `fakegraph` (group Cloud; Entra Connect, an unverified domain, Entra ID P1 in its grace period, a Copilot trial ending in 9 days, an app secret expiring in 12 days, one expired 3 days ago, an Exchange Online incident), a Dell iDRAC `demo-idrac` on `fakeredfish` (PowerEdge R650: power supply 2 without input, redundancy lost,
 an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a
 9-day-old host backup, a failed sync job, a prune job with warnings), guest backups on the shared storage "backup" (VM 106 in no job),

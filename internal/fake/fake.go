@@ -21,6 +21,7 @@ import (
 	"pk95monitoring/internal/collect/netcheck"
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/core"
+	"pk95monitoring/internal/fake/fakegraph"
 	"pk95monitoring/internal/fake/fakenut"
 	"pk95monitoring/internal/fake/fakepbs"
 	"pk95monitoring/internal/fake/fakepve"
@@ -38,6 +39,7 @@ const (
 	groupPeri   = "Peripherie"
 	groupWeb    = "Webdienste"
 	groupInfra  = "Infrastruktur"
+	groupCloud  = "Cloud"
 )
 
 // Simulated SNMP hosts.
@@ -90,6 +92,10 @@ func Setup(c *core.Core) (stop func(), err error) {
 	vbr := fakeveeam.New()
 	pbsSrv := fakepbs.New()
 	bmc := fakeredfish.New()
+	graph := fakegraph.New()
+	// The demo's Microsoft 365 tenant is simulated; real tenants added in the demo would be
+	// asked there too.
+	c.M365.LoginURL, c.M365.GraphURL = graph.URL(), graph.URL()
 	web := httptest.NewTLSServer(http.HandlerFunc(demoPage))
 	plain := httptest.NewServer(http.HandlerFunc(demoPage))
 	closeAll := func() {
@@ -100,6 +106,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 		vbr.Close()
 		pbsSrv.Close()
 		bmc.Close()
+		graph.Close()
 	}
 
 	netcheck.SetRDAPBootstrap(plain.URL + "/rdap/dns.json")
@@ -183,7 +190,8 @@ func createStatusPage(c *core.Core, now time.Time) {
 	p := core.StatusPage{Enabled: true, Title: "IT-Status Muster GmbH",
 		Intro: "Bei Störungen erreichen Sie uns unter 0221 123456-0 oder support@muster-it.example.",
 		Components: []core.StatusComponent{
-			{Name: "Anmeldung und Benutzerkonten", Note: "Windows-Anmeldung, Kennwörter", Mode: core.StatusAll, Devices: []string{"demo-dc01"}},
+			{Name: "Anmeldung und Benutzerkonten", Note: "Windows-Anmeldung, Kennwörter", Mode: core.StatusAll, Devices: []string{"demo-dc01"},
+				Checks: []core.StatusCheck{{Group: "Active Directory"}}},
 			{Name: "Dateiablage", Note: "Laufwerke S: und P:", Devices: []string{"demo-fs01", "demo-nas"}},
 			{Name: "Warenwirtschaft", Note: "ERP und Datenbank", Devices: []string{"demo-hv01", "demo-db01"}},
 			{Name: "Webseite", Note: "www.muster-gmbh.com", Devices: []string{"demo-web", "demo-web01"}},
@@ -288,6 +296,9 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 			if d.Redfish != nil {
 				old.Redfish = d.Redfish
 			}
+			if d.M365 != nil {
+				old.M365 = d.M365
+			}
 			if d.Type == model.TypeNet {
 				old.Checks = d.Checks
 			}
@@ -359,6 +370,14 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 		Enabled: true, Interval: 60, Created: created, Updated: ts, Redfish: &rcfg,
 		Notes: "Simulierter Dell iDRAC 9 eines PowerEdge R650 (Demo): Netzteil 2 ohne Eingangsstrom, eine SSD mit vorhergesagtem Ausfall."}
 	if err := c.ImportDevice(keep(rd.ID, rd)); err != nil {
+		return err
+	}
+
+	md := model.Device{ID: "demo-m365", Name: "Microsoft 365", Type: model.TypeM365, Group: groupCloud,
+		Enabled: true, Created: created, Updated: ts,
+		M365:  &model.M365Config{TenantID: fakegraph.TenantID, ClientID: fakegraph.ClientID, Secret: fakegraph.Secret},
+		Notes: "Simulierter Mandant der Muster GmbH (Demo): Entra Connect, eine nicht verifizierte Domain, Entra ID P1 in der Kulanzzeit, eine Copilot-Testversion, ein bald ablaufendes App-Geheimnis und eine Exchange-Störung."}
+	if err := c.ImportDevice(keep(md.ID, md)); err != nil {
 		return err
 	}
 

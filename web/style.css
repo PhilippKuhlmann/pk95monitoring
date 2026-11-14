@@ -1284,3 +1284,14 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .spc-row + .spc-row { border-top: 1px solid var(--line); }
 .spc-row .grow { min-width: 0; }
 .spc-up .icon { transform: rotate(180deg); }
+.sc-pick { max-height: 340px; overflow: auto; margin-top: 8px; }
+.sc-dev + .sc-dev { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sc-dev-name { font-weight: 600; margin-bottom: 4px; }
+.sc-grp { margin: 2px 0 6px; }
+.sc-chks { display: flex; flex-wrap: wrap; gap: 2px 16px; padding-left: 26px; }
+.sc-chks .check { margin: 0; }
+.sc-chk .dot { width: 7px; height: 7px; vertical-align: middle; }
+.sc-extra { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.sc-extra .mchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: var(--r); white-space: normal; }
+.ib.xs { padding: 2px; } .ib.xs .icon { width: 14px; height: 14px; }
+.sc-later { margin: 4px 0 0; padding-left: 18px; }

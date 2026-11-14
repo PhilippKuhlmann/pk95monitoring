@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pk95monitoring/internal/agentdist"
+	"pk95monitoring/internal/collect/m365"
 	"pk95monitoring/internal/collect/nut"
 	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
@@ -174,6 +175,7 @@ type Core struct {
 	Veeam   *veeam.Collector
 	PBS     *pbs.Collector
 	Redfish *redfish.Collector
+	M365    *m365.Collector
 
 	// Notify delivers a notification (default notify.Send); tests replace it.
 	Notify func(ctx context.Context, s notify.Settings, m notify.Message) error

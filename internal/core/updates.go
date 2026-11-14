@@ -105,7 +105,7 @@ type ExpiryRow struct {
 	Group    string   `json:"group,omitempty"`
 	CheckKey string   `json:"check_key"`
 	Name     string   `json:"name"`
-	Kind     string   `json:"kind"` // cert, domain, storage (full within forecastListDays)
+	Kind     string   `json:"kind"` // cert, domain, storage (full within forecastListDays), app (Entra app secret), license (Microsoft 365)
 	Days     *float64 `json:"days"` // nil = no expiry date known
 	Until    string   `json:"until,omitempty"`
 	Detail   string   `json:"detail,omitempty"` // issuer, registrar or growth
@@ -136,6 +136,12 @@ func (c *Core) Expiry() []ExpiryRow {
 				case m.Name == "cert.days" || m.Name == "domain.days":
 					v := m.Value
 					r.Days, r.Kind = &v, strings.TrimSuffix(m.Name, ".days")
+				case m.Name == "m365.cred_days":
+					v := m.Value
+					r.Days, r.Kind = &v, "app"
+				case m.Name == "m365.sub_days":
+					v := m.Value
+					r.Days, r.Kind = &v, "license"
 				case m.Name == forecastMetric && m.Value <= forecastListDays && (r.Days == nil || m.Value < *r.Days):
 					v := m.Value
 					r.Days, r.Kind = &v, "storage"
@@ -152,6 +158,13 @@ func (c *Core) Expiry() []ExpiryRow {
 				}
 			case "domain":
 				r.Until, r.Detail = cs.Facts["Läuft ab"], cs.Facts["Registrar"]
+			case "app":
+				r.Until, r.Detail = cs.Facts["Gültig bis"], "App-Registrierung"
+			case "license":
+				r.Until, r.Detail = cs.Facts["Endet ohne Verlängerung"], "Microsoft-365-Abonnement"
+				if cs.Facts["Testversion"] != "" {
+					r.Detail += " (Testversion)"
+				}
 			case "storage":
 				r.Until = cs.Facts[factFull]
 				r.Detail = "Zuwachs " + cs.Facts["Zuwachs"]
