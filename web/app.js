@@ -285,6 +285,8 @@ const METRIC_LABELS = {
   "temp": ["Temperatur", "°C"],
   "power.watts": ["Leistungsaufnahme", "W"],
   "forecast.days": ["Voll in", "d"],
+  "ad.repl_age": ["Letzte AD-Replikation vor", "h"],
+  "ad.time_offset": ["Zeitabweichung zum PDC", "s"],
   "printer.toner": ["Toner", "%"],
   "printer.pages": ["Gedruckte Seiten", ""],
   "custom": ["Eigener Wert", ""],
@@ -2184,10 +2186,12 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 // fullIn: "voll in 23 Tagen" from the storage forecast of a check ("" without one).
+// fmtAgeH formats hours as "12 Min.", "3 Std." or "2 Tagen".
+const fmtAgeH = (h) => (h < 1 ? `${Math.max(1, Math.round(h * 60))} Min.` : h < 48 ? `${Math.round(h)} Std.` : `${Math.round(h / 24)} Tagen`);
 function fullIn(c) {
   const d = mval(c, "forecast.days");
   if (!isNum(d)) return "";
@@ -2393,6 +2397,8 @@ function cardValue(c) {
   if (has("guest.cpu")) return { text: fmtPct(v("guest.cpu")), sub: has("guest.mem") ? `Arbeitsspeicher ${fmtPct(v("guest.mem"))}` : "", spark: sp("guest.cpu") };
   if (has("printer.toner")) return { text: fmtPct(v("printer.toner")), sub: "Füllstand", bar: v("printer.toner"), low: true, spark: sp("printer.toner") };
   if (has("temp")) { const m = firstMetric(c, (x) => x.n === "temp" && isNum(x.v)); return { text: fmtVal(m.v, "°C"), sub: m.i && !String(c.name).includes(m.i) ? m.i : "Temperatur", spark: sp("temp") }; }
+  if (has("ad.repl_age")) return { word: true, text: `vor ${fmtAgeH(v("ad.repl_age"))}`, sub: "letzte erfolgreiche Replikation", spark: sp("ad.repl_age") };
+  if (has("ad.time_offset")) return { text: fmtVal(v("ad.time_offset"), "s"), sub: "Abweichung zum PDC-Emulator", spark: sp("ad.time_offset") };
   if (has("power.watts")) return { text: fmtVal(v("power.watts"), "W"), sub: "Leistungsaufnahme", spark: sp("power.watts") };
   if (c.key === "rf:fans") return { word: true, text: cap1(String(c.msg || "").split(" · ")[0]) };
   if (has("fan.rpm")) return { text: fmtVal(v("fan.rpm"), "rpm"), sub: "Drehzahl", spark: sp("fan.rpm") };
@@ -3550,6 +3556,8 @@ const EXPLAIN = {
   "zfs.errors": { what: "Lese-, Schreib- und Prüfsummenfehler der Platten im Pool (aus `zpool status`).",
     why: "ZFS hat beschädigte oder nicht lesbare Daten entdeckt. Mit Redundanz repariert ZFS sie selbst – die Ursache (Platte, Kabel, Controller oder Arbeitsspeicher) bleibt aber bestehen.",
     todo: ["Auf dem Server `zpool status -v <pool>` ansehen: Welche Platte zählt Fehler?", "SMART-Werte dieser Platte und das Kabel prüfen.", "Nach der Behebung `zpool clear <pool>` ausführen und einen Scrub starten."] },
+  "ad.repl_age": { what: "Wie viele Stunden die letzte erfolgreiche eingehende Replikation von diesem Partner-Domänencontroller zurückliegt (älteste Partition).", why: "Repliziert ein DC nicht mehr, laufen Kennwörter, Konten und Gruppenrichtlinien auseinander – Anmeldungen schlagen an einem Standort fehl. Nach der Tombstone-Lebensdauer (meist 180 Tage) darf der Partner gar nicht mehr replizieren.", todo: ["Auf dem DC „repadmin /showrepl“ und „repadmin /replsummary“ ausführen.", "Erreichbarkeit, DNS-Auflösung und Firewall (RPC, Port 135 und dynamische Ports) zum Partner prüfen.", "Nach der Ursache „repadmin /syncall /AdeP“ ausführen."] },
+  "ad.time_offset": { what: "Wie viele Sekunden die Uhr des Domänencontrollers vom PDC-Emulator abweicht.", why: "Kerberos lehnt Anmeldungen ab, wenn Uhren mehr als 5 Minuten auseinanderliegen.", todo: ["Mit „w32tm /query /status“ die Zeitquelle prüfen.", "Mit „w32tm /resync /rediscover“ neu synchronisieren.", "Auf virtuellen DCs die Zeitsynchronisierung des Hypervisors abschalten (Hyper-V: Integrationsdienst „Zeitsynchronisierung“)."] },
   "forecast.days": { what: "In wie vielen Tagen der Speicher voll ist, wenn er so weiterwächst wie in den letzten 14 Tagen (Trend der Belegung; nach einer Bereinigung zählt nur die Zeit danach).", why: "Die Warnung bei 85 % kommt bei schnell wachsenden Datenlaufwerken oft zu spät. Die Prognose meldet sich einen Monat vorher (Warnung unter 30, kritisch unter 7 Tagen).", todo: ["Prüfen, was wächst (Protokolle, Sicherungen, Papierkorb, Schattenkopien, Snapshots).", "Aufräumen oder den Speicher rechtzeitig vergrößern.", "Wächst der Speicher planmäßig, die Grenzen unter Einstellungen → Schwellwerte (Messwert forecast.days) am Gerät anpassen."] },
   "zfs.usage": { what: "Die Belegung des ZFS-Pools.",
     why: "ZFS wird ab etwa 80 % Belegung deutlich langsamer, weil es schwerer freie Blöcke findet. Bei 100 % können VMs hängen bleiben, und selbst das Löschen wird mühsam.",

@@ -272,6 +272,22 @@ Alle Befehle verstehen `--config PFAD` (Standard: die Konfigurationsdatei unten)
 - Ein neuer Anmeldeschlüssel (Agents → „Neu erzeugen“) sperrt nur neue Installationen; angemeldete Agents haben
   eigene Zugangsdaten.
 
+### Active Directory
+
+Läuft der Agent auf einem Domänencontroller, überwacht er Active Directory von selbst – ohne Einstellung und ohne
+eigene Anmeldung (alle fünf Minuten über das PowerShell-Modul ActiveDirectory; andere Server fragt er nur alle sechs
+Stunden, ob sie inzwischen DC sind):
+
+- **Domänencontroller:** Domäne, Standort, globaler Katalog, Funktionsebenen und die FSMO-Rollen dieses DCs.
+- **Replikation:** je Partner-DC ein Check über alle Partitionen – fehlgeschlagene Versuche mit Fehlertext (z. B.
+  „1722: RPC-Server nicht verfügbar“) sind eine Warnung, überschrittene Tombstone-Lebensdauer ist kritisch; das Alter
+  der letzten erfolgreichen Replikation (`ad.repl_age`) warnt ab 12 und ist ab 24 Stunden kritisch.
+- **SYSVOL:** DFSR-Zustand (Fehler = kritisch) und die Freigaben SYSVOL und NETLOGON; SYSVOL noch per FRS = Warnung.
+- **AD-Dienste:** NTDS, Netlogon, KDC, DNS-Server (wenn installiert), DFS-Replikation und Zeitgeber müssen laufen;
+  die AD-Webdienste nur als Warnung.
+- **Zeit:** Abweichung zum PDC-Emulator (`ad.time_offset`, Warnung ab 60 Sekunden, kritisch ab 4 Minuten – ab 5 Minuten
+  schlägt Kerberos fehl); auf dem PDC-Emulator selbst, ob er eine echte Zeitquelle hat statt der eigenen Uhr.
+
 ### Hyper-V
 
 Läuft der Agent auf einem Hyper-V-Host, überwacht er dessen VMs von selbst – ohne Einstellung (alle zwei Minuten,

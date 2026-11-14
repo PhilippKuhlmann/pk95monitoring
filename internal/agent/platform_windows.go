@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
+	"pk95monitoring/internal/addc"
 	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/hyperv"
 	"pk95monitoring/internal/model"
@@ -23,9 +24,9 @@ type platformState struct {
 	updates *periodic[updateCount]
 	events  *periodic[map[string]eventrules.Result]
 	hyperv  *periodic[hyperv.Report]
+	ad      *periodic[addc.Report]
 
-	hvMu     sync.Mutex
-	hvAbsent time.Time // last time the Hyper-V module was missing (asked again after hvRecheck)
+	hvRole, adRole roleProbe
 
 	evMu      sync.Mutex
 	evQueries []eventrules.Query
@@ -50,6 +51,7 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 		c.plat.updates = newPeriodic(6*time.Hour, 30*time.Minute, 10*time.Minute, windowsUpdates)
 		c.plat.events = newPeriodic(5*time.Minute, 2*time.Minute, 3*time.Minute, c.plat.queryEvents)
 		c.plat.hyperv = newPeriodic(2*time.Minute, 2*time.Minute, 90*time.Second, c.plat.queryHyperV)
+		c.plat.ad = newPeriodic(5*time.Minute, 2*time.Minute, 2*time.Minute, c.plat.queryAD)
 	}
 	out := serviceChecks(cfg, h.Uptime)
 	u, err, have := c.plat.updates.Get(ctx, c.WaitSlow)
@@ -76,27 +78,55 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 		res = dropSelfRestarts(res, cfg.SelfRestarts)
 		out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 	}
-	// The first Hyper-V result is waited for: without it an agent restart would drop the VM
-	// checks for one report and close their alerts. Later reports use the cached result.
-	hv, err, have := c.plat.hyperv.Get(ctx, false)
-	if !have {
-		hv, err, have = c.plat.hyperv.Get(ctx, true)
-	}
-	if have {
+	// The first Hyper-V and AD results are waited for: without them an agent restart would
+	// drop their checks for one report and close their alerts. Later reports use the cache.
+	if hv, err, ok := firstResult(ctx, c.plat.hyperv); ok {
 		out = append(out, hyperv.Checks(hv, err, time.Now())...)
+	}
+	if ad, err, ok := firstResult(ctx, c.plat.ad); ok {
+		out = append(out, addc.Checks(ad, err, time.Now())...)
 	}
 	return out
 }
 
-// hvRecheck is how long a host without the Hyper-V module is not asked again.
-const hvRecheck = 6 * time.Hour
+// firstResult returns the cached result of p, waiting only while there is none yet.
+func firstResult[T any](ctx context.Context, p *periodic[T]) (T, error, bool) {
+	v, err, have := p.Get(ctx, false)
+	if !have {
+		v, err, have = p.Get(ctx, true)
+	}
+	return v, err, have
+}
+
+// roleRecheck is how long a server without a role (Hyper-V, domain controller) is not asked
+// again, so ordinary servers do not start PowerShell every few minutes.
+const roleRecheck = 6 * time.Hour
+
+// roleProbe remembers when a server role was found missing.
+type roleProbe struct {
+	mu     sync.Mutex
+	absent time.Time
+}
+
+func (r *roleProbe) skip() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.absent.IsZero() && time.Since(r.absent) < roleRecheck
+}
+
+func (r *roleProbe) set(available bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if available {
+		r.absent = time.Time{}
+	} else {
+		r.absent = time.Now()
+	}
+}
 
 // queryHyperV lists the VMs of the host (hyperv.Script).
 func (p *platformState) queryHyperV(ctx context.Context) (hyperv.Report, error) {
-	p.hvMu.Lock()
-	absent := !p.hvAbsent.IsZero() && time.Since(p.hvAbsent) < hvRecheck
-	p.hvMu.Unlock()
-	if absent {
+	if p.hvRole.skip() {
 		return hyperv.Report{}, nil
 	}
 	out, err := powershell(ctx, hyperv.Script)
@@ -107,11 +137,24 @@ func (p *platformState) queryHyperV(ctx context.Context) (hyperv.Report, error) 
 	if err != nil {
 		return hyperv.Report{}, fmt.Errorf("unerwartete Ausgabe %q", truncate(out, 100))
 	}
-	if !r.Available {
-		p.hvMu.Lock()
-		p.hvAbsent = time.Now()
-		p.hvMu.Unlock()
+	p.hvRole.set(r.Available)
+	return r, nil
+}
+
+// queryAD reads the state of the domain controller (addc.Script).
+func (p *platformState) queryAD(ctx context.Context) (addc.Report, error) {
+	if p.adRole.skip() {
+		return addc.Report{}, nil
 	}
+	out, err := powershell(ctx, addc.Script)
+	if err != nil {
+		return addc.Report{}, err
+	}
+	r, err := addc.Parse(out)
+	if err != nil {
+		return addc.Report{}, fmt.Errorf("unerwartete Ausgabe %q", truncate(out, 100))
+	}
+	p.adRole.set(r.Available)
 	return r, nil
 }
 

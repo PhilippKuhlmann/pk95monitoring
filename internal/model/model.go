@@ -628,6 +628,9 @@ func DefaultThresholds() []Threshold {
 		{Metric: "checkpoint.age", Warn: f(7), Crit: f(30)},
 		// storage forecast: full within a month (warn) or a week (crit)
 		{Metric: "forecast.days", Warn: f(30), Crit: f(7), Below: true},
+		// Active Directory: inbound replication older than half a day / a day; Kerberos fails beyond 5 minutes of clock offset
+		{Metric: "ad.repl_age", Warn: f(12), Crit: f(24)},
+		{Metric: "ad.time_offset", Warn: f(60), Crit: f(240)},
 		// Proxmox hardware and storage health
 		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
 		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pk95monitoring/internal/addc"
 	"pk95monitoring/internal/core"
 	"pk95monitoring/internal/hyperv"
 	"pk95monitoring/internal/model"
@@ -61,6 +62,7 @@ type simAgent struct {
 	rules               []model.CheckRule // demo check rules (quiet / off)
 	parent, node        string            // attached to this demo device (and its node)
 	hyperV              []simVM           // windows: VMs of a Hyper-V host
+	dc                  bool              // windows: domain controller (PDC emulator of kunde.local)
 	ref                 int64             // demo start: growing disks are at pct then
 }
 
@@ -88,7 +90,7 @@ func demoAgents(now time.Time) []*simAgent {
 			known: map[string]simService{"NTDS": {"Active Directory-Domänendienste", true}, "DNS": {"DNS-Server", true},
 				"W32Time": {"Windows-Zeitgeber", true}, "Spooler": {"Druckwarteschlange", true},
 				"VeeamEndpointBackupSvc": {"Veeam Agent for Microsoft Windows", true}},
-			pending: 2, boot: t - 23*day - 4*3600, seed: 1.3, installedDays: 9,
+			pending: 2, boot: t - 23*day - 4*3600, seed: 1.3, installedDays: 9, dc: true,
 			titles: []string{"Security Intelligence-Update für Microsoft Defender Antivirus – KB2267602", "Microsoft .NET Framework 4.8.1 für Windows Server 2022 (KB5046540)"}},
 		{id: "demo-fs01", name: "fs01", group: groupServer, ip: "10.0.0.12", os: "windows",
 			platform: "Microsoft Windows Server 2019 Standard", ver: "10.0.17763 Build 17763", kernel: "10.0.17763 Build 17763",
@@ -164,6 +166,39 @@ func demoAgents(now time.Time) []*simAgent {
 		a.ref = t
 	}
 	return list
+}
+
+// adReport is the domain controller state of a demo host at t (what addc.Script would print):
+// dc01 is the PDC emulator of kunde.local; DC02 replicates fine, the branch office DC DC03
+// has not been reachable for three hours (RPC server unavailable).
+func (a *simAgent) adReport(t int64) addc.Report {
+	host := strings.ToUpper(a.name) + ".kunde.local"
+	ntds := func(dc, site string) string {
+		return "CN=NTDS Settings,CN=" + dc + ",CN=Servers,CN=" + site + ",CN=Sites,CN=Configuration,DC=kunde,DC=local"
+	}
+	parts := []string{"DC=kunde,DC=local", "CN=Configuration,DC=kunde,DC=local", "CN=Schema,CN=Configuration,DC=kunde,DC=local",
+		"DC=DomainDnsZones,DC=kunde,DC=local", "DC=ForestDnsZones,DC=kunde,DC=local"}
+	var links []addc.Link
+	cycle := t - t%900 // intra-site replication at least every 15 minutes
+	for i, p := range parts {
+		links = append(links, addc.Link{Partner: ntds("DC02", "Zentrale"), Partition: p, LastSuccess: cycle - int64(60*i), LastAttempt: cycle - int64(60*i)})
+		if i < 3 { // DNS zones are not on the branch office DC
+			failed := t - 3*3600 - 1200
+			links = append(links, addc.Link{Partner: ntds("DC03", "Filiale"), Partition: p, LastSuccess: failed, LastAttempt: cycle,
+				Result: 1722, Failures: int((t-failed)/900) + 1})
+		}
+	}
+	running := func(display string) addc.Service {
+		return addc.Service{Status: "Running", Start: "Automatic", Display: display}
+	}
+	return addc.Report{Available: true, Host: strings.ToUpper(a.name), Domain: "kunde.local", Forest: "kunde.local", Site: "Zentrale",
+		GC: true, Hostname: host, DomainMode: "Windows2016Domain", ForestMode: "Windows2016Forest",
+		PDC: host, RID: host, Infra: host, Schema: host, Naming: host, Replication: links,
+		Services: map[string]addc.Service{"NTDS": running("Active Directory-Domänendienste"), "Netlogon": running("Anmeldedienst"),
+			"Kdc": running("Kerberos-Schlüsselverteilungscenter"), "DNS": running("DNS-Server"), "DFSR": running("DFS-Replikation"),
+			"W32Time": running("Windows-Zeitgeber"), "ADWS": running("Active Directory-Webdienste")},
+		Sysvol: addc.Sysvol{State: 4, Migration: -1, Shares: []string{"NETLOGON", "SYSVOL"}},
+		Time:   addc.Time{Source: "ptbtime1.ptb.de,0x8"}}
 }
 
 // hyperVReport is the Hyper-V state of a demo host at t (what hyperv.Script would print).
@@ -399,6 +434,9 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 	}
 	if len(a.hyperV) > 0 {
 		out = append(out, hyperv.Checks(a.hyperVReport(t), nil, time.Unix(t, 0))...)
+	}
+	if a.dc {
+		out = append(out, addc.Checks(a.adReport(t), nil, time.Unix(t, 0))...)
 	}
 	return out
 }

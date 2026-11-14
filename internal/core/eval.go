@@ -67,6 +67,8 @@ var metricLabels = map[string][2]string{
 	"temp":               {"Temperatur", "°C"},
 	"power.watts":        {"Leistungsaufnahme", "W"},
 	"forecast.days":      {"Voll in", "d"},
+	"ad.repl_age":        {"Letzte AD-Replikation vor", "h"},
+	"ad.time_offset":     {"Zeitabweichung zum PDC", "s"},
 	"fan.rpm":            {"Lüfter", "rpm"},
 	"printer.toner":      {"Toner", "%"},
 	"printer.pages":      {"Gedruckte Seiten", ""},

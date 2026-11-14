@@ -32,6 +32,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
 | `internal/eventrules` | System log rules (Windows event log, Linux journal): built-in rules, merge, validation, XPath and journalctl queries, evaluation (pure Go; used by agent, core and demo) |
+| `internal/addc` | Active Directory domain controller: PowerShell query, parser and checks (pure Go; used by the Windows agent and the demo) |
 | `internal/hyperv` | Hyper-V: PowerShell query, parser and checks of the VMs and their replication (pure Go; used by the Windows agent and the demo) |
 | `internal/agentdist` | server side of agent distribution: install scripts (embedded templates), binary catalog with SHA-256 |
 | `internal/core` | scheduler, threshold evaluation, hysteresis, alerts, notifications, agent ingestion, rollup/retention, central push, summary |
@@ -116,6 +117,11 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | agent | `systemd` | Systemd-Units | Dienste (Linux: failed units) |
 | agent | `updates` | Updates | Updates (Linux apt or dnf / Windows Update; reboot required = warn). Windows also reads the update history (at most 300 entries, definition updates – category `e0789628-…` or title KB2267602 / Security Intelligence – left out): metrics `updates.age` (days since the last successful installation) and `updates.failed` (updates whose latest attempt in the past 30 days failed), facts "Letzte Installation", "Fehlgeschlagen (30 Tage)", "Ausstehend" (first 5 titles) |
 | agent | `ev:<rule>` | EventRule.Name | Ereignisse (Windows and Linux): one check per effective event rule (see "System logs"); metric `events.count`, facts Filter, Alarm, Was tun; `events` holds the latest ≤ 10 matching events. Not part of the inventory (never "new" or "vanished"). Agents before 0.16 reported `eventlog` (count of all errors) instead |
+| agent | `ad:dc` | Domänencontroller | Active Directory (Windows DCs only, Win32_ComputerSystem.DomainRole ≥ 4; `addc.Script` every 5 min, other servers asked again after 6 h; first result waited for): domain, forest, site, GC, RODC, functional levels, FSMO roles of this DC; AD module not readable = unknown with the error |
+| agent | `ad:repl:<partner>` | Replikation von <DC> | Active Directory: inbound replication from one partner over all partitions (`Get-ADReplicationPartnerMetadata -Partition *`); failures = warn with the Win32 error explained, 8614 (tombstone) = crit, never succeeded = warn; `ad.repl_age` (h since the oldest last success, instance partner; threshold 12/24). No partner: `ad:repl:-` ok "einziger Domänencontroller". Deleted partners marked "(gelöscht)" |
+| agent | `ad:sysvol` | SYSVOL | Active Directory: DFSR replicated folder "SYSVOL Share" state (4 normal ok, 5 error crit, else warn), FRS still running = warn, share SYSVOL or NETLOGON missing = crit |
+| agent | `ad:services` | AD-Dienste | Active Directory: NTDS, Netlogon, Kdc, DNS (if installed), DFSR (unless FRS), W32Time not running = crit, ADWS = warn |
+| agent | `ad:time` | Zeit | Active Directory: offset to the PDC emulator (`w32tm /stripchart`, `ad.time_offset` absolute seconds, threshold 60/240); on the PDC emulator: time source "Local CMOS Clock"/"Free-running System Clock" = warn; no answer = unknown |
 | agent | `hv:host` | Hyper-V | Hyper-V (Windows hosts with the Hyper-V module only; `hyperv.Script` every 2 min, hosts without the module asked again after 6 h): "n von m VMs laufen"; query failed before any result = unknown, later errors keep the last result |
 | agent | `hv:vm:<VMId>` | VM <name> | Hyper-V: Running = ok (warn on heartbeat LostCommunication) with `guest.cpu` (%), `guest.mem` (demand / assigned %), `guest.mem_used` (assigned B), instance VM name; Off/Saved = crit when AutomaticStartAction is Start/StartIfRunning and it is no Replica copy, else ok; Paused/PausedCritical = crit; transitional states ok; `checkpoint.age` (d, oldest non-replica checkpoint, threshold 7/30); facts vCPUs, RAM, Generation, Konfigurationsversion, Autostart, Cluster, Replikat, Prüfpunkte, Ältester Prüfpunkt, Status. Not part of the inventory (VMs move between cluster nodes and Replica servers) |
 | agent | `hv:repl:<VMId>` | Replikation <name> | Hyper-V Replikation (only replicated VMs): health Critical / state Error = crit, Suspended / health Warning / resynchronizing = warn, initial replication ok; `repl.age` (min since LastReplicationTime); facts Status, Integrität, Modus, Primärserver, Replikatserver, Letzte Replikation. Not part of the inventory |
@@ -206,6 +212,8 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `zfs.errors` | "" | ditto | pve (sum of vdev read/write/checksum errors) |
 | `zfs.scrub_age` | d | ditto | pve (days since the last finished scrub) |
 | `repl.age` | min | `<job>`, VM name | pve, Hyper-V (minutes since the last sync/replication) |
+| `ad.repl_age` | h | partner DC | Active Directory: hours since the last successful inbound replication (default threshold warn 12, crit 24) |
+| `ad.time_offset` | s | – | Active Directory: clock offset to the PDC emulator (default threshold warn 60, crit 240) |
 | `checkpoint.age` | d | VM name | Hyper-V: age of the oldest checkpoint (default threshold warn 7, crit 30) |
 | `storage.used`, `storage.total` | B | ditto | pve |
 | `ping.rtt` | ms | | netcheck |
@@ -243,6 +251,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    `disk.spare` below 20/10 %, `disk.pending` 1/10, `disk.reallocated`, `disk.uncorrectable`, `disk.media_errors`
    warn from 1, `zfs.usage` 80/90 %, `zfs.errors` warn from 1, `zfs.scrub_age` warn from 35 days.
    Hyper-V: `checkpoint.age` 7/30 days. Storage forecast: `forecast.days` below 30/7 days.
+   Active Directory: `ad.repl_age` 12/24 h, `ad.time_offset` 60/240 s.
 3. Threshold state needs `Count` consecutive bad values (`CheckStatus.Pending`), going back to ok
    is immediate. Native states (service stopped …) are immediate.
 4. Effective check state = worst(native, thresholds). `CheckStatus.Reason` e.g.
@@ -756,7 +765,8 @@ repository; config updated on every start), a Dell iDRAC `demo-idrac` on `fakere
 an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a
 9-day-old host backup, a failed sync job, a prune job with warnings), guest backups on the shared storage "backup" (VM 106 in no job),
-6 simulated agents (2 Debian, 3 Windows, plus `demo-pve1` attached to the cluster as node pve1; the Windows host hv01
+6 simulated agents (2 Debian, 3 Windows – dc01 is the PDC emulator of kunde.local via `addc.Checks`: replication from DC02
+fine, from the branch office DC03 failing for 3 hours with error 1722 –, plus `demo-pve1` attached to the cluster as node pve1; the Windows host hv01
 runs Hyper-V via `hyperv.Checks`: a replicated DC, erp01 with a 12-day-old checkpoint, sql02 with a replication
 warning, print01 off although it starts with the host, an off test VM; one with high disk
 usage, one with a stopped service; rules: `updates` quiet on db01, `disk:/boot*` off on web01) reporting through
