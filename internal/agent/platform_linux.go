@@ -58,15 +58,15 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 			c.plat.events = newPeriodic(5*time.Minute, 2*time.Minute, 3*time.Minute, c.plat.queryEvents)
 		}
 		c.plat.setQueries(eventrules.Queries(cfg.EventRules, cfg.EventIgnore))
-		if res, err, have := c.plat.events.Get(ctx, c.WaitSlow); have {
-			if err != nil {
-				res = map[string]eventrules.Result{}
-				for _, r := range cfg.EventRules {
-					res[r.ID] = eventrules.Result{Err: err.Error()}
-				}
+		// before the first query finished every rule is reported unknown (keeps open alerts)
+		res, err, _ := c.plat.events.Get(ctx, c.WaitSlow)
+		if err != nil {
+			res = map[string]eventrules.Result{}
+			for _, r := range cfg.EventRules {
+				res[r.ID] = eventrules.Result{Err: err.Error()}
 			}
-			out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 		}
+		out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 	}
 	return out
 }

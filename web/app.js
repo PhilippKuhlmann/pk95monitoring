@@ -757,10 +757,19 @@ function devCard(d) {
     <div class="dc-foot"><span>${esc(TYPE_LABELS[d.type] || d.type)}${d.platform ? " · " + esc(d.platform) : ""}</span><span title="Letzter Kontakt ${esc(fmtTime(d.last_poll, true))}">${esc(fmtAgo(d.last_poll))}</span></div></a>`;
 }
 
+// alertHref is where an alert leads: updates and system log rules have their own pages (they
+// are not shown on the device page), every other alert leads to its device.
+function alertHref(a) {
+  const k = String(a.check_key || "");
+  if (k === "updates" || k.startsWith("pve:updates:")) return "/updates";
+  if (k === "eventlog" || k.startsWith("ev:")) return "/eventlog";
+  return `/devices/${enc(a.device_id)}`;
+}
+
 // alertRow: one active alert in a list (Übersicht).
 function alertRow(a) {
   return `<div class="row al-row"><span class="al-sev">${sevPill(a.severity)}</span><div class="grow">
-      <div class="title"><a href="/devices/${enc(a.device_id)}" data-go><b>${esc(a.device_name)}</b></a> · ${esc(a.check_name)}</div>
+      <div class="title"><a href="${alertHref(a)}" data-go><b>${esc(a.device_name)}</b></a> · ${esc(a.check_name)}</div>
       ${a.message ? `<div class="body">${esc(a.message)}</div>` : ""}
       <div class="t-sub" title="Seit ${esc(fmtTime(a.started, true))}">${esc(fmtSince(a.started))}${a.acked_by ? ` · quittiert von ${esc(a.acked_by)}` : ""}</div></div>
     ${!a.ended && !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}">${icon("check")} Quittieren</button>` : ""}</div>`;
@@ -2761,7 +2770,7 @@ function alertsTable(list, opts) {
   return `<div class="panel flush"><div class="table-wrap"><table class="resp"><thead><tr><th>Schwere</th>${opts.device ? "<th>Gerät</th>" : ""}${opts.check !== false ? "<th>Check</th>" : ""}<th>Meldung</th><th>Beginn</th><th>Ende / Dauer</th><th>Quittiert</th><th></th></tr></thead><tbody>
     ${list.map((a) => `<tr class="${a.ended ? "off" : ""}">
       ${td("Schwere", sevPill(a.severity))}
-      ${opts.device ? td("Gerät", `<a class="t-main" href="/devices/${enc(a.device_id)}" data-go>${esc(a.device_name)}</a>`) : ""}
+      ${opts.device ? td("Gerät", `<a class="t-main" href="${alertHref(a)}" data-go>${esc(a.device_name)}</a>`) : ""}
       ${opts.check !== false ? td("Check", `<div class="t-main">${esc(a.check_name)}</div><div class="t-sub mono">${esc(a.check_key)}</div>`) : ""}
       ${td("Meldung", `<span class="small">${esc(a.message || "")}</span>`)}
       ${td("Beginn", `<span class="nowrap">${esc(fmtTime(a.started, true))}</span><div class="t-sub">${esc(fmtAgo(a.started))}</div>`)}

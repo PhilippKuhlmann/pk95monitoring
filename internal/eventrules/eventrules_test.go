@@ -139,8 +139,12 @@ func TestEvaluate(t *testing.T) {
 	}
 	ignore := []model.EventIgnore{{ID: "i1", Source: "Service Control Manager", Text: "Windows Search"}}
 	checks := Evaluate([]model.EventRule{disk, logons, crash, missing}, ignore, results, now)
-	if len(checks) != 3 {
+	// the rule without a result yet is unknown (keeps an open alert)
+	if len(checks) != 4 || checks[3].Key != "ev:new" || checks[3].State != model.StateUnknown {
 		t.Fatalf("checks: %+v", checks)
+	}
+	if pending := Evaluate([]model.EventRule{disk}, nil, nil, now); len(pending) != 1 || pending[0].State != model.StateUnknown {
+		t.Fatalf("before the first query: %+v", pending)
 	}
 	d := checks[0]
 	if d.Key != "ev:disk" || d.Group != Group || d.State != model.StateCrit || len(d.Events) != 1 || d.Metrics[0].Value != 1 ||

@@ -598,13 +598,16 @@ func Summary(e model.EventEntry) string {
 	return s
 }
 
-// Evaluate turns the query results into one check per rule. Rules without a result (added
-// after the last query) are left out until the next query.
+// Evaluate turns the query results into one check per rule. A rule without a result yet (just
+// after the agent started, or added since the last query) is reported unknown: a missing check
+// would end its open alert, which would open again with the next result.
 func Evaluate(rules []model.EventRule, ignore []model.EventIgnore, results map[string]Result, now time.Time) []model.Check {
 	var out []model.Check
 	for _, r := range rules {
 		res, ok := results[r.ID]
 		if !ok {
+			out = append(out, model.Check{Key: KeyPrefix + r.ID, Name: r.Name, Group: Group, State: model.StateUnknown,
+				Message: "Das Protokoll wird gerade gelesen"})
 			continue
 		}
 		ch := model.Check{Key: KeyPrefix + r.ID, Name: r.Name, Group: Group, State: model.StateOK,

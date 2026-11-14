@@ -369,7 +369,9 @@ messages are picked by text since their priority is unreliable):
   rule with a central ID replaces it), `event_ignore` (≤ 200). A device PUT with `null` for one of them keeps it.
   Effective rules = enabled central ones not switched off + enabled own ones (`eventrules.Effective`).
 - Check `ev:<id>`: state = severity when count ≥ Count, else ok ("3 Ereignisse in der letzten Stunde (Alarm ab
-  20)"); "Mindestens …" when a log returned max events; unknown when the log could not be read. Events log
+  20)"); "Mindestens …" when a log returned max events; unknown when the log could not be read, and "Das Protokoll wird
+  gerade gelesen" (unknown) until the first query of an agent finished – a missing check would end its open alert,
+  which would open (and notify) again with the next result. Events log
   "Ereignisregel gespeichert/gelöscht/zurückgesetzt", "Ausnahme angelegt".
 
 ## SNMP profiles

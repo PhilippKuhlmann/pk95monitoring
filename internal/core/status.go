@@ -240,6 +240,18 @@ func stateWord(state string) string {
 	return "Unbekannt"
 }
 
+// alertLink is the page an alert leads to: updates and system log rules have their own pages
+// (they are not shown on the device page), every other alert leads to its device.
+func alertLink(deviceID, key string) string {
+	switch alertKind(key) {
+	case NotifyUpdates:
+		return "/updates"
+	case NotifyEvents:
+		return "/eventlog"
+	}
+	return "/devices/" + deviceID
+}
+
 // alertDetails are the facts of an alert notification. Caller holds c.mu.
 func (c *Core) alertDetails(d model.Device, rt *devState, cs model.CheckStatus, status string) *notify.Details {
 	dev := c.displayName(d)
@@ -255,7 +267,7 @@ func (c *Core) alertDetails(d model.Device, rt *devState, cs model.CheckStatus, 
 	if cs.Since > 0 {
 		facts = append(facts, notify.Fact{Label: "seit", Value: c.fmtTime(cs.Since)})
 	}
-	return &notify.Details{Status: status, Facts: facts, Link: "/devices/" + d.ID}
+	return &notify.Details{Status: status, Facts: facts, Link: alertLink(d.ID, cs.Key)}
 }
 
 // muteReason tells why a device raises no alerts ("" = it does).

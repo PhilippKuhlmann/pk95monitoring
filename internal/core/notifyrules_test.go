@@ -245,3 +245,12 @@ func TestNotifyQuietDigest(t *testing.T) {
 		t.Fatal("not quiet Friday night")
 	}
 }
+
+func TestAlertLink(t *testing.T) {
+	for key, want := range map[string]string{"updates": "/updates", "pve:updates:pve1": "/updates", "ev:oom": "/eventlog", "eventlog": "/eventlog",
+		"disk:/": "/devices/d1", "reach": "/devices/d1"} {
+		if got := alertLink("d1", key); got != want {
+			t.Errorf("%s: %s", key, got)
+		}
+	}
+}

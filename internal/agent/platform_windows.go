@@ -59,16 +59,16 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 	}
 	if len(cfg.EventRules) > 0 {
 		c.plat.setQueries(eventrules.Queries(cfg.EventRules, cfg.EventIgnore))
-		if res, err, have := c.plat.events.Get(ctx, c.WaitSlow); have {
-			if err != nil {
-				res = map[string]eventrules.Result{}
-				for _, r := range cfg.EventRules {
-					res[r.ID] = eventrules.Result{Err: err.Error()}
-				}
+		// before the first query finished every rule is reported unknown (keeps open alerts)
+		res, err, _ := c.plat.events.Get(ctx, c.WaitSlow)
+		if err != nil {
+			res = map[string]eventrules.Result{}
+			for _, r := range cfg.EventRules {
+				res[r.ID] = eventrules.Result{Err: err.Error()}
 			}
-			res = dropSelfRestarts(res, cfg.SelfRestarts)
-			out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 		}
+		res = dropSelfRestarts(res, cfg.SelfRestarts)
+		out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 	}
 	return out
 }

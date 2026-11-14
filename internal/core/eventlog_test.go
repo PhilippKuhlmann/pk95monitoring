@@ -255,3 +255,25 @@ func TestLinuxEventRules(t *testing.T) {
 		}
 	}
 }
+
+// After an agent restart its first report has the event checks unknown (the log is still
+// read): the open alert stays, nothing is closed and notified again.
+func TestEventAlertSurvivesAgentRestart(t *testing.T) {
+	e := newEnv(t, Options{})
+	win := e.agentDevice(t, "win", nil)
+	ev := model.Check{Key: "ev:oom", Name: "Speicher erschöpft", Group: eventrules.Group, State: model.StateWarn, Message: "1 Ereignis"}
+	e.winReport(t, win, ev)
+	e.wait()
+	n := len(e.rec.titles())
+	if got := activeKeys(e); !slices.Contains(got, "ev:oom") || n != 1 {
+		t.Fatalf("alert: %v %v", got, e.rec.titles())
+	}
+	ev.State, ev.Message = model.StateUnknown, "Das Protokoll wird gerade gelesen"
+	e.winReport(t, win, ev)
+	ev.State, ev.Message = model.StateWarn, "1 Ereignis"
+	e.winReport(t, win, ev)
+	e.wait()
+	if got := activeKeys(e); !slices.Contains(got, "ev:oom") || len(e.rec.titles()) != n {
+		t.Fatalf("after restart: %v %v", got, e.rec.titles())
+	}
+}
