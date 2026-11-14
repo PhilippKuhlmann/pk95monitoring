@@ -13,6 +13,7 @@ import (
 	"pk95monitoring/internal/collect/nut"
 	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
+	"pk95monitoring/internal/collect/redfish"
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/collect/veeam"
 	"pk95monitoring/internal/model"
@@ -170,7 +171,7 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 // Values are compared as printed, so a nil and an empty list are the same.
 func collectChanged(a, b model.Device) bool {
 	show := func(d model.Device) string {
-		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam), deref(d.PBS))
+		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam), deref(d.PBS), deref(d.Redfish))
 		if d.Agent != nil {
 			s += fmt.Sprintf("|%v|%v|%v", d.Agent.Services, d.Agent.WatchAutoServices, d.Agent.IgnoreServices)
 		}
@@ -202,6 +203,8 @@ func typeLabel(t string) string {
 		return "Veeam"
 	case model.TypePBS:
 		return "Proxmox Backup Server"
+	case model.TypeRedfish:
+		return "Hardware (Redfish)"
 	}
 	return t
 }
@@ -225,7 +228,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		errs["notes"] = "Höchstens 4000 Zeichen."
 	}
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish:
 	case model.TypeAgent:
 		if old == nil {
 			errs["type"] = "Agents werden bei der Installation des Agents automatisch angelegt."
@@ -238,7 +241,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 	}
 	if d.Host != "" && (len(d.Host) > 253 || !hostRe.MatchString(d.Host)) {
 		errs["host"] = "Hostname oder IP-Adresse ohne Protokoll und Pfad angeben."
-	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || model.BackupServer(d.Type)) {
+	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || d.Type == model.TypeRedfish || model.BackupServer(d.Type)) {
 		errs["host"] = "Hostname oder IP-Adresse angeben."
 	} else if d.Host == "" && d.Type == model.TypeNet && len(d.Checks) == 0 {
 		errs["host"] = "Host oder mindestens einen Check angeben."
@@ -271,6 +274,11 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		validatePBS(d, old, errs)
 	} else {
 		d.PBS = nil
+	}
+	if d.Type == model.TypeRedfish {
+		validateRedfish(d, old, errs)
+	} else {
+		d.Redfish = nil
 	}
 	if d.Type == model.TypeAgent && old != nil {
 		in := d.Agent
@@ -553,6 +561,8 @@ func (c *Core) forgetCollector(d model.Device) {
 		c.Veeam.Forget(d.ID)
 	case model.TypePBS:
 		c.PBS.Forget(d.ID)
+	case model.TypeRedfish:
+		c.Redfish.Forget(d.ID)
 	}
 }
 
@@ -632,6 +642,50 @@ func validatePBS(d *model.Device, old *model.Device, errs map[string]string) {
 	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(p.Fingerprint)); f != "" && !fpRe.MatchString(f) {
 		errs["pbs.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
 	}
+}
+
+func validateRedfish(d *model.Device, old *model.Device, errs map[string]string) {
+	if d.Redfish == nil {
+		d.Redfish = &model.RedfishConfig{}
+	}
+	r := d.Redfish
+	if r.Password == "" && old != nil && old.Redfish != nil {
+		r.Password = old.Redfish.Password
+	}
+	r.Username, r.Fingerprint = strings.TrimSpace(r.Username), strings.TrimSpace(r.Fingerprint)
+	if r.Port == 0 {
+		r.Port = redfish.DefaultPort
+	}
+	if r.Port < 1 || r.Port > 65535 {
+		errs["redfish.port"] = "Port zwischen 1 und 65535."
+	}
+	switch {
+	case r.Username == "":
+		errs["redfish.username"] = "Benutzer des Controllers angeben (nur Leserechte nötig)."
+	case len(r.Username) > 128 || strings.ContainsAny(r.Username, ":\r\n\x00\t"):
+		errs["redfish.username"] = "Ungültiger Benutzername."
+	}
+	switch {
+	case r.Password == "":
+		errs["redfish.password"] = "Kennwort angeben."
+	case len(r.Password) > 256:
+		errs["redfish.password"] = "Höchstens 256 Zeichen."
+	}
+	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(r.Fingerprint)); f != "" && !fpRe.MatchString(f) {
+		errs["redfish.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
+	}
+}
+
+// TestRedfish logs in to a management controller and reads the system. When cfg.Password is
+// empty and id names an existing Redfish device, the stored password is used.
+func (c *Core) TestRedfish(ctx context.Context, id, host string, cfg model.RedfishConfig) (redfish.TestResult, error) {
+	if cfg.Password == "" && id != "" {
+		if d, err := c.Device(id); err == nil && d.Redfish != nil {
+			cfg.Password = d.Redfish.Password
+		}
+	}
+	cfg.Username = strings.TrimSpace(cfg.Username)
+	return redfish.Test(ctx, strings.TrimSpace(host), cfg)
 }
 
 // TestPBS checks the token of a Proxmox Backup Server and lists its datastores. When

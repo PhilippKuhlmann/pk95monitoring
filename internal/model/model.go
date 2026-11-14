@@ -48,6 +48,7 @@ const (
 	TypeNUT     = "nut"     // UPS polled over a NUT server (Network UPS Tools, e.g. UniFi UPS)
 	TypeVeeam   = "veeam"   // Veeam Backup & Replication server, polled over its REST API
 	TypePBS     = "pbs"     // Proxmox Backup Server, polled over its REST API
+	TypeRedfish = "redfish" // server hardware over its management controller (iDRAC, iLO, XCC …) via Redfish
 )
 
 // Device is one monitored thing. Stored as JSON (store kind "device").
@@ -78,6 +79,7 @@ type Device struct {
 	NUT     *NUTConfig     `json:"nut,omitempty"`
 	Veeam   *VeeamConfig   `json:"veeam,omitempty"`
 	PBS     *PBSConfig     `json:"pbs,omitempty"`
+	Redfish *RedfishConfig `json:"redfish,omitempty"`
 	Agent   *AgentConfig   `json:"agent,omitempty"`
 
 	// Checks are additional network checks; they work for every device type.
@@ -107,6 +109,10 @@ func (d Device) Clone() Device {
 	if d.Veeam != nil {
 		v := *d.Veeam
 		d.Veeam = &v
+	}
+	if d.Redfish != nil {
+		r := *d.Redfish
+		d.Redfish = &r
 	}
 	if d.PBS != nil {
 		p := *d.PBS
@@ -332,6 +338,15 @@ type PBSConfig struct {
 	TokenID     string `json:"token_id"` // e.g. pk95mon@pbs!monitoring
 	Secret      string `json:"secret,omitempty"`
 	Fingerprint string `json:"fingerprint"` // SHA-256 of the server certificate (pinning); empty = system CAs
+}
+
+// RedfishConfig polls the management controller of a server (Dell iDRAC, HPE iLO, Lenovo
+// XCC, Supermicro BMC …) over the Redfish REST API (HTTPS, port 443) with a read-only user.
+type RedfishConfig struct {
+	Port        int    `json:"port"` // default 443
+	Username    string `json:"username"`
+	Password    string `json:"password,omitempty"`
+	Fingerprint string `json:"fingerprint"` // SHA-256 of the controller certificate (pinning); empty = system CAs
 }
 
 // BackupServer reports whether a device type is a backup server (managed on the page

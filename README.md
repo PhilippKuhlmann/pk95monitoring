@@ -19,6 +19,9 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   UniFi-Switches mit eigenem Profil (CPU, Arbeitsspeicher, Temperaturen, Lüfter, Netzteile, PoE-Budget), USV
   (Akku, Restlaufzeit, Last, Spannungen; RFC 1628 und APC), Drucker (Toner, Seitenzähler), NAS (Synology:
   Platten, RAID, Temperaturen) sowie CPU, Arbeitsspeicher und Speicher über HOST-RESOURCES-MIB und eigene OIDs.
+- **Server-Hardware über den Management-Controller** (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro per Redfish):
+  Netzteile und Redundanz, Lüfter, Temperaturen, Arbeitsspeicher, Prozessoren, RAID-Controller, Volumes und Platten –
+  ohne Software auf dem Server, auch wenn das Betriebssystem steht.
 - **USV über einen NUT-Server** (Network UPS Tools, z. B. UniFi UPS): Akku, Restlaufzeit, Last, Spannungen,
   Leistung, Temperaturen und Status (Netz-/Batteriebetrieb, Akku schwach, Akku tauschen, Überlast …).
 - **Agent und API kombiniert:** Ein Agent lässt sich einem per API oder SNMP abgefragten Gerät zuordnen (z. B.
@@ -380,6 +383,24 @@ signiertes Zertifikat) und „Verbindung testen“. Ein Benutzer mit der Veeam-R
   Warnung – so fallen auch wöchentliche Jobs richtig auf. Deaktivierte Jobs bleiben OK.
 - **Repositories:** Belegung, frei und gesamt (Schwellwerte wie bei Speichern: 85 / 95 %); Objektspeicher ohne
   bekannte Kapazität ohne Werte.
+
+## Server-Hardware (Redfish)
+
+Unter **Geräte → Hinzufügen → Server-Hardware (iDRAC, iLO, XCC)** die Adresse des Management-Controllers, einen
+Benutzer mit **Nur-Lese-Rechten** (iDRAC „Read Only“, iLO nur „Login“, XCC „ReadOnly“) und das Kennwort eintragen,
+Fingerabdruck mit „Abrufen“ holen (Controller haben meist ein selbst signiertes Zertifikat) und „Verbindung testen“.
+Der Management-Port muss vom Monitoring aus per HTTPS erreichbar sein.
+
+- **Server:** Hersteller, Modell, Seriennummer / Service-Tag, BIOS und Controller-Firmware; ausgeschaltet = kritisch.
+  Meldet der Controller einen schlechteren Gesamtzustand, als die einzelnen Checks erklären (z. B. Spannung,
+  RAID-Akku), übernimmt der Server-Check ihn.
+- **Netzteile:** Zustand jedes Netzteils (ohne Eingangsstrom = kritisch), Redundanz verloren = Warnung,
+  Leistungsaufnahme in Watt.
+- **Lüfter und Temperaturen:** ausgefallene Lüfter; Temperaturen nach den Grenzwerten des Controllers.
+- **Arbeitsspeicher und Prozessoren:** Zustand laut Controller.
+- **RAID:** je Controller ein Check, je Volume (degradiert, Wiederaufbau mit Fortschritt) und je Platte (ausgefallen
+  = kritisch, Ausfall vorhergesagt = Warnung, Verschleiß bei SSDs als `disk.wearout`). Die Plattenliste wird alle
+  fünf Minuten gelesen. Ältere HPE-Firmware ohne die Standard-Ressource „Storage“ liefert keine RAID-Checks.
 
 ## Proxmox Backup Server
 

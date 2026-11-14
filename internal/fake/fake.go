@@ -24,6 +24,7 @@ import (
 	"pk95monitoring/internal/fake/fakenut"
 	"pk95monitoring/internal/fake/fakepbs"
 	"pk95monitoring/internal/fake/fakepve"
+	"pk95monitoring/internal/fake/fakeredfish"
 	"pk95monitoring/internal/fake/fakesnmp"
 	"pk95monitoring/internal/fake/fakeveeam"
 	"pk95monitoring/internal/model"
@@ -88,6 +89,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 
 	vbr := fakeveeam.New()
 	pbsSrv := fakepbs.New()
+	bmc := fakeredfish.New()
 	web := httptest.NewTLSServer(http.HandlerFunc(demoPage))
 	plain := httptest.NewServer(http.HandlerFunc(demoPage))
 	closeAll := func() {
@@ -97,12 +99,13 @@ func Setup(c *core.Core) (stop func(), err error) {
 		ups.Close()
 		vbr.Close()
 		pbsSrv.Close()
+		bmc.Close()
 	}
 
 	netcheck.SetRDAPBootstrap(plain.URL + "/rdap/dns.json")
 	now := time.Now()
 	agents := demoAgents(now)
-	if err := createDevices(c, pve, ups, vbr, pbsSrv, web, plain, agents, now); err != nil {
+	if err := createDevices(c, pve, ups, vbr, pbsSrv, bmc, web, plain, agents, now); err != nil {
 		closeAll()
 		return nil, err
 	}
@@ -205,7 +208,7 @@ const demoUPSName = "ups"
 
 // createDevices adds missing demo devices. The Proxmox cluster, the NUT UPS and the web site
 // are updated on every start because the simulated servers get new ports and certificates.
-func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
+func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, bmc *fakeredfish.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
 	ts := now.Unix()
 	keep := func(id string, d model.Device) model.Device {
 		// Keep what the user changed in the UI (name, group, thresholds …).
@@ -225,6 +228,9 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 			}
 			if d.PBS != nil {
 				old.PBS = d.PBS
+			}
+			if d.Redfish != nil {
+				old.Redfish = d.Redfish
 			}
 			if d.Type == model.TypeNet {
 				old.Checks = d.Checks
@@ -289,6 +295,14 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 		Enabled: true, Interval: 60, Created: ts, Updated: ts, PBS: &pcfg,
 		Notes: "Simulierter Proxmox Backup Server 3 (Demo): zwei Datastores, eine fehlgeschlagene Verifizierung, ein fehlgeschlagener Sync-Job."}
 	if err := c.ImportDevice(keep(bd.ID, bd)); err != nil {
+		return err
+	}
+
+	rcfg := bmc.Config()
+	rd := model.Device{ID: "demo-idrac", Name: "iDRAC hv01", Type: model.TypeRedfish, Host: bmc.Host(), Group: groupServer,
+		Enabled: true, Interval: 60, Created: ts, Updated: ts, Redfish: &rcfg,
+		Notes: "Simulierter Dell iDRAC 9 eines PowerEdge R650 (Demo): Netzteil 2 ohne Eingangsstrom, eine SSD mit vorhergesagtem Ausfall."}
+	if err := c.ImportDevice(keep(rd.ID, rd)); err != nil {
 		return err
 	}
 

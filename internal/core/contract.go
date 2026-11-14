@@ -18,6 +18,7 @@ import (
 	"pk95monitoring/internal/collect/nut"
 	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
+	"pk95monitoring/internal/collect/redfish"
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/collect/veeam"
 	"pk95monitoring/internal/model"
@@ -172,6 +173,7 @@ type Core struct {
 	NUT     *nut.Collector
 	Veeam   *veeam.Collector
 	PBS     *pbs.Collector
+	Redfish *redfish.Collector
 
 	// Notify delivers a notification (default notify.Send); tests replace it.
 	Notify func(ctx context.Context, s notify.Settings, m notify.Message) error

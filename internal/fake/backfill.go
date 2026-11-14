@@ -72,6 +72,8 @@ func backfill(c *core.Core, agents []*simAgent, now time.Time) error {
 				checks, _ = c.Veeam.Collect(ctx, d)
 			case model.TypePBS:
 				checks, _ = c.PBS.Collect(ctx, d)
+			case model.TypeRedfish:
+				checks, _ = c.Redfish.Collect(ctx, d)
 			}
 			for _, nc := range d.Checks {
 				checks = append(checks, netcheck.Run(ctx, nc, d.Host))

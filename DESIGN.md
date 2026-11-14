@@ -28,6 +28,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/nut` | NUT client + collector (upsd protocol, TCP 3493) |
 | `internal/collect/veeam` | Veeam Backup & Replication 12+ REST client + collector (jobs, repositories) |
 | `internal/collect/pbs` | Proxmox Backup Server REST client + collector (datastores, verification, groups, tasks) |
+| `internal/collect/redfish` | Redfish client + collector for server management controllers (iDRAC, iLO, XCC …) |
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
 | `internal/eventrules` | System log rules (Windows event log, Linux journal): built-in rules, merge, validation, XPath and journalctl queries, evaluation (pure Go; used by agent, core and demo) |
@@ -42,6 +43,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/fake/fakenut` | simulated NUT server (upsd on 127.0.0.1) – used by tests and demo |
 | `internal/fake/fakeveeam` | simulated Veeam REST API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakepbs` | simulated Proxmox Backup Server API (httptest TLS) – used by tests and demo |
+| `internal/fake/fakeredfish` | simulated Redfish controller shaped like a Dell iDRAC 9 (httptest TLS) – used by tests and demo |
 | `web/` | SPA: `index.html`, `app.js`, `style.css` (copied), `theme.js`, `logo.svg`, `fonts/` |
 | `deploy/updater.sh` | update helper on the Docker host (systemd path unit; see "Server update") |
 | `Dockerfile`, `docker-compose.yml` | image (linux/amd64, linux/arm64) with the server and the agent binaries for linux/amd64, linux/arm64, windows/amd64 |
@@ -137,6 +139,14 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | pbs | `pbs:ds:<store>` | "Datastore <store>" | `storage.usage/used/total` (instance store); `estimated-full-date` < 30 days = warn; facts Voll voraussichtlich, Sicherungsgruppen, Sicherungen; `error` or total 0 = unknown |
 | pbs | `pbs:verify:<store>` | "Verifizierung <store>" | newest snapshot of a group with verification `failed` = crit (lists the groups); facts Gruppen, Nicht verifiziert, Fehlgeschlagen |
 | pbs | `pbs:group:<store>:<ns>/<type>/<id>` | "[ns: ]type/id comment" | newest snapshot per group: `backup.age` (h) for `host` groups (threshold 30/54), `group.age` (h, display only) for vm/ct, `backup.size`; instance `<store>:[ns: ]type/id`; facts Datastore, Namespace, Sicherungen, Letzte Sicherung, Größe, Verifiziert, Ziel |
+| redfish | `rf:system` | Server | System: manufacturer, model, serial, SKU, BIOS, controller firmware, Redfish version, Gesamtzustand; PowerState Off = crit; a HealthRollup Warning/Critical worse than every other check decides ("Gesamtzustand laut Controller") |
+| redfish | `rf:power` | Netzteile | Netzteile: every present PSU (Health; LineInputVoltage 0 = "kein Eingangsstrom"), redundancy not OK = warn; metric `power.watts` (first PowerControl.PowerConsumedWatts) |
+| redfish | `rf:fans` | Lüfter | Kühlung: every present fan, fan redundancy not OK = warn; metric `fan.rpm` per fan (RPM readings only) |
+| redfish | `rf:temps` | Temperaturen | Kühlung: metric `temp` per sensor; reading ≥ UpperThresholdCritical/Fatal = crit, ≥ NonCritical = warn, else the sensor health |
+| redfish | `rf:memory`, `rf:cpu` | Arbeitsspeicher, Prozessoren | System: MemorySummary / ProcessorSummary health rollup |
+| redfish | `rf:ctrl:<storage>` | Controller <model> | RAID: storage health and its StorageControllers; facts Modell, Firmware, Volumes, Platten. Storage without volumes and drives (onboard SATA) left out; storage tree cached 5 min |
+| redfish | `rf:vol:<storage>:<volume>` | Volume <name> (<RAID>) | RAID: health; operation Rebuild = warn with progress |
+| redfish | `rf:drive:<storage>:<drive>` | Platte <name> | Platten: health (crit "Platte ausgefallen"), FailurePredicted = warn; `disk.wearout` = 100 − PredictedMediaLifeLeftPercent |
 | pbs | `pbs:task:<worker_type>:<worker_id>` | "<Typ> <worker_id>" | newest finished task of the last 7 days per job for verificationjob, verify, syncjob, prunejob, prune, garbage_collection: `OK` ok, `WARNINGS…` warn, else crit (status in the message); "Läuft gerade" prefix while one runs; `job.age` (h); facts Typ, Letzter Lauf, Ergebnis. Task list not readable: `pbs:tasks` unknown |
 | snmp | `snmp:system` | System | System (facts: Name, Beschreibung, Standort, Kontakt, Profil, Laufzeit, plus Modell, Seriennummer (printer, UPS, NAS, UniFi), Firmware (UniFi), DSM-Version (Synology) from the profile; metric `uptime`) |
 | snmp | `snmp:cpu`, `snmp:mem` | CPU / Arbeitsspeicher | System |
@@ -213,8 +223,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `ups.input`, `ups.output` | V | ditto | snmp, nut (`input.voltage`, `output.voltage`) |
 | `ups.power` | W | ditto | nut (`ups.realpower`, else `ups.realpower.nominal` × load / 100) |
 | `ups.battery_voltage` | V | ditto | nut (`battery.voltage`) |
-| `temp` | °C | `System`, Synology diskID, `Batterie` (UPS), `USV` (nut `ups.temperature`; several UPS: `<ups>/USV`, `<ups>/Batterie`), UniFi `Sensor N` | snmp, nut |
-| `fan.rpm` | rpm | fan name (`Lüfter N`) | snmp (UniFi) |
+| `temp` | °C | `System`, Synology diskID, `Batterie` (UPS), `USV` (nut `ups.temperature`; several UPS: `<ups>/USV`, `<ups>/Batterie`), UniFi `Sensor N`, Redfish sensor name | snmp, nut, redfish |
+| `fan.rpm` | rpm | fan name (`Lüfter N`) | snmp (UniFi), redfish |
+| `power.watts` | W | – | redfish (power consumption) |
 | `poe.power`, `poe.budget` | W | | snmp `snmp:poe` (consumption, nominal power of the PSE) |
 | `poe.usage` | % | | snmp `snmp:poe` (default threshold warn 85, crit 95) |
 | `poe.port` | W | ifName | snmp (ports that deliver PoE; per-port value from the vendor table) |
@@ -444,6 +455,17 @@ Audit on `/` (user and token, privilege separation). TLS: pinned SHA-256 fingerp
 CAs. Version or datastore list failing = reach crit with a German message (401 token rejected, 403 role missing,
 certificate, port 8007). Changing or deleting the device drops the cached client and snapshots.
 
+## Redfish (server hardware)
+
+Device type `redfish` – an ordinary device (device list, state, inventory). `RedfishConfig {port (443), username,
+password, fingerprint}`; the password is never sent to the UI (`has_password`). HTTP Basic auth on every request
+(no session), `Accept: application/json`, `OData-Version: 4.0`; links are followed by `@odata.id`, collections
+capped at 64 members. Reads `/redfish/v1/` → first member of Systems, every Chassis with Thermal/Power (merged),
+first Manager (Model + FirmwareVersion), and `Systems/{id}/Storage` → storages → Volumes and Drives (cached 5 min per
+device). Status mapping: State Absent = left out; Health OK/Warning/Critical = ok/warn/crit; no health with State
+Enabled = ok, other states unknown. TLS: pinned SHA-256 fingerprint, else system CAs. Root or system not readable =
+reach crit with a German message (401 login rejected, 403 role, certificate, timeout on the management port).
+
 ## NUT (Network UPS Tools)
 
 Device type `nut` (`model.NUTConfig{port, ups, username, password}`; port default 3493): `internal/collect/nut`
@@ -589,6 +611,8 @@ Authenticated:
   the stored one); `POST /api/probe {host, port: 9419}` fetches the certificate fingerprint as for Proxmox.
 - `POST /api/test/pbs {id?, host, pbs}` → `{ok, version, datastores:[name], message}` (empty secret with id = the
   stored one; no datastore visible = error "Rolle Audit"); fingerprint via `POST /api/probe {host, port: 8007}`.
+- `POST /api/test/redfish {id?, host, redfish}` → `{ok, vendor, model, serial, power, firmware, message}` (empty
+  password with id = the stored one); fingerprint via `POST /api/probe {host, port: 443}`.
 - `POST /api/test/nut {id?, host, nut}` → `{ok, server, ups:[{name, desc, model, status}], message}` (empty
   `nut.password` with `id` = the stored password; `status` is German text)
 - `POST /api/test/netcheck {host, check}` → `Check`
@@ -713,7 +737,8 @@ the end are down and stay ok), a UniFi USW-Pro-24-PoE `demo-unifi` (10.0.0.3, gr
 unifi; PoE on 12 ports, LLDP neighbors, fans, temperatures; "Alarm bei Link-Ausfall" on 0/13–0/15, 0/24–0/26),
 a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port updated on every start), a Veeam
 server `demo-veeam` on `fakeveeam` (jobs with success, warning, failure and a disabled one; a NAS and an S3
-repository; config updated on every start), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
+repository; config updated on every start), a Dell iDRAC `demo-idrac` on `fakeredfish` (PowerEdge R650: power supply 2 without input, redundancy lost,
+an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a
 9-day-old host backup, a failed sync job, a prune job with warnings), guest backups on the shared storage "backup" (VM 106 in no job),
 6 simulated agents (2 Debian, 3 Windows, plus `demo-pve1` attached to the cluster as node pve1; the Windows host hv01

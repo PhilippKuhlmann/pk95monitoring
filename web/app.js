@@ -188,8 +188,8 @@ function groupBy(list, keyFn) {
 const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { numeric: true });
 
 // ---------- labels ----------
-const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server" };
-const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive" };
+const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server", redfish: "Hardware (Redfish)" };
+const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive", redfish: "cpu" };
 const STATES = { ok: ["OK", "green"], warn: ["Warnung", "amber"], crit: ["Kritisch", "rose"], unknown: ["Unbekannt", ""], maintenance: ["Wartung", "blue"], disabled: ["Deaktiviert", ""] };
 const SDOT = { ok: "ok", warn: "warning", crit: "error", unknown: "", maintenance: "blue", disabled: "" };
 const RANK = { ok: 0, disabled: 0, maintenance: 0, unknown: 1, warn: 2, crit: 3 };
@@ -283,6 +283,7 @@ const METRIC_LABELS = {
   "poe.port": ["PoE-Leistung", "W"],
   "fan.rpm": ["Lüfter", "rpm"],
   "temp": ["Temperatur", "°C"],
+  "power.watts": ["Leistungsaufnahme", "W"],
   "printer.toner": ["Toner", "%"],
   "printer.pages": ["Gedruckte Seiten", ""],
   "custom": ["Eigener Wert", ""],
@@ -1102,6 +1103,7 @@ function addDevice(done) {
       ["agent", "Linux / Windows (Agent)", "Debian, Ubuntu, Windows Server … – der Agent meldet CPU, RAM, Platten, Dienste und Updates."],
       ["snmp", "SNMP-Gerät", "Switch, USV, Drucker, NAS – Schnittstellen, Akku, Toner, Speicher."],
       ["nut", "USV (NUT-Server)", "USV über Network UPS Tools, z. B. UniFi-USV – Akku, Restlaufzeit, Last, Spannungen."],
+      ["redfish", "Server-Hardware (iDRAC, iLO, XCC)", "Über den Management-Controller per Redfish – Netzteile, Lüfter, Temperaturen, RAID und Platten, auch wenn das Betriebssystem steht."],
       ["net", "Netzwerk / Website", "Ping, HTTP(S), TCP-Port, DNS und TLS-Zertifikat – ohne Software auf dem Ziel."]] }],
     submit: async (v) => {
       if (v.type === "agent") { go("/agents"); return; }
@@ -1247,12 +1249,13 @@ function deviceForm(dev, type, done) {
   const nu = d0.nut || { port: 3493, ups: "", username: "" };
   const vb = d0.veeam || { port: 9419, username: "", fingerprint: "" };
   const pb = d0.pbs || { port: 8007, token_id: "", fingerprint: "" };
+  const rf = d0.redfish || { port: 443, username: "", fingerprint: "" };
   const groups = [...new Set([...(state.groups || []), ...(d0.group ? [d0.group] : [])])].sort((a, b) => a.localeCompare(b, "de"));
-  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs";
-  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", agent: "" }[type];
+  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs" || type === "redfish";
+  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", redfish: "z. B. iDRAC hv01", agent: "" }[type];
   const fields = [
     { name: "name", label: "Name", value: d0.name, required: true, placeholder: namePh },
-    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
+    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : type === "redfish" ? "Management-Controller (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
       placeholder: type === "net" ? "optional, z. B. 192.168.1.1" : "192.168.1.10",
       hint: type === "agent" ? "Meldet der Agent selbst; nur für Ping-Checks und die Anzeige." : type === "net" ? "Standardziel für Ping-Checks ohne eigenes Ziel." : type === "nut" ? "Die USV selbst (z. B. UniFi) oder der Server, an dem sie per USB hängt." : "" },
     { name: "group", label: "Gruppe", value: d0.group, list: "dl-groups", placeholder: "z. B. Server, Netzwerk" },
@@ -1329,14 +1332,30 @@ function deviceForm(dev, type, done) {
         <p class="hint">Die Ausgabe zeigt Token-ID (<code>pk95mon@pbs!monitoring</code>) und Secret (<code>value</code>) – das Secret erscheint nur einmal.</p></details>
     </div></div>`;
   }
+  if (type === "redfish") {
+    extra += `<div class="section"><div class="section-title">Management-Controller (Redfish)</div><div class="form-grid">
+      ${field({ name: "redfish.port", label: "Port", type: "number", min: 1, max: 65535, value: rf.port || 443, hint: "HTTPS, Standard 443." })}
+      ${field({ name: "redfish.username", label: "Benutzer", required: true, value: rf.username, mono: true, placeholder: "monitoring" })}
+      ${field({ name: "redfish.password", label: "Kennwort", type: "password", required: !rf.has_password, placeholder: rf.has_password ? "unverändert lassen" : "" })}
+      ${field({ name: "redfish.fingerprint", label: "Fingerabdruck des Zertifikats", value: rf.fingerprint, wide: true, mono: true, button: "Abrufen", hint: "Controller haben meist ein selbst signiertes Zertifikat – „Abrufen“ übernimmt seinen Fingerabdruck. Leer = das Zertifikat muss von einer bekannten Stelle signiert sein." })}
+      <div class="field wide"><div class="flex"><button class="btn gray" type="button" data-test-redfish>${icon("signal")} Verbindung testen</button></div><div class="test-out" data-test-out></div></div>
+      <details class="howto wide"><summary>Welcher Benutzer?</summary>
+        <p class="hint">Lege im Controller einen eigenen Benutzer mit <b>Nur-Lese-Rechten</b> an und erlaube ihm Redfish (bzw. den Web-/API-Zugang):</p>
+        <ul class="hint"><li><b>Dell iDRAC:</b> iDRAC-Einstellungen → Benutzer → Rolle „Read Only“.</li>
+          <li><b>HPE iLO:</b> Benutzerverwaltung → nur „Login“-Recht.</li>
+          <li><b>Lenovo XCC:</b> Benutzer/LDAP → Rolle „ReadOnly“.</li>
+          <li><b>Supermicro:</b> Benutzer mit Rolle „User“ (Redfish braucht je nach Board eine Lizenz).</li></ul>
+        <p class="hint">Der Management-Port (meist ein eigenes Netz) muss vom Monitoring aus per HTTPS erreichbar sein. Gelesen werden Netzteile, Lüfter, Temperaturen, Arbeitsspeicher, Prozessoren und die RAID-Controller mit Volumes und Platten.</p></details>
+    </div></div>`;
+  }
   extra += `<div class="section"><div class="section-title">Netzwerk-Checks</div>
     <div class="hint">${type === "net" ? "Ein Netzwerk-Gerät besteht aus seinen Checks. Ping ohne Ziel prüft den Host des Geräts." : "Zusätzliche Prüfungen von hier aus, z. B. ob die Weboberfläche antwortet oder das Zertifikat bald abläuft."}</div>
     <div class="ed-rows" data-checks></div>
     <div class="flex"><button class="btn gray sm" type="button" data-add-check>${icon("plus")} Check hinzufügen</button></div></div>`;
 
   let nc, oids, ifs;
-  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", pbs: "Proxmox Backup Server hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
-  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", pbs: "Datastores, Sicherungsgruppen, Verifizierung und Jobs eines Proxmox Backup Servers über einen API-Token mit Leserechten.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
+  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", pbs: "Proxmox Backup Server hinzufügen", redfish: "Server-Hardware hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
+  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", pbs: "Datastores, Sicherungsgruppen, Verifizierung und Jobs eines Proxmox Backup Servers über einen API-Token mit Leserechten.", redfish: "Hardware eines Servers über seinen Management-Controller (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro) per Redfish.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
   const pxValues = (v) => ({
     port: Number(v["proxmox.port"]) || 8006, token_id: (v["proxmox.token_id"] || "").trim(), secret: v["proxmox.secret"] || "",
     fingerprint: (v["proxmox.fingerprint"] || "").trim(), watch_guests: v["proxmox.watch_guests"] || "onboot",
@@ -1353,6 +1372,9 @@ function deviceForm(dev, type, done) {
   });
   const pbValues = (v) => ({
     port: Number(v["pbs.port"]) || 8007, token_id: (v["pbs.token_id"] || "").trim(), secret: (v["pbs.secret"] || "").trim(), fingerprint: (v["pbs.fingerprint"] || "").trim(),
+  });
+  const rfValues = (v) => ({
+    port: Number(v["redfish.port"]) || 443, username: (v["redfish.username"] || "").trim(), password: v["redfish.password"] || "", fingerprint: (v["redfish.fingerprint"] || "").trim(),
   });
   const nuValues = (v) => ({
     port: Number(v["nut.port"]) || 3493, ups: (v["nut.ups"] || "").trim(), username: (v["nut.username"] || "").trim(), password: v["nut.password"] || "",
@@ -1465,6 +1487,30 @@ function deviceForm(dev, type, done) {
           } catch (e) { out.innerHTML = ""; showErrors(d, e); }
         });
       }
+      if (type === "redfish") {
+        const fb = qs('[data-fbtn="redfish.fingerprint"]', d);
+        fb.onclick = () => run(fb, async () => {
+          showErrors(d, null);
+          try {
+            const r = await POST("/api/probe", { host: host(), port: Number(qs('[name="redfish.port"]', d).value) || 443 });
+            qs('[name="redfish.fingerprint"]', d).value = r.fingerprint;
+            toast("Fingerabdruck abgerufen.");
+          } catch (e) { showErrors(d, e.fields ? e : Object.assign(e, { fields: { "redfish.fingerprint": e.message } })); }
+        });
+        const tb = qs("[data-test-redfish]", d), out = qs("[data-test-out]", d);
+        tb.onclick = () => run(tb, async () => {
+          showErrors(d, null);
+          out.innerHTML = `<span class="spinner"></span> verbinde …`;
+          try {
+            const r = await POST("/api/test/redfish", { id: dev ? dev.id : "", host: host(), redfish: rfValues(formValues(form)) });
+            const power = { On: "eingeschaltet", Off: "ausgeschaltet" }[r.power] || r.power || "";
+            out.innerHTML = r.ok === false ? `${pill("Fehler", "rose")} <span class="bad">${esc(r.message || "Verbindung fehlgeschlagen.")}</span>` :
+              `${pill("Verbunden", "green", true)} <span><b>${esc([r.vendor, r.model].filter(Boolean).join(" "))}</b>${r.serial ? ` · ${esc(r.serial)}` : ""}${power ? ` · ${esc(power)}` : ""}</span>${r.firmware ? `<div class="t-sub">Controller ${esc(r.firmware)}</div>` : ""}`;
+            const nm = qs('[name="name"]', d);
+            if (r.ok !== false && !nm.value.trim() && r.model) nm.value = r.model;
+          } catch (e) { out.innerHTML = ""; showErrors(d, e); }
+        });
+      }
       if (type === "nut") {
         const tb = qs("[data-test-nut]", d), out = qs("[data-test-out]", d), box = qs("[data-nut-ups]", d);
         const upsInput = qs('[name="nut.ups"]', d);
@@ -1516,6 +1562,7 @@ function deviceForm(dev, type, done) {
       if (type === "nut") out.nut = nuValues(v);
       if (type === "veeam") out.veeam = vbValues(v);
       if (type === "pbs") out.pbs = pbValues(v);
+      if (type === "redfish") out.redfish = rfValues(v);
       const r = edit ? await PUT(`/api/devices/${enc(dev.id)}`, out) : await POST("/api/devices", out);
       state.ovAt = 0;
       toast(edit ? "Gespeichert." : `${out.name} hinzugefügt – die erste Abfrage läuft.`);
@@ -2136,7 +2183,7 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Hyper-V", "Hyper-V Replikation", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 function tableKind(key) {
@@ -2337,6 +2384,8 @@ function cardValue(c) {
   if (has("guest.cpu")) return { text: fmtPct(v("guest.cpu")), sub: has("guest.mem") ? `Arbeitsspeicher ${fmtPct(v("guest.mem"))}` : "", spark: sp("guest.cpu") };
   if (has("printer.toner")) return { text: fmtPct(v("printer.toner")), sub: "Füllstand", bar: v("printer.toner"), low: true, spark: sp("printer.toner") };
   if (has("temp")) { const m = firstMetric(c, (x) => x.n === "temp" && isNum(x.v)); return { text: fmtVal(m.v, "°C"), sub: m.i && !String(c.name).includes(m.i) ? m.i : "Temperatur", spark: sp("temp") }; }
+  if (has("power.watts")) return { text: fmtVal(v("power.watts"), "W"), sub: "Leistungsaufnahme", spark: sp("power.watts") };
+  if (c.key === "rf:fans") return { word: true, text: cap1(String(c.msg || "").split(" · ")[0]) };
   if (has("fan.rpm")) return { text: fmtVal(v("fan.rpm"), "rpm"), sub: "Drehzahl", spark: sp("fan.rpm") };
   if (has("updates.pending")) {
     const n = int(v("updates.pending")), s = int(v("updates.security"));
@@ -3527,6 +3576,7 @@ const EXPLAIN = {
   "services.failed": { what: "Wie viele systemd-Units fehlgeschlagen sind.", why: "Ein fehlgeschlagener Dienst erledigt seine Aufgabe nicht mehr.", todo: ["Auf dem Server `systemctl --failed` ausführen und `journalctl -u <unit>` ansehen."] },
   "eventlog.errors": { what: "Fehler und kritische Ereignisse im Windows-Ereignisprotokoll der letzten 24 Stunden.", why: "Viele Fehler deuten auf Treiber-, Hardware- oder Dienstprobleme hin.", todo: ["In der Ereignisanzeige (System und Anwendung) nach den häufigsten Quellen filtern."] },
   "events.count": { what: "Wie viele Ereignisse im Zeitraum der Regel zu ihren Filtern passen – ohne die ignorierten.", why: "Die Regel steht für ein bekanntes Problem (Filter und Alarmgrenze stehen unter „Werte und Details“). Alles andere im Ereignisprotokoll wird nicht gemeldet.", todo: ["Harmlose Meldungen unten mit „Ignorieren“ ausblenden.", "Regeln ändern unter Systemprotokolle."] },
+  "power.watts": { what: "Wie viel Strom der Server gerade aufnimmt (laut Management-Controller).", why: "Nur zur Anzeige – hilft beim Planen der USV-Last und zeigt ungewöhnliche Last.", todo: [] },
   "temp": { what: "Eine Temperatur des Geräts.", why: "Zu hohe Temperaturen verkürzen die Lebensdauer und können zur Notabschaltung führen.", todo: ["Lüftung und Raumtemperatur prüfen."] },
   "if.errors": { what: "Fehlerhafte Pakete auf dem Port.", why: "Meist ein Kabel-, Stecker- oder Duplex-Problem; die Verbindung wird langsam oder bricht ab.", todo: ["Kabel tauschen, Port-Geschwindigkeit und Duplex prüfen."] },
   "repl.age": { what: "Wie lange die letzte erfolgreiche Replikation her ist.", why: "Fällt der Quellknoten aus, fehlen auf dem Ziel alle Änderungen seit dieser Zeit.", todo: ["Proxmox: Replikationsprotokoll prüfen (Rechenzentrum → Replikation).", "Hyper-V: im Hyper-V-Manager Rechtsklick auf die VM → Replikation → Replikationsintegrität anzeigen; angehaltene Replikation dort fortsetzen."] },

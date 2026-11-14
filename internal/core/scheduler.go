@@ -30,7 +30,7 @@ func pollable(d model.Device) bool {
 		return false
 	}
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNUT, model.TypeVeeam, model.TypePBS:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish:
 		return true
 	}
 	return len(netChecksOf(d)) > 0
@@ -166,6 +166,8 @@ func (c *Core) pollDevice(ctx context.Context, id string) {
 		wg.Go(func() { collected, cerr = c.Veeam.Collect(pctx, d) })
 	case model.TypePBS:
 		wg.Go(func() { collected, cerr = c.PBS.Collect(pctx, d) })
+	case model.TypeRedfish:
+		wg.Go(func() { collected, cerr = c.Redfish.Collect(pctx, d) })
 	}
 	ncs := netChecksOf(d)
 	nets := make([]model.Check, len(ncs))
@@ -230,7 +232,7 @@ func (c *Core) applyPoll(id string, collected []model.Check, cerr error, nets []
 
 	var out []model.CheckStatus
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNUT, model.TypeVeeam, model.TypePBS:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish:
 		rt.st.LastPoll = now
 		if cerr == nil {
 			rt.fails, rt.st.Error, rt.st.LastOK = 0, "", now

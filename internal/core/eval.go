@@ -65,6 +65,8 @@ var metricLabels = map[string][2]string{
 	"ups.input":          {"Eingangsspannung", "V"},
 	"ups.output":         {"Ausgangsspannung", "V"},
 	"temp":               {"Temperatur", "°C"},
+	"power.watts":        {"Leistungsaufnahme", "W"},
+	"fan.rpm":            {"Lüfter", "rpm"},
 	"printer.toner":      {"Toner", "%"},
 	"printer.pages":      {"Gedruckte Seiten", ""},
 	"custom":             {"Eigener Wert", ""},

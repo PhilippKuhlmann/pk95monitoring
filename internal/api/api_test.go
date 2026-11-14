@@ -58,6 +58,14 @@ func TestRedactDevice(t *testing.T) {
 		t.Error("redaction changed the original")
 	}
 
+	rf := model.Device{ID: "r", Type: model.TypeRedfish, Redfish: &model.RedfishConfig{Port: 443, Username: "mon", Password: "bmc-s3cret"}}
+	if b, _ := json.Marshal(redactDevice(rf)); strings.Contains(string(b), "bmc-s3cret") {
+		t.Errorf("Redfish password in %s", b)
+	}
+	if rm := toMap(t, redactDevice(rf))["redfish"].(map[string]any); rm["has_password"] != true || rm["username"] != "mon" {
+		t.Errorf("redfish %v", rm)
+	}
+
 	pb := model.Device{ID: "b", Type: model.TypePBS, PBS: &model.PBSConfig{Port: 8007, TokenID: "mon@pbs!pk95", Secret: "pbs-s3cret"}}
 	if b, _ := json.Marshal(redactDevice(pb)); strings.Contains(string(b), "pbs-s3cret") {
 		t.Errorf("PBS secret in %s", b)

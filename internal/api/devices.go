@@ -792,6 +792,31 @@ func (s *Server) testPBS(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": res.Version, "datastores": res.Datastores, "message": ""})
 }
 
+// testRedfish logs in to a management controller and reads the system: {id, host, redfish}.
+func (s *Server) testRedfish(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID      string              `json:"id"`
+		Host    string              `json:"host"`
+		Redfish model.RedfishConfig `json:"redfish"`
+	}
+	if !decode(w, r, &req) || fieldErrs(w, needHost(req.Host)) {
+		return
+	}
+	if req.Redfish.Port < 0 || req.Redfish.Port > 65535 {
+		fieldErrs(w, map[string]string{"redfish.port": "Port zwischen 1 und 65535."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+	res, err := s.C.TestRedfish(ctx, req.ID, strings.TrimSpace(req.Host), req.Redfish)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "vendor": res.Vendor, "model": res.Model, "serial": res.Serial,
+		"power": res.Power, "firmware": res.Firmware, "message": ""})
+}
+
 // backups lists the backups of all devices (page "Sicherungen").
 func (s *Server) backups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.C.Backups())
