@@ -1317,3 +1317,13 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .sc-extra .mchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: var(--r); white-space: normal; }
 .ib.xs { padding: 2px; } .ib.xs .icon { width: 14px; height: 14px; }
 .sc-later { margin: 4px 0 0; padding-left: 18px; }
+/* network scan */
+.scan-run { margin: 4px 0 14px; }
+.scan-run .small { display: block; margin-top: 6px; color: var(--muted); }
+.scan-how { margin: 0; padding-left: 18px; }
+.scan-how li + li { margin-top: 4px; }
+.scan-ports { max-width: 260px; }
+.scan-table td:first-child { min-width: 170px; }
+.scan-ports .mchip { display: inline-block; margin: 0 2px 4px 0; padding: 1px 6px; border: 1px solid var(--line); border-radius: var(--r); font-size: 12px; }
+.mt-xs { margin-top: 6px; }
+.btn-link { padding: 0; border: 0; background: none; color: var(--accent-ink); font: inherit; text-decoration: underline; cursor: pointer; }

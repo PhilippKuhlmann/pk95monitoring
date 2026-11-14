@@ -33,6 +33,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
 | `internal/eventrules` | System log rules (Windows event log, Linux journal): built-in rules, merge, validation, XPath and journalctl queries, evaluation (pure Go; used by agent, core and demo) |
+| `internal/netscan` | network scan: expands ranges, pings, tries TCP ports, SNMP v2c system group, web title/certificate, Redfish root; classifies hosts with a suggestion |
 | `internal/mssql` | Microsoft SQL Server: PowerShell query (System.Data.SqlClient, Windows authentication), parser and checks (pure Go; used by the Windows agent and the demo) |
 | `internal/addc` | Active Directory domain controller: PowerShell query, parser and checks (pure Go; used by the Windows agent and the demo) |
 | `internal/hyperv` | Hyper-V: PowerShell query, parser and checks of the VMs and their replication (pure Go; used by the Windows agent and the demo) |
@@ -535,6 +536,26 @@ only)}], maintenance:[{name, note?, start, end, running, components:[name]}], da
 names, hosts, checks or messages. Cached 30 s; saving or a new token drops the cache. Events "Statusseite
 eingeschaltet/ausgeschaltet", "Hinweis auf der Statusseite", "Neuer Link für die Statusseite".
 
+## Network scan (`netscan`, `core/netscan.go`)
+
+`netscan.Expand` accepts prefixes (at most /22, without network and broadcast), ranges `a-b` and addresses, IPv4
+only, at most 4096 addresses. `netscan.Scan` runs 64 workers; per address concurrently: ping (pro-bing, 2 echoes,
+unprivileged then raw), TCP connects to `netscan.Ports` (1.5 s), SNMP v2c get of sysDescr/sysObjectID/sysName with
+the community. Hosts that answered get reverse DNS (sysName as fallback), the Redfish root (`https://ip/redfish/v1/`,
+`RedfishVersion`, Vendor, Product) when 443 is open, and the title, Server header and certificate of the first web
+port of 8006, 8007, 8443, 5001, 443, 80. `Classify` (first match): 8006 Proxmox, 8007 PBS, 9419 Veeam, Redfish/iDRAC/
+iLO/XCC titles, 3493 NUT, SNMP (UPS by enterprise 318 or text, printer by 9100/631 or vendor, NAS 6574/24681,
+UniFi 41112/4413, network gear by text, Windows/Linux sysDescr → agent), Synology 5001, UniFi 8443, printer ports
+without SNMP, Windows ports (445/3389/5985/1433) → agent, SSH → agent, web → net, ping only → net.
+
+Core: one scan at a time in the background (`Core.Scanner`, default `netscan.Scan`; the demo simulates
+`demoNetwork`), cancelled on shutdown, at most 30 minutes. Before scanning the device host names are resolved. The
+result is stored in settings `netscan` (`{started, finished, ranges, community, hosts}`), ignored addresses in
+`netscan_ignore`. `ScanState` matches hosts to devices by host address (or resolved name), agent IPs and ping/TCP/TLS
+targets (attached agents count for their parent). Default ranges: the /24 networks of private device and agent
+addresses (not loopback, link-local, 172.17.0.0/16), the 8 with most devices. Events "Netzwerk-Scan gestartet" and
+"Netzwerk-Scan beendet (n gefunden, m noch nicht überwacht)".
+
 ## Microsoft 365 (`collect/m365`)
 
 Device type `m365` – a device without host (default interval 300 s). `M365Config {tenant_id (GUID or domain),
@@ -649,6 +670,10 @@ Authenticated:
   folders:[path], note, created, updated}`; `WindowView` adds `schedule` (German text), `active_until`, `next`,
   `matches`. `GET /api/devices/{id}` has `windows:[WindowView]` (enabled windows of the device, by next start).
   `public: true` announces the window on the status page.
+- `GET /api/scan` → `{running, started, finished, ranges, community, done, total, hosts:[netscan.Host + device_id?,
+  device_name?, ignored?], defaults:[range]}`; `POST /api/scan {ranges:[string], community}` → 202 with the state (422
+  on `ranges`/`community`, 409 while a scan runs); `POST /api/scan/ignore {ip, ignored}` → the state. Page `/discover`
+  (nav "Netzwerk-Scan") polls every 1.5 s while running; "Hinzufügen" calls `deviceForm(null, type, done, prefill)`.
 - `GET /api/statuspage` → `{page: StatusPage, path: "/status/<token>" ("" before the first save), url (with the
   public URL, else ""), preview: PublicStatus with members}`; `PUT /api/statuspage` (StatusPage; the token is
   ignored) → same (422 on title, intro, notice, notice_level, components, `components.N.name|note|mode|targets`);
@@ -851,7 +876,9 @@ repository; config updated on every start), a Microsoft 365 tenant `demo-m365` o
 an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a
 9-day-old host backup, a failed sync job, a prune job with warnings), guest backups on the shared storage "backup" (VM 106 in no job),
-7 simulated agents (2 Debian, 4 Windows – sql01 runs SQL Server via `mssql.Checks`: SQL Server 2019 Standard with the
+the network scan is simulated (`fake/netscan.go`: the demo servers and SNMP devices as already monitored, plus an
+HPE iLO, printers with and without SNMP, a Windows PC and SQL server, a Synology without SNMP, an APC UPS, a UniFi
+controller, a Raspberry Pi and a host answering only ping); 7 simulated agents (2 Debian, 4 Windows – sql01 runs SQL Server via `mssql.Checks`: SQL Server 2019 Standard with the
 ERP (log backups every 15 minutes), a DMS without log backups, a failing job "DMS-Import" and an out-of-support SQL
 Server 2016 Express whose database "Zeiterfassung" is at 84 % of the 10 GB limit; dc01 is the PDC emulator of kunde.local via `addc.Checks`: replication from DC02
 fine, from the branch office DC03 failing for 3 hours with error 1722 –, plus `demo-pve1` attached to the cluster as node pve1; the Windows host hv01

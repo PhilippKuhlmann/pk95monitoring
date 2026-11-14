@@ -42,6 +42,9 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   Hysterese, Quittieren und Wartung – spontan oder als wiederkehrendes Wartungsfenster für Geräte und Ordner
   (z. B. monatlich zum Patchday). Benachrichtigungsregeln legen fest, wer was bekommt – mit Erinnerung,
   Eskalation und Ruhezeit samt Zusammenfassung am Morgen.
+- **Netzwerk-Scan:** sucht in den Netzen des Kunden nach Geräten, die noch nicht überwacht werden (Proxmox,
+  Backup-Server, iDRAC/iLO, Drucker, USV, Switches, NAS, Windows- und Linux-Server …), und schlägt vor, wie sie
+  überwacht werden – ein Klick öffnet den passenden Dialog vorausgefüllt.
 - **Statusseite für Kunden:** öffentliche Seite hinter einem geheimen Link – Zustand der Dienste, Verlauf der
   letzten 30 Tage, angekündigte Wartung und ein Hinweis bei Störungen, ohne Gerätenamen oder Details.
 - **Verlauf:** Diagramme bis zu einem Jahr (Rohwerte 2 Tage, 5-Minuten-Werte 35 Tage, Stundenwerte 400 Tage).
@@ -575,6 +578,33 @@ neu; gebraucht werden mindestens zwei Tage Verlauf danach. Stabiler oder schrump
 ein Jahr erscheinen nicht. Die Karte zeigt „voll in N Tagen“, die Fakten „Voll voraussichtlich“ und „Zuwachs“, die
 Seite **Ablaufdaten** listet allen Speicher, der in den nächsten 90 Tagen voll ist. Proxmox-Backup-Server-Datastores
 behalten ihre eigene Schätzung des Backup-Servers.
+
+## Netzwerk-Scan
+
+Unter **Netzwerk-Scan** durchsucht der Server Netze nach Geräten, die noch nicht überwacht werden. Vorgeschlagen sind
+die /24-Netze, in denen schon überwachte Geräte und Agents liegen – läuft der Server im Container, ist sein eigenes Netz
+meist nicht das des Kunden. Je Zeile ein Netz (`192.168.1.0/24`, höchstens /22), ein Bereich
+(`192.168.1.10-192.168.1.50`) oder eine Adresse; zusammen höchstens 4096 Adressen.
+
+Gesucht wird nur lesend: Ping, die Ports der bekannten Dienste (SSH, DNS, HTTP(S), SMB, IPP, SQL Server, RDP, NUT,
+Synology, WinRM, Proxmox VE und Backup Server, UniFi, JetDirect, Veeam), SNMP v2c mit der angegebenen Community
+(meist `public`), Titel und Zertifikat von Weboberflächen und der Redfish-Einstieg von Management-Controllern. Ein
+/24-Netz dauert etwa eine Minute; das Ergebnis bleibt gespeichert.
+
+Jedes gefundene Gerät bekommt eine Einordnung und einen Vorschlag:
+
+| Gefunden | Vorschlag |
+|---|---|
+| Proxmox VE (8006), Proxmox Backup Server (8007), Veeam (9419), NUT (3493) | als passendes Gerät hinzufügen |
+| iDRAC, iLO, XCC (Redfish) | als Server-Hardware hinzufügen |
+| Drucker, USV, NAS, Switches, UniFi, Firewalls mit SNMP | als SNMP-Gerät mit passendem Profil |
+| Drucker oder Synology ohne SNMP | SNMP am Gerät einschalten, dann hinzufügen |
+| Windows (SMB, RDP, WinRM, SQL Server), Linux (SSH) | PK95-Agent installieren |
+| nur Weboberfläche oder nur Ping | Netzwerk-Checks (Ping, Weboberfläche) |
+
+„Hinzufügen“ öffnet den Dialog mit Name, Adresse und Port (SNMP-Profil, Web-Check) vorausgefüllt. Was schon überwacht
+wird – über die Adresse eines Geräts, die Adressen eines Agents oder einen Ping-Check –, steht unter „Bereits
+überwacht“; Unwichtiges lässt sich ignorieren.
 
 ## Statusseite
 

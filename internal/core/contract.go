@@ -23,6 +23,7 @@ import (
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/collect/veeam"
 	"pk95monitoring/internal/model"
+	"pk95monitoring/internal/netscan"
 	"pk95monitoring/internal/notify"
 	"pk95monitoring/internal/store"
 )
@@ -183,6 +184,8 @@ type Core struct {
 	Mail func(s notify.Settings, m notify.Message, to []string) error
 	// Now is the clock (default time.Now); tests replace it before use.
 	Now func() time.Time
+	// Scanner runs a network scan (default netscan.Scan); the demo and tests replace it.
+	Scanner func(ctx context.Context, o netscan.Options) []netscan.Host
 
 	smu      sync.RWMutex // guards settings and enrollKey; may be taken while holding mu
 	settings Settings
@@ -207,6 +210,13 @@ type Core struct {
 	status  StatusPage    // statuspage.go
 	spCache *PublicStatus // last public view, computed at spAt
 	spAt    time.Time
+
+	scanMu     sync.Mutex // guards the scan fields; never held together with mu
+	scanRun    scanRun
+	scanLast   scanResult
+	scanIgnore []string
+	scanNames  map[string]string // device host name → IPv4, resolved at the last scan
+	scanCancel context.CancelFunc
 
 	// pmu serializes the store writes of device data that happen outside mu (statuses,
 	// metrics, LastSeen) against DeleteDevice, so a deleted device leaves nothing behind.

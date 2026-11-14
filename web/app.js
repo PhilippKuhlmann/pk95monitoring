@@ -517,6 +517,7 @@ const NAV = [
   { path: "/expiry", label: "Ablaufdaten", icon: "calendar" },
   { path: "/reports", label: "Berichte", icon: "chart" },
   { head: "Einrichtung" },
+  { path: "/discover", label: "Netzwerk-Scan", icon: "search" },
   { path: "/maintenance", label: "Wartungsfenster", icon: "wrench" },
   { path: "/statuspage", label: "Statusseite", icon: "globe" },
   { path: "/agents", label: "Agents", icon: "download" },
@@ -1254,9 +1255,10 @@ proxmox-backup-manager user generate-token pk95mon@pbs monitoring
 proxmox-backup-manager acl update / Audit --auth-id pk95mon@pbs
 proxmox-backup-manager acl update / Audit --auth-id 'pk95mon@pbs!monitoring'`;
 
-function deviceForm(dev, type, done) {
+// deviceForm adds (dev = null; pre prefills fields, e.g. from the network scan) or edits a device.
+function deviceForm(dev, type, done, pre) {
   const edit = !!dev;
-  const d0 = dev ? structuredClone(dev) : { type, enabled: true, checks: [], thresholds: [], rules: [] };
+  const d0 = dev ? structuredClone(dev) : { type, enabled: true, checks: [], thresholds: [], rules: [], ...(pre || {}) };
   type = d0.type || type;
   const px = d0.proxmox || { port: 8006, watch_guests: "onboot", ignore_guests: [] };
   const sn = d0.snmp || { version: "2c", port: 161, profile: "auto", interfaces: [], oids: [] };
@@ -4840,6 +4842,106 @@ PAGES["/maintenance"] = async (el, token) => {
       if (!await confirmDialog({ title: `„${w.name}“ löschen?`, text: w.active_until > nowSec() ? "Das Fenster läuft gerade – die Wartung der Geräte endet damit sofort." : "" })) return;
       await run(b, async () => { await DEL(`/api/maintenance/${enc(w.id)}`); await reload(); }, "Wartungsfenster gelöscht.");
     });
+  };
+  draw();
+};
+
+// ---------- network scan ----------
+const PORT_NAMES = { 22: "SSH", 53: "DNS", 80: "HTTP", 443: "HTTPS", 445: "SMB", 631: "IPP", 1433: "SQL Server", 3389: "RDP", 3493: "NUT",
+  5001: "Synology", 5985: "WinRM", 8006: "Proxmox", 8007: "PBS", 8443: "UniFi", 9100: "JetDirect", 9419: "Veeam" };
+const SCAN_TYPES = { proxmox: "Proxmox VE", pbs: "Proxmox Backup Server", veeam: "Veeam", redfish: "Server-Hardware", nut: "USV (NUT)", snmp: "SNMP-Gerät", net: "Netzwerk-Checks" };
+
+// scanPrefill is what the device dialog gets for a found host.
+function scanPrefill(h) {
+  const short = (h.name || "").split(".")[0];
+  const pre = { name: short || h.label.replace(/^Weboberfläche „(.*)“$/, "$1"), host: h.ip };
+  if (h.suggest === "snmp") pre.snmp = { version: "2c", port: 161, profile: h.profile || "auto", interfaces: [], oids: [] };
+  if (h.suggest === "net") {
+    pre.checks = [{ type: "ping", name: "Ping", target: "" }];
+    if (h.port) {
+      const scheme = h.port === 80 ? "http" : "https", port = h.port === 80 || h.port === 443 ? "" : `:${h.port}`;
+      pre.checks.push({ type: "http", name: "Weboberfläche", target: `${scheme}://${h.ip}${port}/`, ignore_tls: scheme === "https" });
+    }
+  }
+  return pre;
+}
+
+PAGES["/discover"] = async (el, token) => {
+  let st = await GET("/api/scan");
+  if (token !== pageToken) return;
+  let filter = "new", timer = null;
+  const poll = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (token !== pageToken) return;
+      try { st = await GET("/api/scan"); } catch (e) { /* keep the last state */ }
+      if (token === pageToken) draw();
+    }, 1500);
+  };
+  const draw = () => {
+    const hosts = st.hosts || [];
+    const groups = { new: hosts.filter((h) => !h.device_id && !h.ignored && h.suggest), known: hosts.filter((h) => h.device_id), ignored: hosts.filter((h) => !h.device_id && (h.ignored || !h.suggest)) };
+    const ranges = (st.ranges && st.ranges.length ? st.ranges : st.defaults || []).join("\n");
+    const pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
+    const list = groups[filter];
+    const portChips = (h) => (h.ports || []).map((p) => `<span class="mchip">${esc(PORT_NAMES[p] || p)}</span>`).join(" ") + (h.snmp ? ` <span class="mchip">SNMP</span>` : "") + (h.ping && !(h.ports || []).length ? ` <span class="mchip">Ping</span>` : "");
+    const action = (h, i) => {
+      if (h.device_id) return `Überwacht als <a href="/devices/${enc(h.device_id)}" data-go>${esc(h.device_name)}</a>`;
+      let btn = "";
+      if (h.suggest === "agent") btn = `<a class="btn sm" href="/agents" data-go>${icon("download")} Agent installieren</a>`;
+      else if (h.suggest) btn = `<button class="btn sm" type="button" data-add="${i}">${icon("plus")} Als ${esc(SCAN_TYPES[h.suggest] || h.suggest)}</button>`;
+      return `<div class="small">${esc(h.suggest_text)}</div>${btn ? `<div class="mt-xs">${btn}</div>` : ""}`;
+    };
+    el.innerHTML = pageHead("Netzwerk-Scan", "Sucht in den Netzen des Kunden nach Geräten, die noch nicht überwacht werden, und schlägt vor, wie sie überwacht werden können.") +
+      `<div class="grid set-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Netze durchsuchen</div></div>
+        <form class="form" data-scan novalidate><div class="form-error" hidden></div><div class="form-grid">
+          ${field({ name: "ranges", label: "Netze", type: "textarea", rows: 4, value: ranges, mono: true, wide: true, placeholder: "192.168.1.0/24",
+            hint: "Je Zeile ein Netz (192.168.1.0/24), ein Bereich (192.168.1.10-192.168.1.50) oder eine Adresse. Höchstens /22 je Netz, 4096 Adressen insgesamt." })}
+          ${field({ name: "community", label: "SNMP-Community", value: st.community || "public", mono: true, hint: "Zum Erkennen von Druckern, Switches, USVs und NAS. Leer = ohne SNMP." })}
+        </div>
+        ${(st.defaults || []).length ? `<p class="muted small">Netze der überwachten Geräte: ${st.defaults.map((d) => `<code>${esc(d)}</code>`).join(", ")} ${ranges !== st.defaults.join("\n") ? `<button class="btn-link" type="button" data-defaults>übernehmen</button>` : ""}</p>` : `<p class="muted small">Noch keine Geräte mit Adresse – Netz von Hand eintragen.</p>`}
+        ${st.running ? `<div class="scan-run"><div class="pbar"><span style="width:${pct}%"></span></div><span class="small">${int(st.done)} von ${int(st.total)} Adressen geprüft …</span></div>` : ""}
+        <div class="flex"><button class="btn" type="submit" ${st.running ? "disabled" : ""}>${icon("search")} ${st.running ? "Scan läuft …" : "Scan starten"}</button></div></form></div>
+        <div class="panel"><div class="panel-head"><div class="panel-title">So wird gesucht</div></div>
+          <ul class="hint scan-how"><li>Ping an jede Adresse, dazu bekannte Ports: ${Object.entries(PORT_NAMES).map(([, n]) => esc(n)).join(", ")}.</li>
+            <li>SNMP v2c mit der Community oben (Beschreibung und Hersteller).</li>
+            <li>Titel und Zertifikat von Weboberflächen, Redfish bei Management-Controllern.</li>
+            <li>Es wird nichts verändert und nirgends angemeldet. Ein /24-Netz dauert etwa eine Minute.</li>
+            <li>Läuft dieser Server im Docker-Container, sieht er das Kundennetz nur, wenn er es auch für die Überwachung erreicht.</li></ul></div></div>
+      ${st.finished || hosts.length ? `<div class="panel flush"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Ergebnis</div>
+          <div class="actions"><span class="muted small">${st.finished ? `${esc(fmtTime(st.finished, true))} · ${esc((st.ranges || []).join(", "))}` : ""}</span></div></div>
+        <div class="rp-bar" style="padding:0 16px"><div class="seg" role="group" aria-label="Filter">
+          <button type="button" data-f="new" aria-pressed="${filter === "new"}">Vorschläge (${groups.new.length})</button>
+          <button type="button" data-f="known" aria-pressed="${filter === "known"}">Bereits überwacht (${groups.known.length})</button>
+          <button type="button" data-f="ignored" aria-pressed="${filter === "ignored"}">Ignoriert (${groups.ignored.length})</button></div></div>
+        ${list.length ? `<div class="table-wrap"><table class="resp scan-table"><thead><tr><th>Adresse</th><th>Erkannt als</th><th>Dienste</th><th>Vorschlag</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
+          ${list.map((h) => { const i = hosts.indexOf(h); return `<tr>
+            <td data-l="Adresse"><b class="mono">${esc(h.ip)}</b>${h.name ? `<div class="t-sub">${esc(h.name)}</div>` : ""}</td>
+            <td data-l="Erkannt als"><b>${esc(h.label)}</b>${h.detail && h.detail !== h.label ? `<div class="t-sub">${esc(h.detail)}</div>` : ""}${h.cert ? `<div class="t-sub">${icon("lock", "ic-inline")}${esc(h.cert)}</div>` : ""}</td>
+            <td data-l="Dienste" class="scan-ports">${portChips(h)}</td>
+            <td data-l="Vorschlag">${action(h, i)}</td>
+            <td class="actions-cell">${h.device_id ? "" : `<button class="ib" type="button" data-ign="${i}" title="${h.ignored ? "Wieder vorschlagen" : "Ignorieren"}" aria-label="${esc(h.ip)} ${h.ignored ? "wieder vorschlagen" : "ignorieren"}">${icon(h.ignored ? "restore" : "eye-off")}</button>`}</td></tr>`; }).join("")}
+          </tbody></table></div>`
+          : `<div style="padding:0 16px 16px">${empty(filter === "new" ? "Keine neuen Vorschläge" : filter === "known" ? "Nichts davon überwacht" : "Nichts ignoriert", filter === "new" ? "Alles, was der Scan gefunden hat, wird schon überwacht oder ist ignoriert." : "", "", "search")}</div>`}
+      </div>` : ""}`;
+    bindRowLinks(el);
+    formSubmit(qs("[data-scan]", el), async (v) => {
+      st = await POST("/api/scan", { ranges: String(v.ranges || "").split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean), community: v.community.trim() });
+      toast("Scan gestartet.");
+      draw();
+    });
+    const db = qs("[data-defaults]", el);
+    if (db) db.onclick = () => { qs('[name="ranges"]', el).value = st.defaults.join("\n"); };
+    qsa("[data-f]", el).forEach((b) => b.onclick = () => { filter = b.dataset.f; draw(); });
+    qsa("[data-add]", el).forEach((b) => b.onclick = () => {
+      const h = hosts[+b.dataset.add];
+      deviceForm(null, h.suggest, async () => { st = await GET("/api/scan"); if (token === pageToken) draw(); }, scanPrefill(h));
+    });
+    qsa("[data-ign]", el).forEach((b) => b.onclick = () => {
+      const h = hosts[+b.dataset.ign];
+      run(b, async () => { st = await POST("/api/scan/ignore", { ip: h.ip, ignored: !h.ignored }); draw(); }, h.ignored ? "Wird wieder vorgeschlagen." : "Ignoriert.");
+    });
+    if (st.running) poll();
   };
   draw();
 };

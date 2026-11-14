@@ -93,6 +93,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 	pbsSrv := fakepbs.New()
 	bmc := fakeredfish.New()
 	graph := fakegraph.New()
+	c.Scanner = demoScan // the demo's networks are simulated
 	// The demo's Microsoft 365 tenant is simulated; real tenants added in the demo would be
 	// asked there too.
 	c.M365.LoginURL, c.M365.GraphURL = graph.URL(), graph.URL()

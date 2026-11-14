@@ -24,6 +24,7 @@ import (
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/collect/veeam"
 	"pk95monitoring/internal/model"
+	"pk95monitoring/internal/netscan"
 	"pk95monitoring/internal/notify"
 	"pk95monitoring/internal/store"
 )
@@ -72,7 +73,7 @@ func New(st *store.Store, opt Options) (*Core, error) {
 		St: st, Opt: opt, Started: time.Now().Unix(),
 		Agents:  agentdist.NewCatalog(opt.AgentDir, opt.Version),
 		Proxmox: proxmox.New(), SNMP: snmp.New(), NUT: nut.New(), Veeam: veeam.New(), PBS: pbs.New(), Redfish: redfish.New(), M365: m365.New(),
-		Notify: notify.Send, Mail: notify.SendMail, Now: time.Now,
+		Notify: notify.Send, Mail: notify.SendMail, Now: time.Now, Scanner: netscan.Scan,
 		devices: map[string]model.Device{}, rt: map[string]*devState{}, open: map[string]*openAlert{},
 		windows: map[string]MaintWindow{}, winActive: map[string]int64{},
 		nrules: map[string]NotifyRule{}, digests: map[string]int64{},
@@ -105,6 +106,12 @@ func New(st *store.Store, opt Options) (*Core, error) {
 	}
 	for _, r := range nrules {
 		c.nrules[r.ID] = r
+	}
+	if err := st.GetSetting(keyScan, &c.scanLast); err != nil {
+		return nil, fmt.Errorf("network scan: %w", err)
+	}
+	if err := st.GetSetting(keyScanIgnore, &c.scanIgnore); err != nil {
+		return nil, fmt.Errorf("network scan: %w", err)
 	}
 	if err := st.GetSetting(keyStatusPage, &c.status); err != nil {
 		return nil, fmt.Errorf("status page: %w", err)
@@ -200,6 +207,7 @@ func (c *Core) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			c.stopScan()
 			c.running.Wait()
 			c.persist(true)
 			c.waitNotify(5 * time.Second)
