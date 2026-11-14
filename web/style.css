@@ -1218,3 +1218,9 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 /* ---- server update ---- */
 .upd-log { margin: 8px 0 0; max-height: 240px; overflow: auto; padding: 8px 10px; border-radius: var(--r); background: var(--panel-2); font: 12px/1.45 var(--mono); white-space: pre-wrap; color: var(--ink-2); }
 .upd-notes { padding: 8px 0 0; white-space: pre-wrap; font-size: 13px; color: var(--ink-2); }
+
+/* ---- backups ---- */
+.bak-table td { vertical-align: top; }
+.bak-table td:nth-child(2) { min-width: 220px; max-width: 420px; white-space: normal; }
+.bak-msg { margin-top: 2px; color: var(--ink-2); }
+.bak-store td.bak-bar { min-width: 160px; }

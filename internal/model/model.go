@@ -46,6 +46,7 @@ const (
 	TypeSNMP    = "snmp"    // switch, UPS, printer, NAS … polled over SNMP
 	TypeNet     = "net"     // host or service checked only over the network (ping, HTTP, TCP, DNS, TLS)
 	TypeNUT     = "nut"     // UPS polled over a NUT server (Network UPS Tools, e.g. UniFi UPS)
+	TypeVeeam   = "veeam"   // Veeam Backup & Replication server, polled over its REST API
 )
 
 // Device is one monitored thing. Stored as JSON (store kind "device").
@@ -74,6 +75,7 @@ type Device struct {
 	Proxmox *ProxmoxConfig `json:"proxmox,omitempty"`
 	SNMP    *SNMPConfig    `json:"snmp,omitempty"`
 	NUT     *NUTConfig     `json:"nut,omitempty"`
+	Veeam   *VeeamConfig   `json:"veeam,omitempty"`
 	Agent   *AgentConfig   `json:"agent,omitempty"`
 
 	// Checks are additional network checks; they work for every device type.
@@ -99,6 +101,10 @@ func (d Device) Clone() Device {
 	if d.NUT != nil {
 		n := *d.NUT
 		d.NUT = &n
+	}
+	if d.Veeam != nil {
+		v := *d.Veeam
+		d.Veeam = &v
 	}
 	if d.SNMP != nil {
 		s := *d.SNMP
@@ -184,12 +190,18 @@ func (d Device) HasRule(key string) bool {
 }
 
 // SeparateCheck reports whether a check has its own page instead of belonging to the device:
-// update checks ("updates", "pve:updates:<node>") and the Windows event log ("ev:<rule>"; "eventlog"
-// of agents before 0.16). They
-// raise alerts and notifications, but neither show on the device page nor colour the device,
-// its folder or the overview, and the availability report leaves them out.
+// update checks ("updates", "pve:updates:<node>"), the system logs ("ev:<rule>"; "eventlog" of
+// agents before 0.16) and backups ("pve:backup", "pve:bak:<vmid>", "veeam:…"). They raise
+// alerts and notifications, but neither show on the device page nor colour the device, its
+// folder or the overview, and the availability report leaves them out.
 func SeparateCheck(key string) bool {
-	return key == "updates" || key == "eventlog" || strings.HasPrefix(key, "pve:updates:") || strings.HasPrefix(key, "ev:")
+	return key == "updates" || key == "eventlog" || strings.HasPrefix(key, "pve:updates:") || strings.HasPrefix(key, "ev:") ||
+		BackupCheck(key)
+}
+
+// BackupCheck reports whether a check is about backups (page "Sicherungen").
+func BackupCheck(key string) bool {
+	return key == "pve:backup" || strings.HasPrefix(key, "pve:bak:") || strings.HasPrefix(key, "veeam:")
 }
 
 // CloneEventRules copies rules including their lists.
@@ -295,6 +307,16 @@ type SNMPConfig struct {
 	// ok without link. Traffic is recorded for ports that are up (at most 512 ports).
 	Interfaces []string    `json:"interfaces"`
 	OIDs       []CustomOID `json:"oids"`
+}
+
+// VeeamConfig polls Veeam Backup & Replication 12 or newer over its REST API (HTTPS, port 9419)
+// with a user of the Veeam console (a Windows or Veeam user; the role "Restore Operator" or
+// higher can read jobs and repositories).
+type VeeamConfig struct {
+	Port        int    `json:"port"` // default 9419
+	Username    string `json:"username"`
+	Password    string `json:"password,omitempty"`
+	Fingerprint string `json:"fingerprint"` // SHA-256 of the server certificate (pinning); empty = system CAs
 }
 
 // NUTConfig polls a NUT server (upsd, TCP 3493): LIST UPS, LIST VAR.
@@ -566,6 +588,8 @@ func DefaultThresholds() []Threshold {
 		{Metric: "updates.security", Warn: f(1)},
 		{Metric: "updates.age", Warn: f(35), Crit: f(60)},
 		{Metric: "updates.failed", Warn: f(1)},
+		// a daily backup older than a day and a half (warn) or two days and more (crit)
+		{Metric: "backup.age", Warn: f(30), Crit: f(54)},
 		// Proxmox hardware and storage health
 		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
 		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},

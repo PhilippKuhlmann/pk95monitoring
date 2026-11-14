@@ -36,6 +36,7 @@ type devState struct {
 	taskLogs map[string]taskInfo      // logKey -> parsed vzdump log
 	smart    map[string]smartEntry    // node \x00 /dev/… -> SMART data
 	certs    map[string]certEntry     // node -> certificates
+	guestBak *guestBackups            // last backup per guest (cached)
 }
 
 type counterSample struct {
@@ -214,6 +215,7 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 		}
 	}
 	checks = append(checks, c.backupCheck(ctx, cl, d.ID, inv, details, now))
+	checks = append(checks, guestBackupChecks(inv, c.guestBackupsFor(ctx, cl, d.ID, inv, now), d.Proxmox.IgnoreGuests, now)...)
 	c.prune(d.ID, inv)
 	return checks, nil
 }

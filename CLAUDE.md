@@ -6,7 +6,7 @@ hosts via pk95agent (push over HTTPS, optionally attached to an API/SNMP device)
 SQLite, embedded vanilla-JS SPA in the PK95 Core design (same as `~/code/pk95proxbackup`).
 Architecture, keys, metrics and the REST contract: `DESIGN.md`. Shared types: `internal/model`.
 
-- Run tests: `go test -race ./...` (Proxmox VE, SNMP and NUT are simulated by `internal/fake/fakepve`, `internal/fake/fakesnmp`, `internal/fake/fakenut`)
+- Run tests: `go test -race ./...` (Proxmox VE, SNMP, NUT and Veeam are simulated by `internal/fake/fakepve`, `internal/fake/fakesnmp`, `internal/fake/fakenut`, `internal/fake/fakeveeam`)
 - Format: `gofmt -w .`; check JS: `node --check web/app.js`; all of CI's static checks: `make check`
 - Demo UI: `.claude/launch.json` → `demo`, or
   `PK95MON_DEMO=1 PK95MON_NO_TLS=1 PK95MON_LISTEN=127.0.0.1:18096 PK95MON_DATA_DIR=data/demo go run .`

@@ -36,11 +36,18 @@ type nutOut struct {
 }
 
 // deviceOut is a device without secrets (the outer fields shadow the embedded ones in JSON).
+type veeamOut struct {
+	model.VeeamConfig
+	Password    string `json:"password"`
+	HasPassword bool   `json:"has_password"`
+}
+
 type deviceOut struct {
 	model.Device
 	Proxmox *proxmoxOut `json:"proxmox,omitempty"`
 	SNMP    *snmpOut    `json:"snmp,omitempty"`
 	NUT     *nutOut     `json:"nut,omitempty"`
+	Veeam   *veeamOut   `json:"veeam,omitempty"`
 }
 
 func redactDevice(d model.Device) deviceOut {
@@ -69,7 +76,12 @@ func redactDevice(d model.Device) deviceOut {
 		c.Password = ""
 		out.NUT = &nutOut{NUTConfig: c, HasPassword: n.Password != ""}
 	}
-	out.Device.Proxmox, out.Device.SNMP, out.Device.NUT = nil, nil, nil
+	if v := d.Veeam; v != nil {
+		c := *v
+		c.Password = ""
+		out.Veeam = &veeamOut{VeeamConfig: c, HasPassword: v.Password != ""}
+	}
+	out.Device.Proxmox, out.Device.SNMP, out.Device.NUT, out.Device.Veeam = nil, nil, nil, nil
 	return out
 }
 

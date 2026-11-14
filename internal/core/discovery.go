@@ -25,10 +25,12 @@ const (
 )
 
 // inventoryKey reports whether a check takes part in the inventory: not reach, not the
-// discovery check, not network checks and Windows event rules (both are configured), not the
-// event log check of agents before 0.16 (replaced by the rules).
+// discovery check, not network checks and system log rules (both are configured), not the
+// event log check of agents before 0.16 (replaced by the rules) and not the last backup per
+// guest (follows the guests, which the inventory has already).
 func inventoryKey(k string) bool {
-	return k != "" && k != reachKey && k != model.DiscoveryKey && k != "eventlog" && !strings.HasPrefix(k, "net:") && !strings.HasPrefix(k, eventrules.KeyPrefix)
+	return k != "" && k != reachKey && k != model.DiscoveryKey && k != "eventlog" && !strings.HasPrefix(k, "net:") && !strings.HasPrefix(k, eventrules.KeyPrefix) &&
+		!strings.HasPrefix(k, "pve:bak:")
 }
 
 // reindex rebuilds the set of new keys and the vanished list from the inventory.

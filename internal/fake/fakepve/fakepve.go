@@ -256,6 +256,8 @@ func (s *Server) route(p []string, q url.Values) (any, int, string) {
 			return nil, 500, "binary not installed: /usr/bin/ceph-mon"
 		}
 		return s.cephStatus(), 200, ""
+	case len(p) == 3 && p[0] == "cluster" && p[1] == "backup-info" && p[2] == "not-backed-up":
+		return s.notBackedUp(), 200, ""
 	case len(p) == 2 && p[0] == "cluster" && p[1] == "tasks":
 		tasks := s.tasks(now)
 		out := make([]map[string]any, len(tasks))
@@ -277,6 +279,9 @@ func (s *Server) route(p []string, q url.Values) (any, int, string) {
 }
 
 func (s *Server) nodeRoute(n *node, p []string, q url.Values, now time.Time) (any, int, string) {
+	if len(p) == 3 && p[0] == "storage" && p[2] == "content" {
+		return s.storageContent(n, p[1], q.Get("content"), now)
+	}
 	switch strings.Join(p, "/") {
 	case "tasks": // the node's task archive: finished tasks, newest first
 		since, _ := strconv.ParseInt(q.Get("since"), 10, 64)

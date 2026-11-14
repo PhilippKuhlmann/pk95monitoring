@@ -13,6 +13,7 @@ import (
 	"pk95monitoring/internal/collect/nut"
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/collect/snmp"
+	"pk95monitoring/internal/collect/veeam"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/store"
 )
@@ -157,8 +158,8 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 
 	if old == nil {
 		c.Event("info", d.Name, "Gerät angelegt", fmt.Sprintf("%s (%s) wird überwacht.", d.Name, typeLabel(d.Type)), nil, false)
-	} else if d.Type == model.TypeProxmox {
-		c.Proxmox.Forget(d.ID)
+	} else {
+		c.forgetCollector(d)
 	}
 	c.wakeUp()
 	return d, nil, nil
@@ -168,7 +169,7 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 // Values are compared as printed, so a nil and an empty list are the same.
 func collectChanged(a, b model.Device) bool {
 	show := func(d model.Device) string {
-		s := fmt.Sprintf("%s|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT))
+		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam))
 		if d.Agent != nil {
 			s += fmt.Sprintf("|%v|%v|%v", d.Agent.Services, d.Agent.WatchAutoServices, d.Agent.IgnoreServices)
 		}
@@ -196,6 +197,8 @@ func typeLabel(t string) string {
 		return "Netzwerk"
 	case model.TypeNUT:
 		return "USV (NUT)"
+	case model.TypeVeeam:
+		return "Veeam"
 	}
 	return t
 }
@@ -219,7 +222,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		errs["notes"] = "Höchstens 4000 Zeichen."
 	}
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam:
 	case model.TypeAgent:
 		if old == nil {
 			errs["type"] = "Agents werden bei der Installation des Agents automatisch angelegt."
@@ -232,7 +235,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 	}
 	if d.Host != "" && (len(d.Host) > 253 || !hostRe.MatchString(d.Host)) {
 		errs["host"] = "Hostname oder IP-Adresse ohne Protokoll und Pfad angeben."
-	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT) {
+	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || d.Type == model.TypeVeeam) {
 		errs["host"] = "Hostname oder IP-Adresse angeben."
 	} else if d.Host == "" && d.Type == model.TypeNet && len(d.Checks) == 0 {
 		errs["host"] = "Host oder mindestens einen Check angeben."
@@ -255,6 +258,11 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		validateNUT(d, old, errs)
 	} else {
 		d.NUT = nil
+	}
+	if d.Type == model.TypeVeeam {
+		validateVeeam(d, old, errs)
+	} else {
+		d.Veeam = nil
 	}
 	if d.Type == model.TypeAgent && old != nil {
 		in := d.Agent
@@ -528,6 +536,62 @@ func validateSNMP(d *model.Device, old *model.Device, errs map[string]string) {
 	}
 }
 
+// forgetCollector drops the cached connection of an API device (changed or deleted).
+func (c *Core) forgetCollector(d model.Device) {
+	switch d.Type {
+	case model.TypeProxmox:
+		c.Proxmox.Forget(d.ID)
+	case model.TypeVeeam:
+		c.Veeam.Forget(d.ID)
+	}
+}
+
+func validateVeeam(d *model.Device, old *model.Device, errs map[string]string) {
+	if d.Veeam == nil {
+		d.Veeam = &model.VeeamConfig{}
+	}
+	v := d.Veeam
+	if v.Password == "" && old != nil && old.Veeam != nil {
+		v.Password = old.Veeam.Password
+	}
+	v.Username, v.Fingerprint = strings.TrimSpace(v.Username), strings.TrimSpace(v.Fingerprint)
+	if v.Port == 0 {
+		v.Port = veeam.DefaultPort
+	}
+	if v.Port < 1 || v.Port > 65535 {
+		errs["veeam.port"] = "Port zwischen 1 und 65535."
+	}
+	switch {
+	case v.Username == "":
+		errs["veeam.username"] = "Benutzer angeben, z. B. VEEAM01\\monitoring."
+	case len(v.Username) > 128 || strings.ContainsAny(v.Username, "\r\n\x00\t"):
+		errs["veeam.username"] = "Ungültiger Benutzername."
+	}
+	if v.Password == "" {
+		errs["veeam.password"] = "Kennwort angeben."
+	}
+	if len(v.Password) > 256 {
+		errs["veeam.password"] = "Höchstens 256 Zeichen."
+	}
+	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(v.Fingerprint)); f != "" && !fpRe.MatchString(f) {
+		errs["veeam.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
+	}
+}
+
+var fpRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// TestVeeam logs in to a Veeam server and lists its jobs. When cfg.Password is empty and id
+// names an existing Veeam device, the stored password is used.
+func (c *Core) TestVeeam(ctx context.Context, id, host string, cfg model.VeeamConfig) (veeam.TestResult, error) {
+	if cfg.Password == "" && id != "" {
+		if d, err := c.Device(id); err == nil && d.Veeam != nil {
+			cfg.Password = d.Veeam.Password
+		}
+	}
+	cfg.Username = strings.TrimSpace(cfg.Username)
+	return veeam.Test(ctx, strings.TrimSpace(host), cfg)
+}
+
 // upsNameRe is a UPS name as upsd lists it (section name in ups.conf).
 var upsNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$`)
 
@@ -583,9 +647,7 @@ func (c *Core) DeleteDevice(id string) error {
 	delete(c.rt, id)
 	freed := c.detachChildren(id, now) // its attached agents become standalone devices
 	c.mu.Unlock()
-	if d.Type == model.TypeProxmox {
-		c.Proxmox.Forget(id)
-	}
+	c.forgetCollector(d)
 	// Wait for writes that saw the device before it was removed (metrics of a running poll,
 	// a status or LastSeen being persisted), then delete everything.
 	c.pmu.Lock()
@@ -773,9 +835,7 @@ func (c *Core) ImportDevice(d model.Device) error {
 		rt.saved = d.Agent.LastSeen
 	}
 	c.mu.Unlock()
-	if d.Type == model.TypeProxmox {
-		c.Proxmox.Forget(d.ID)
-	}
+	c.forgetCollector(d)
 	c.wakeUp()
 	return nil
 }

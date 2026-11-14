@@ -248,6 +248,8 @@ func alertLink(deviceID, key string) string {
 		return "/updates"
 	case NotifyEvents:
 		return "/eventlog"
+	case NotifyBackups:
+		return "/backups"
 	}
 	return "/devices/" + deviceID
 }

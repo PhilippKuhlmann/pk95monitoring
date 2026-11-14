@@ -24,6 +24,7 @@ import (
 	"pk95monitoring/internal/fake/fakenut"
 	"pk95monitoring/internal/fake/fakepve"
 	"pk95monitoring/internal/fake/fakesnmp"
+	"pk95monitoring/internal/fake/fakeveeam"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/store"
 )
@@ -84,6 +85,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 	ups.SetDesc(demoUPSName, "UniFi UPS 2U")
 	ups.EnableDrift()
 
+	vbr := fakeveeam.New()
 	web := httptest.NewTLSServer(http.HandlerFunc(demoPage))
 	plain := httptest.NewServer(http.HandlerFunc(demoPage))
 	closeAll := func() {
@@ -91,12 +93,13 @@ func Setup(c *core.Core) (stop func(), err error) {
 		plain.Close()
 		pve.Close()
 		ups.Close()
+		vbr.Close()
 	}
 
 	netcheck.SetRDAPBootstrap(plain.URL + "/rdap/dns.json")
 	now := time.Now()
 	agents := demoAgents(now)
-	if err := createDevices(c, pve, ups, web, plain, agents, now); err != nil {
+	if err := createDevices(c, pve, ups, vbr, web, plain, agents, now); err != nil {
 		closeAll()
 		return nil, err
 	}
@@ -199,7 +202,7 @@ const demoUPSName = "ups"
 
 // createDevices adds missing demo devices. The Proxmox cluster, the NUT UPS and the web site
 // are updated on every start because the simulated servers get new ports and certificates.
-func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
+func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
 	ts := now.Unix()
 	keep := func(id string, d model.Device) model.Device {
 		// Keep what the user changed in the UI (name, group, thresholds …).
@@ -213,6 +216,9 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, web, 
 					old.NUT = d.NUT
 				}
 				old.NUT.Port = d.NUT.Port
+			}
+			if d.Veeam != nil {
+				old.Veeam = d.Veeam // new port and certificate on every start
 			}
 			if d.Type == model.TypeNet {
 				old.Checks = d.Checks
@@ -261,6 +267,14 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, web, 
 		Notes: "Simulierte UniFi UPS 2U am NUT-Server (Demo).",
 		NUT:   &model.NUTConfig{Port: ups.Port(), UPS: demoUPSName}}
 	if err := c.ImportDevice(keep(nd.ID, nd)); err != nil {
+		return err
+	}
+
+	vcfg := vbr.Config()
+	vd := model.Device{ID: "demo-veeam", Name: "Veeam Backup", Type: model.TypeVeeam, Host: vbr.Host(), Group: groupServer,
+		Enabled: true, Interval: 60, Created: ts, Updated: ts, Veeam: &vcfg,
+		Notes: "Simulierter Veeam Backup & Replication 12 (Demo): Jobs mit Erfolg, Warnung und Fehler, zwei Repositories."}
+	if err := c.ImportDevice(keep(vd.ID, vd)); err != nil {
 		return err
 	}
 

@@ -100,3 +100,59 @@ func (s *Server) tasks(now time.Time) []fakeTask {
 	slices.SortFunc(out, func(a, b fakeTask) int { return b.start.Compare(a.start) })
 	return out
 }
+
+// notBackedUpVMID is the guest no backup job covers (the stopped test VM).
+const notBackedUpVMID = 106
+
+// notBackedUp is /cluster/backup-info/not-backed-up. s.mu is held.
+func (s *Server) notBackedUp() []map[string]any {
+	out := []map[string]any{}
+	for _, g := range s.guests {
+		if g.vmid == notBackedUpVMID {
+			out = append(out, map[string]any{"vmid": g.vmid, "name": g.name, "type": g.typ})
+		}
+	}
+	return out
+}
+
+// storageContent lists the backups of a storage: the shared storage "backup" keeps the
+// nightly backups of the last 7 days of every guest except the test VM; a failing nightly
+// job (SetBackupFailed) leaves out the latest backup of VM 103. s.mu is held.
+func (s *Server) storageContent(n *node, name, content string, now time.Time) (any, int, string) {
+	var st *storage
+	for _, x := range s.storages {
+		if x.name == name && (x.node == n.name || x.shared) {
+			st = x
+		}
+	}
+	if st == nil {
+		return nil, 500, "storage '" + name + "' does not exist"
+	}
+	out := []map[string]any{}
+	if name != "backup" || (content != "" && content != "backup") {
+		return out, 200, ""
+	}
+	base := lastBackupRun(now)
+	for _, g := range s.guests {
+		if g.template || g.vmid == notBackedUpVMID {
+			continue
+		}
+		kind, ext := "qemu", "vma.zst"
+		if g.typ == "lxc" {
+			kind, ext = "lxc", "tar.zst"
+		}
+		for day := range 7 {
+			if day == 0 && s.backupFailed && g.vmid == 103 {
+				continue
+			}
+			at := base.AddDate(0, 0, -day).Add(time.Duration(g.vmid%60) * time.Minute)
+			if at.After(now) {
+				continue
+			}
+			volid := fmt.Sprintf("backup:backup/vzdump-%s-%d-%s.%s", kind, g.vmid, at.Format("2006_01_02-15_04_05"), ext)
+			out = append(out, map[string]any{"volid": volid, "vmid": g.vmid, "ctime": at.Unix(), "content": "backup", "format": ext,
+				"subtype": kind, "size": int64(g.maxdisk * (0.18 + float64(g.vmid%7)*0.02))})
+		}
+	}
+	return out, 200, ""
+}

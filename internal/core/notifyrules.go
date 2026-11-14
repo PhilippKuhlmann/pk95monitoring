@@ -33,10 +33,11 @@ const (
 	NotifyReach   = "reach"   // Erreichbarkeit
 	NotifyChecks  = "checks"  // all other checks of the device
 	NotifyUpdates = "updates" // updates, pve:updates:<node>
-	NotifyEvents  = "events"  // Windows event rules
+	NotifyEvents  = "events"  // system log rules
+	NotifyBackups = "backups" // backups: Proxmox guests and tasks, Veeam
 )
 
-var notifyKinds = []string{NotifyReach, NotifyChecks, NotifyUpdates, NotifyEvents}
+var notifyKinds = []string{NotifyReach, NotifyChecks, NotifyUpdates, NotifyEvents, NotifyBackups}
 
 // digestMaxAge: a quiet time that ended longer ago is not summarised any more (server down).
 const digestMaxAge = 6 * time.Hour
@@ -117,6 +118,8 @@ func alertKind(key string) string {
 		return NotifyUpdates
 	case key == "eventlog" || strings.HasPrefix(key, "ev:"):
 		return NotifyEvents
+	case model.BackupCheck(key):
+		return NotifyBackups
 	}
 	return NotifyChecks
 }

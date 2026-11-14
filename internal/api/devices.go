@@ -743,3 +743,32 @@ func (s *Server) deleteEventIgnore(w http.ResponseWriter, r *http.Request) {
 	}
 	ok(w)
 }
+
+// testVeeam logs in to a Veeam server and lists its jobs: {id, host, veeam}.
+func (s *Server) testVeeam(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    string            `json:"id"`
+		Host  string            `json:"host"`
+		Veeam model.VeeamConfig `json:"veeam"`
+	}
+	if !decode(w, r, &req) || fieldErrs(w, needHost(req.Host)) {
+		return
+	}
+	if req.Veeam.Port < 0 || req.Veeam.Port > 65535 {
+		fieldErrs(w, map[string]string{"veeam.port": "Port zwischen 1 und 65535."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+	res, err := s.C.TestVeeam(ctx, req.ID, strings.TrimSpace(req.Host), req.Veeam)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": res.Version, "name": res.Name, "jobs": res.Jobs, "message": ""})
+}
+
+// backups lists the backups of all devices (page "Sicherungen").
+func (s *Server) backups(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.C.Backups())
+}

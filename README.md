@@ -25,6 +25,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   einem Knoten des Proxmox-Clusters) – ein Gerät, alle Daten.
 - **Netzwerk-Checks** für jedes Gerät: Ping (Antwortzeit, Verlust), HTTP(S) (Statuscode, Antwortzeit,
   Schlüsselwort), TLS-Zertifikat (Resttage), TCP-Port, DNS (Antwort, erwarteter Wert) und Domain-Ablauf (RDAP).
+- **Sicherungen:** letzte Sicherung jedes Proxmox-Gasts (auch auf PBS), Veeam Backup & Replication (Jobs,
+  ausgefallene Läufe, Repositories) und eine eigene Seite mit allen Sicherungen.
 - **Übersichten:** Update-Stand aller Server, Systemprotokolle (Windows und Linux) mit Regeln und Ausnahmen, Ablaufdaten aller Zertifikate und Domains, Verfügbarkeitsberichte
   (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,
@@ -207,6 +209,12 @@ Ohne dieses Recht entfallen die Update-Checks; der Knoten zeigt dann einen Hinwe
 Welche Gäste laufen müssen, steht im Gerät: „Beim Booten starten“ (Standard), alle oder keine; einzelne VMIDs
 (Vorlagen, Testmaschinen) lassen sich ausnehmen.
 
+**Sicherungen:** Neben fehlgeschlagenen vzdump-Aufgaben zeigt jeder Gast seine letzte Sicherung („Sicherung VM 100
+…“, Gruppe Sicherungen): Zeit, Alter, Ziel und Größe aus allen Speichern mit Inhalt „backup“ (NFS, CIFS, PBS …,
+alle 15 Minuten gelesen). Warnung ab 30, kritisch ab 54 Stunden (Messwert `backup.age`; bei wöchentlichen
+Sicherungen am Gerät höher setzen). Gäste in keinem Sicherungsjob sind eine Warnung; ausgenommene VMIDs zählen
+nicht mit. `PVEAuditor` genügt dafür.
+
 ## Agent (Linux und Windows)
 
 Die Seite **Agents** zeigt die fertigen Befehle mit Anmeldeschlüssel, Fingerabdruck und SHA-256-Prüfsummen. Das
@@ -341,6 +349,28 @@ nicht erreichbar, wird die Erreichbarkeit kritisch.
 („NUT-Server“) einschalten und – falls angeboten – Benutzer und Passwort vergeben. Dann die IP-Adresse des Geräts,
 das den NUT-Server bereitstellt, als Host eintragen und mit „Verbindung testen“ den UPS-Namen ermitteln. Port
 3493/TCP muss vom Monitoring-Host aus erreichbar sein.
+
+## Veeam Backup & Replication
+
+Ab Version 12 über die REST-API (HTTPS, Port 9419): unter **Sicherungen → Veeam-Server → Hinzufügen** Host,
+Benutzer und Kennwort eintragen, Fingerabdruck mit „Abrufen“ holen (Veeam nutzt ein selbst
+signiertes Zertifikat) und „Verbindung testen“. Ein Benutzer mit der Veeam-Rolle **Restore Operator** genügt.
+
+- **Jobs:** ein Check je Job mit letztem Ergebnis (Fehlgeschlagen = kritisch, Mit Warnungen = Warnung), letztem und
+  nächstem Lauf, Typ, Ziel und Objekten. Ist ein geplanter Lauf seit über zwei Stunden nicht gestartet, ist das eine
+  Warnung – so fallen auch wöchentliche Jobs richtig auf. Deaktivierte Jobs bleiben OK.
+- **Repositories:** Belegung, frei und gesamt (Schwellwerte wie bei Speichern: 85 / 95 %); Objektspeicher ohne
+  bekannte Kapazität ohne Werte.
+
+## Sicherungen (Übersicht)
+
+Sicherungen haben einen eigenen Menüpunkt und stehen nicht bei den Geräten: Die Seite **Sicherungen** fasst alles
+zusammen: die letzte Sicherung jedes Proxmox-Gasts, die vzdump-Aufgaben,
+die Veeam-Jobs und die Windows-Regeln „Windows-Server-Sicherung“ und „Veeam-Sicherung“ – mit Zustand, letzter
+Sicherung, Ergebnis, Ziel, Größe und nächstem Lauf, Handlungsbedarf zuerst. Darunter stehen die Sicherungsziele
+(Veeam-Repositories) mit ihrer Belegung und die Veeam-Server. Wie Updates und Systemprotokolle lösen Sicherungen
+Alarme aus (in den Benachrichtigungsregeln als Art „Sicherungen“), färben aber weder das Gerät noch die Übersicht;
+ein Alarm führt auf diese Seite.
 
 ## Was wird überwacht? – Checks auswählen
 

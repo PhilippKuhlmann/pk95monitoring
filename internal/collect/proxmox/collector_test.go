@@ -17,6 +17,7 @@ var units = map[string]string{
 	"swap.usage": "%", "disk.usage": "%", "uptime": "s",
 	"updates.pending": "", "updates.security": "",
 	"guest.cpu": "%", "guest.mem": "%", "guest.mem_used": "B",
+	"backup.age": "h", "backup.size": "B",
 	"guest.netin": "B/s", "guest.netout": "B/s", "guest.diskread": "B/s", "guest.diskwrite": "B/s",
 	"storage.usage": "%", "storage.used": "B", "storage.total": "B",
 	"cpu.iowait": "%", "zfs.usage": "%", "zfs.frag": "%", "zfs.errors": "", "zfs.scrub_age": "d",
@@ -186,6 +187,24 @@ func TestCollectChecks(t *testing.T) {
 	bk := want(t, m, "pve:backup", model.StateCrit, "Sicherungen", "Sicherungen")
 	if !strings.Contains(bk.Message, "103 nextcloud") || strings.Contains(bk.Message, "105") {
 		t.Errorf("backup message %q", bk.Message)
+	}
+
+	// last backup per guest (setup lets the nightly backup of 103 fail)
+	g := want(t, m, "pve:bak:100", model.StateOK, "Sicherung VM 100 dc01", "Sicherungen")
+	if a, ok := metric(g, "backup.age"); !ok || a.Instance != "vm/100" || a.Value > 24 || g.Facts["Ziel"] != "backup" || g.Facts["Größe"] == "" {
+		t.Errorf("guest backup %+v", g)
+	}
+	if a, _ := metric(m["pve:bak:103"], "backup.age"); a.Value < 24 {
+		t.Errorf("103: last backup %.1f h ago, want the day before", a.Value)
+	}
+	if ch := want(t, m, "pve:bak:106", model.StateWarn, "", ""); ch.Message != "In keinem Sicherungsjob, keine Sicherung vorhanden" {
+		t.Errorf("106: %q", ch.Message)
+	}
+	if _, ok := m["pve:bak:9000"]; ok {
+		t.Error("template has a backup check")
+	}
+	if ct, _ := metric(m["pve:bak:201"], "backup.age"); ct.Instance != "ct/201" {
+		t.Errorf("container instance %q", ct.Instance)
 	}
 }
 
@@ -503,4 +522,16 @@ func TestConcurrentDevices(t *testing.T) {
 	if _, ok := c.devs["deva"]; ok {
 		t.Error("Forget kept state")
 	}
+}
+
+func TestGuestBackupsForbidden(t *testing.T) {
+	srv, c, d := setup(t)
+	srv.SetForbidden("/content", true)
+	m := collect(t, c, d)
+	ch := want(t, m, "pve:bak:100", model.StateUnknown, "", "")
+	if !strings.Contains(ch.Message, "keine Berechtigung (Datastore.Audit)") {
+		t.Errorf("message %q", ch.Message)
+	}
+	// the guest without a backup job is still known
+	want(t, m, "pve:bak:106", model.StateWarn, "", "")
 }

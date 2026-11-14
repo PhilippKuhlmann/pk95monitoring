@@ -248,7 +248,7 @@ func TestNotifyQuietDigest(t *testing.T) {
 
 func TestAlertLink(t *testing.T) {
 	for key, want := range map[string]string{"updates": "/updates", "pve:updates:pve1": "/updates", "ev:oom": "/eventlog", "eventlog": "/eventlog",
-		"disk:/": "/devices/d1", "reach": "/devices/d1"} {
+		"disk:/": "/devices/d1", "reach": "/devices/d1", "pve:backup": "/backups", "pve:bak:100": "/backups", "veeam:job:x": "/backups"} {
 		if got := alertLink("d1", key); got != want {
 			t.Errorf("%s: %s", key, got)
 		}

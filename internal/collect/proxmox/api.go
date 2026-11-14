@@ -48,6 +48,7 @@ type resource struct {
 	Storage    string `json:"storage"`
 	Shared     num    `json:"shared"`
 	PluginType string `json:"plugintype"`
+	Content    string `json:"content"` // storage: comma separated content types
 }
 
 func (r resource) vmid() string { return strconv.Itoa(int(r.VMID)) }
