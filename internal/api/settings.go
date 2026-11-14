@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pk95monitoring/internal/core"
 	"pk95monitoring/internal/notify"
 	"pk95monitoring/internal/store"
 )
@@ -166,4 +167,38 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 		"version": s.C.Opt.Version, "instance": s.C.InstanceName(), "started": s.C.Started, "db_size": s.C.St.DBSize(),
 		"devices": len(s.C.Devices()), "series": n, "data_dir": s.C.Opt.DataDir, "demo": s.C.Opt.Demo,
 	})
+}
+
+// listNotifyRules lists the notification rules and which channels are switched on.
+func (s *Server) listNotifyRules(w http.ResponseWriter, r *http.Request) {
+	n := s.C.Settings().Notify
+	writeJSON(w, http.StatusOK, map[string]any{"rules": s.C.NotifyRules(),
+		"channels": map[string]any{"mail": n.MailEnabled, "telegram": n.TelegramEnabled, "hook": n.HookEnabled, "mail_to": n.MailTo}})
+}
+
+// saveNotifyRule creates (POST) or changes (PUT /{id}) a notification rule.
+func (s *Server) saveNotifyRule(w http.ResponseWriter, r *http.Request) {
+	var rule core.NotifyRule
+	if !decode(w, r, &rule) {
+		return
+	}
+	rule.ID = r.PathValue("id")
+	v, errs, err := s.C.SaveNotifyRule(rule)
+	if fieldErrs(w, errs) {
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// deleteNotifyRule removes a notification rule.
+func (s *Server) deleteNotifyRule(w http.ResponseWriter, r *http.Request) {
+	if err := s.C.DeleteNotifyRule(r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	ok(w)
 }

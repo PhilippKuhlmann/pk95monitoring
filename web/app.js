@@ -4464,6 +4464,139 @@ PAGES["/maintenance"] = async (el, token) => {
   draw();
 };
 
+// ---------- notification rules ----------
+const NR_KINDS = [["reach", "Erreichbarkeit"], ["checks", "Checks"], ["updates", "Updates"], ["events", "Windows-Ereignisse"]];
+
+// nrTargets renders the folders and devices of a rule ("Alle Geräte" when none).
+function nrTargets(r, names) {
+  const parts = [...(r.folders || []).map((f) => `<span class="nowrap">${icon("folder", "ic-inline")}${esc(f)}</span>`), ...(r.devices || []).map((id) => esc(names[id] || id))];
+  return parts.length ? parts.join(", ") : "<b>Alle Geräte</b>";
+}
+function nrWays(mail, mailTo, tg, hook, defMail) {
+  const w = [];
+  if (mail) w.push(`E-Mail an ${esc(mailTo || defMail || "die Empfänger oben")}`);
+  if (tg) w.push("Telegram");
+  if (hook) w.push("Push");
+  return w.join(" · ");
+}
+
+// notifyRuleDialog creates (r = null) or edits a notification rule.
+function notifyRuleDialog(r, { devices, groups, channels, done }) {
+  r = r || { enabled: true, devices: [], folders: [], kinds: [], min_severity: "warn", mail: !!channels.mail, telegram: !!channels.telegram, hook: false,
+    repeat_minutes: 0, escalate_minutes: 0, quiet_start: "", quiet_end: "", quiet_days: [], digest: true };
+  const folders = allFolders(groups);
+  const sel = new Set([...(r.folders || []).map((f) => "f:" + f), ...(r.devices || []).map((id) => "d:" + id)]);
+  const items = [...folders.map((f) => ["f:" + f, f, "", true]), ...devices.map((d) => ["d:" + d.id, d.name, d.group || "", false])];
+  const kinds = r.kinds && r.kinds.length ? r.kinds : NR_KINDS.map(([k]) => k);
+  const quiet = !!r.quiet_start;
+  const off = (on) => (on ? "" : ' <span class="muted small">(oben ausgeschaltet)</span>');
+  const sec = (name, title, hint = "") => ({ type: "html", name, wide: true, html: `<div class="section-title nr-sec">${esc(title)}</div>${hint ? `<span class="hint">${hint}</span>` : ""}` });
+  const html = (name, h) => ({ type: "html", name, wide: true, html: h });
+  return formDialog({
+    title: r.id ? `Regel „${r.name}“` : "Neue Benachrichtigungsregel", ic: "bell",
+    text: "Jede passende Regel schickt ihre Meldung; wer über mehrere Regeln dran ist, bekommt sie nur einmal.",
+    fields: [
+      { name: "name", label: "Name", value: r.name, required: true, wide: true, placeholder: "z. B. Server an IT, nachts nur kritisch" },
+      sec("s1", "Wofür"),
+      html("targets", `<span class="fl">Geräte und Ordner <span class="muted small" data-tcount></span></span>
+        <input type="search" data-tfind placeholder="Ordner oder Gerät suchen …" aria-label="Ordner oder Gerät suchen">
+        <div class="pick-list mw-pick">${items.map(([k, l, sub, isF]) => `<label class="check" data-tl="${esc((l + " " + sub).toLowerCase())}"><input type="checkbox" data-t="${esc(k)}" ${sel.has(k) ? "checked" : ""}><span>${isF ? icon("folder", "ic-inline") : ""}<b>${esc(l)}</b>${sub && !isF ? ` <span class="muted small">${esc(sub)}</span>` : ""}${isF ? ' <span class="muted small">mit Unterordnern</span>' : ""}</span></label>`).join("")}</div>
+        <span class="hint">Nichts gewählt = alle Geräte. Ein Ordner gilt auch für Geräte, die später hineinkommen.</span><span class="err" hidden></span>`),
+      html("kinds", `<span class="fl">Welche Alarme</span><div class="wd-chips">${NR_KINDS.map(([k, l]) => `<label class="wd-chip"><input type="checkbox" data-kind value="${k}" ${kinds.includes(k) ? "checked" : ""}><span>${l}</span></label>`).join("")}</div><span class="err" hidden></span>`),
+      { name: "min_severity", label: "Ab", type: "select", value: r.min_severity || "warn", options: [["warn", "Warnung"], ["crit", "Nur kritisch"]] },
+      sec("s2", "Wohin"),
+      html("channels", `<div class="nr-ways"><label class="check"><input type="checkbox" name="mail" ${r.mail ? "checked" : ""}><span>E-Mail${off(channels.mail)}</span></label>
+        <label class="check"><input type="checkbox" name="telegram" ${r.telegram ? "checked" : ""}><span>Telegram${off(channels.telegram)}</span></label>
+        <label class="check"><input type="checkbox" name="hook" ${r.hook ? "checked" : ""}><span>Push (ntfy, Gotify, Webhook)${off(channels.hook)}</span></label></div><span class="err" hidden></span>`),
+      { name: "mail_to", label: "E-Mail-Empfänger", value: r.mail_to, wide: true, placeholder: channels.mail_to || "it@example.org", hint: "Mehrere mit Komma. Leer = die Empfänger oben." },
+      { name: "repeat_minutes", label: "Erinnern alle (Min.)", type: "number", min: 0, max: 10080, value: r.repeat_minutes || 0, hint: "Solange offen und nicht quittiert. 0 = nie." },
+      sec("s3", "Eskalation", "Wird ein Alarm nicht rechtzeitig quittiert, geht er einmal zusätzlich an diese Empfänger."),
+      { name: "escalate_minutes", label: "Nach (Min.) ohne Quittung", type: "number", min: 0, max: 10080, value: r.escalate_minutes || 0, hint: "0 = keine Eskalation." },
+      { name: "escalate_mail_to", label: "An E-Mail", value: r.escalate_mail_to, placeholder: "chef@example.org" },
+      html("esc_ways", `<div class="nr-ways"><label class="check"><input type="checkbox" name="escalate_telegram" ${r.escalate_telegram ? "checked" : ""}><span>Auch per Telegram</span></label>
+        <label class="check"><input type="checkbox" name="escalate_hook" ${r.escalate_hook ? "checked" : ""}><span>Auch per Push</span></label></div>`),
+      sec("s4", "Ruhezeit", "Zum Beispiel nachts: Meldungen dieser Regel werden zurückgehalten und am Ende der Ruhezeit in einer Zusammenfassung geschickt – mit allen Alarmen und ob sie schon wieder behoben sind."),
+      { name: "quiet", label: "Ruhezeit", type: "checkbox", value: quiet, wide: true },
+      { name: "quiet_start", label: "Von", type: "time", value: r.quiet_start || "22:00" },
+      { name: "quiet_end", label: "Bis", type: "time", value: r.quiet_end || "07:00" },
+      html("quiet_days", `<span class="fl">Beginnt am</span><div class="wd-chips">${WDAYS.map(([d, sh, l]) => `<label class="wd-chip" title="${l}"><input type="checkbox" data-qd value="${d}" ${!(r.quiet_days || []).length || r.quiet_days.includes(d) ? "checked" : ""}><span>${sh}</span></label>`).join("")}</div>
+        <span class="hint">Z. B. nur Fr und Sa abwählen, wenn am Wochenende jemand Bereitschaft hat. Eine Ruhezeit über Mitternacht zählt zum Tag, an dem sie beginnt.</span><span class="err" hidden></span>`),
+      { name: "digest", label: "Zusammenfassung am Ende der Ruhezeit", type: "checkbox", value: quiet ? r.digest : true, wide: true, hint: "Ohne Alarme kommt keine Zusammenfassung." },
+      { name: "quiet_critical", label: "Kritische Alarme trotzdem sofort", type: "checkbox", value: r.quiet_critical, wide: true, hint: "z. B. ein Server ist nicht erreichbar." },
+      { name: "enabled", label: "Aktiv", type: "checkbox", value: r.enabled !== false, wide: true },
+    ],
+    onMount: (dl) => {
+      const f = qs("form", dl);
+      const show = () => {
+        const v = formValues(f);
+        for (const k of ["quiet_start", "quiet_end", "quiet_days", "digest", "quiet_critical"]) qs(`[data-field="${k}"]`, dl).hidden = !v.quiet;
+        for (const k of ["escalate_mail_to", "esc_ways"]) qs(`[data-field="${k}"]`, dl).hidden = !(v.escalate_minutes > 0);
+        qs('[data-field="mail_to"]', dl).hidden = !v.mail;
+      };
+      qsa('[name="quiet"], [name="escalate_minutes"], [name="mail"]', dl).forEach((x) => x.addEventListener("input", show));
+      show();
+      const count = () => { const n = qsa("[data-t]:checked", dl).length; qs("[data-tcount]", dl).textContent = n ? `(${n} gewählt)` : "(alle)"; };
+      qsa("[data-t]", dl).forEach((x) => x.addEventListener("change", count));
+      count();
+      qs("[data-tfind]", dl).addEventListener("input", (e) => {
+        const q = e.target.value.trim().toLowerCase();
+        qsa("[data-tl]", dl).forEach((l) => { l.hidden = q && !l.dataset.tl.includes(q); });
+      });
+    },
+    submit: async (v, dl) => {
+      const picked = qsa("[data-t]:checked", dl).map((x) => x.dataset.t);
+      const body = {
+        name: v.name, enabled: v.enabled, min_severity: v.min_severity,
+        folders: picked.filter((k) => k.startsWith("f:")).map((k) => k.slice(2)), devices: picked.filter((k) => k.startsWith("d:")).map((k) => k.slice(2)),
+        kinds: qsa("[data-kind]:checked", dl).map((x) => x.value),
+        mail: v.mail, mail_to: v.mail ? v.mail_to : "", telegram: v.telegram, hook: v.hook, repeat_minutes: v.repeat_minutes,
+        escalate_minutes: v.escalate_minutes, escalate_mail_to: v.escalate_mail_to, escalate_telegram: v.escalate_telegram, escalate_hook: v.escalate_hook,
+        quiet_start: v.quiet ? v.quiet_start : "", quiet_end: v.quiet ? v.quiet_end : "",
+        quiet_days: v.quiet ? qsa("[data-qd]:checked", dl).map((x) => Number(x.value)) : [], quiet_critical: v.quiet && v.quiet_critical, digest: v.quiet && v.digest,
+      };
+      if (!body.kinds.length) throw Object.assign(new Error("Mindestens eine Art von Alarmen wählen."), { fields: { kinds: "Mindestens eine Art wählen." } });
+      if (v.quiet && !body.quiet_days.length) throw Object.assign(new Error("Mindestens einen Tag wählen."), { fields: { quiet_days: "Mindestens einen Tag wählen." } });
+      r.id ? await PUT(`/api/notify/rules/${enc(r.id)}`, body) : await POST("/api/notify/rules", body);
+      toast("Regel gespeichert.");
+      await done();
+    },
+  });
+}
+
+// notifyRulesPanel lists the notification rules (settings → notifications).
+async function notifyRulesPanel(box) {
+  const load = () => Promise.all([GET("/api/notify/rules"), GET("/api/devices")]);
+  let [data, dv] = await load();
+  const draw = () => {
+    const rules = data.rules || [], ch = data.channels || {};
+    const devices = (dv.devices || []).filter((d) => !d.parent_id).slice().sort(byName);
+    const names = Object.fromEntries((dv.devices || []).map((d) => [d.id, d.name]));
+    const kindText = (r) => (r.kinds || []).length ? r.kinds.map((k) => (NR_KINDS.find(([x]) => x === k) || [k, k])[1]).join(", ") : "alle Alarme";
+    box.innerHTML = `<div class="panel flush"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Benachrichtigungsregeln</div><div class="actions"><button class="btn sm" type="button" data-nr-new>${icon("plus")} Regel</button></div></div>
+      <p class="panel-intro" style="padding:0 16px">${rules.length ? "Die Regeln entscheiden, wer welche Alarme bekommt – mit Erinnerung, Eskalation und Ruhezeit. Alarme, zu denen keine Regel passt, werden nicht verschickt. Die Wege selbst (SMTP, Telegram, Push) stellst du oben ein."
+        : "Ohne Regel geht jeder Alarm an alle eingeschalteten Wege oben (ab „Melden ab“). Mit Regeln legst du fest, wer was bekommt – etwa Server an die IT, Updates nur werktags, nachts Ruhe mit einer Zusammenfassung am Morgen und Eskalation, wenn niemand quittiert."}</p>
+      ${rules.length ? `<div class="table-wrap"><table class="resp nr-table"><thead><tr><th>Regel</th><th>Gilt für</th><th>Wohin</th><th>Eskalation</th><th>Ruhezeit</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
+        ${rules.map((r) => `<tr class="${r.enabled ? "" : "ev-off"}">
+          <td data-l="Regel"><b>${esc(r.name)}</b> ${!r.enabled ? pill("Aus") : r.quiet_now ? pill("Ruhezeit läuft", "blue", true) : ""}<div class="t-sub">${esc(kindText(r))}, ab ${r.min_severity === "crit" ? "kritisch" : "Warnung"}</div></td>
+          <td data-l="Gilt für" class="small">${nrTargets(r, names)}<div class="muted small">${int(r.matches)} ${r.matches === 1 ? "Gerät" : "Geräte"}</div></td>
+          <td data-l="Wohin" class="small">${nrWays(r.mail, r.mail_to, r.telegram, r.hook, ch.mail_to) || "—"}${r.repeat_minutes ? `<div class="muted small">Erinnerung alle ${int(r.repeat_minutes)} Min.</div>` : ""}</td>
+          <td data-l="Eskalation" class="small">${r.escalate_minutes ? `nach ${int(r.escalate_minutes)} Min. ohne Quittung an ${[r.escalate_mail_to ? esc(r.escalate_mail_to) : "", r.escalate_telegram ? "Telegram" : "", r.escalate_hook ? "Push" : ""].filter(Boolean).join(" · ")}` : '<span class="muted">—</span>'}</td>
+          <td data-l="Ruhezeit" class="small">${r.quiet ? `${esc(r.quiet)}<div class="muted small">${[r.digest ? "Zusammenfassung danach" : "", r.quiet_critical ? "kritisch sofort" : ""].filter(Boolean).join(" · ") || "ohne Zusammenfassung"}</div>` : '<span class="muted">—</span>'}</td>
+          <td class="actions-cell"><div class="flex nowrap"><button class="ib" type="button" data-nr-edit="${esc(r.id)}" title="Bearbeiten" aria-label="${esc(r.name)} bearbeiten">${icon("pencil")}</button><button class="ib" type="button" data-nr-del="${esc(r.id)}" title="Löschen" aria-label="${esc(r.name)} löschen">${icon("trash")}</button></div></td></tr>`).join("")}
+        </tbody></table></div>` : `<div style="padding:0 16px 16px">${empty("Noch keine Regeln", "Alle Alarme gehen an alle eingeschalteten Wege.", `<button class="btn" type="button" data-nr-new>${icon("plus")} Erste Regel anlegen</button>`, "bell")}</div>`}</div>`;
+    const reload = async () => { [data, dv] = await load(); draw(); };
+    const opts = { devices, groups: dv.groups, channels: ch, done: reload };
+    qsa("[data-nr-new]", box).forEach((b) => b.onclick = () => notifyRuleDialog(null, opts));
+    qsa("[data-nr-edit]", box).forEach((b) => b.onclick = () => notifyRuleDialog(rules.find((r) => r.id === b.dataset.nrEdit), opts));
+    qsa("[data-nr-del]", box).forEach((b) => b.onclick = async () => {
+      const r = rules.find((x) => x.id === b.dataset.nrDel);
+      if (!await confirmDialog({ title: `„${r.name}“ löschen?`, text: rules.length === 1 ? "Ohne Regeln gehen alle Alarme wieder an alle eingeschalteten Wege." : "" })) return;
+      await run(b, async () => { await DEL(`/api/notify/rules/${enc(r.id)}`); await reload(); }, "Regel gelöscht.");
+    });
+  };
+  draw();
+}
+
 function formSubmit(form, fn, prefix) {
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -4500,7 +4633,7 @@ PAGES["/settings"] = async (el, token) => {
           ${field({ name: "retention_1h_days", label: "Stundenwerte (Tage)", type: "number", min: 1, value: g.retention_1h_days, hint: "Für „1 Jahr“: mindestens 366." })}
           </div></div>
           <div class="section"><div class="section-title">Alarme</div><div class="form-grid">
-          ${field({ name: "renotify_hours", label: "Erneut benachrichtigen nach (Std.)", type: "number", min: 0, value: g.renotify_hours ?? 0, hint: "Solange ein Alarm offen und nicht quittiert ist. 0 = nie." })}
+          ${field({ name: "renotify_hours", label: "Erneut benachrichtigen nach (Std.)", type: "number", min: 0, value: g.renotify_hours ?? 0, hint: "Solange ein Alarm offen und nicht quittiert ist. 0 = nie. Mit Benachrichtigungsregeln erinnert die jeweilige Regel." })}
           </div></div>
           <div><button class="btn" type="submit">Speichern</button></div></form></div>
       <div class="panel"><div class="panel-head"><div class="panel-title">System</div></div>
@@ -4520,7 +4653,7 @@ PAGES["/settings"] = async (el, token) => {
         <p class="panel-intro">Wohin Alarme geschickt werden. Mehrere Wege gleichzeitig sind möglich; „Testnachricht senden“ prüft die Eingaben, ohne zu speichern.</p>
         <form class="form" data-notify novalidate><div class="form-error" hidden></div>
           <div class="form-grid">
-            ${field({ name: "min_severity", label: "Melden ab", type: "select", value: n.min_severity || "warning", options: [["info", "Alles – auch „Wieder OK“ und Systemmeldungen"], ["warning", "Warnungen und kritische Alarme"], ["critical", "Nur kritische Alarme"]], wide: true })}
+            ${field({ name: "min_severity", label: "Melden ab", type: "select", value: n.min_severity || "warning", options: [["info", "Alles – auch „Wieder OK“ und Systemmeldungen"], ["warning", "Warnungen und kritische Alarme"], ["critical", "Nur kritische Alarme"]], wide: true, hint: "Gilt für Systemmeldungen und – solange es keine Benachrichtigungsregeln gibt – für alle Alarme." })}
           </div>
           <div class="section"><div class="section-title">E-Mail</div><div class="form-grid">
             ${field({ name: "mail_enabled", label: "Per E-Mail", type: "checkbox", value: n.mail_enabled, wide: true })}
@@ -4547,6 +4680,7 @@ PAGES["/settings"] = async (el, token) => {
           </div></div>
           <div class="flex"><button class="btn" type="submit">Speichern</button><button class="btn gray" type="button" data-test>Testnachricht senden</button></div>
         </form></div>
+      <div data-nrules>${loadingPanel()}</div>
       <div class="panel"><div class="panel-head"><div class="panel-title">Monatsbericht</div></div>
         <p class="panel-intro">Am Monatsersten um 6 Uhr geht der Verfügbarkeitsbericht des Vormonats per E-Mail raus – mit Übersicht, den Geräten mit Ausfällen oder Alarmen und der vollständigen Liste als CSV-Anhang. Verschickt wird über den SMTP-Server oben, auch wenn E-Mail-Benachrichtigungen aus sind.</p>
         <form class="form" data-reportset novalidate><div class="form-error" hidden></div><div class="form-grid">
@@ -4648,6 +4782,9 @@ PAGES["/settings"] = async (el, token) => {
     try { await POST("/api/report/send", {}); toast("Monatsbericht verschickt."); }
     catch (err) { showErrors(rf, err); }
   });
+
+  // Benachrichtigungsregeln
+  notifyRulesPanel(qs("[data-nrules]", el)).catch((e) => { qs("[data-nrules]", el).innerHTML = `<div class="panel">${esc(e.message)}</div>`; });
 
   // Benachrichtigungen
   const nf = qs("[data-notify]", el);

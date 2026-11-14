@@ -1208,3 +1208,9 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .ev-own-row .grow { min-width: 0; overflow-wrap: anywhere; }
 .callout.ev-preview { margin: 0; padding: 10px 12px; }
 .ev-none { margin: 0 0 8px; }
+
+/* ---- notification rules ---- */
+.nr-sec { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.nr-ways { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.nr-table td { vertical-align: top; }
+.nr-table td:nth-child(n+2):nth-child(-n+5) { min-width: 140px; max-width: 280px; white-space: normal; }

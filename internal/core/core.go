@@ -71,6 +71,7 @@ func New(st *store.Store, opt Options) (*Core, error) {
 		Notify: notify.Send, Mail: notify.SendMail, Now: time.Now,
 		devices: map[string]model.Device{}, rt: map[string]*devState{}, open: map[string]*openAlert{},
 		windows: map[string]MaintWindow{}, winActive: map[string]int64{},
+		nrules: map[string]NotifyRule{}, digests: map[string]int64{},
 		wake: make(chan struct{}, 1), tm: defaultTimings(),
 	}
 	c.settings = DefaultSettings()
@@ -93,6 +94,19 @@ func New(st *store.Store, opt Options) (*Core, error) {
 	}
 	for _, w := range wins {
 		c.windows[w.ID] = w
+	}
+	nrules, err := store.List[NotifyRule](st, KindNotifyRule)
+	if err != nil {
+		return nil, fmt.Errorf("notification rules: %w", err)
+	}
+	for _, r := range nrules {
+		c.nrules[r.ID] = r
+	}
+	if err := st.GetSetting(keyDigests, &c.digests); err != nil {
+		return nil, fmt.Errorf("digests: %w", err)
+	}
+	if c.digests == nil {
+		c.digests = map[string]int64{}
 	}
 	statuses, err := st.LoadStatuses()
 	if err != nil {
@@ -188,6 +202,7 @@ func (c *Core) Run(ctx context.Context) {
 			c.applyWindows()
 			c.syncAllAlerts()
 			c.renotify()
+			c.notifyTick()
 			if c.centralReset.Swap(false) {
 				c.centralNext = time.Time{}
 			}
@@ -578,6 +593,11 @@ func (c *Core) send(m notify.Message, gate string) {
 	if !channelsOn(ns) || !ns.Wants(gate) {
 		return
 	}
+	c.deliver(ns, m)
+}
+
+// deliver sends m with the channel settings ns in the background.
+func (c *Core) deliver(ns notify.Settings, m notify.Message) {
 	c.notifyWG.Add(1)
 	go func() {
 		defer c.notifyWG.Done()

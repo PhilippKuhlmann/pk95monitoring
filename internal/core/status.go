@@ -57,7 +57,8 @@ func newDevState(id string) *devState {
 type openAlert struct {
 	a        model.Alert
 	notified int64
-	peak     string // worst state notified while open: gates the "Wieder OK" notification
+	peak     string                // worst state notified while open: gates the "Wieder OK" notification
+	rules    map[string]*ruleState // progress of each notification rule (by rule ID)
 }
 
 func alertKey(deviceID, checkKey string) string { return deviceID + "\x00" + checkKey }
@@ -302,8 +303,11 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 					continue
 				}
 				a.ID = id
-				c.open[k] = &openAlert{a: a, notified: now, peak: cs.State}
-				c.Event(sevName(cs.State), name, title, body, c.alertDetails(d, rt, cs, ""), true)
+				oa = &openAlert{a: a, notified: now, peak: cs.State}
+				c.open[k] = oa
+				det := c.alertDetails(d, rt, cs, "")
+				c.Event(sevName(cs.State), name, title, body, det, false)
+				c.notifyAlert(oa, d, c.message(sevName(cs.State), name, title, body, det), sevName(cs.State), false)
 				continue
 			}
 			if oa.a.Severity == cs.State {
@@ -326,7 +330,9 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 					}
 				}
 				oa.notified, oa.peak = now, model.Worst(oa.peak, cs.State)
-				c.Event(sevName(cs.State), name, title, body, c.alertDetails(d, rt, cs, ""), true)
+				det := c.alertDetails(d, rt, cs, "")
+				c.Event(sevName(cs.State), name, title, body, det, false)
+				c.notifyAlert(oa, d, c.message(sevName(cs.State), name, title, body, det), sevName(cs.State), false)
 			} else {
 				c.Event("info", name, title, body, c.alertDetails(d, rt, cs, ""), false)
 			}
@@ -354,7 +360,9 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 			}
 			// Gate by the worst state that was notified: who got "Kritisch" also gets
 			// "Wieder OK", even when the alert went back to warn before it closed.
-			c.event("info", name, title, body, c.alertDetails(d, rt, cs, "ok"), true, sevName(model.Worst(oa.peak, oa.a.Severity)))
+			det := c.alertDetails(d, rt, cs, "ok")
+			c.Event("info", name, title, body, det, false)
+			c.notifyAlert(oa, d, c.message("info", name, title, body, det), sevName(model.Worst(oa.peak, oa.a.Severity)), true)
 			continue
 		}
 		why := muted
@@ -406,6 +414,9 @@ func (c *Core) renotify() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.nrules) > 0 {
+		return // the rules remind (notifyTick)
+	}
 	now := c.Now().Unix()
 	for _, oa := range c.open {
 		d, ok := c.devices[oa.a.DeviceID]

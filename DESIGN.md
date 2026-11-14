@@ -223,7 +223,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    (`notify.Send`, severity warning/critical). Escalation warn→crit updates the alert and notifies
    again. Back to ok: alert closed + "Wieder OK" (severity info). Checks that disappear (guest
    deleted) close their alerts silently. Optional re-notify every N hours (settings). Events
-   (store events table) are written for every alert open/close and for system things.
+   (store events table) are written for every alert open/close and for system things. With
+   notification rules (see "Notification rules") the rules decide who gets alert notifications;
+   system messages always go to all enabled channels.
 6. Samples are written to the store for every metric at report/poll time.
 7. Check rules (`Device.Rules`, `model.CheckRule{match, mode}`, see `model.Device.CheckMode`): `match` is a
    check key or a pattern where `*` matches any text (`snmp:if:*`, `pve:vm:*`, `disk:/boot*`); an exact rule
@@ -287,6 +289,34 @@ an agent belongs to a node (`Node` = PVE node name).
   exist and must not be an agent, a node must be a known node of a Proxmox parent (else German error, HTTP 400).
   The new or re-registered (same AgentID) agent device gets ParentID/Node; Node defaults for Proxmox parents to the
   PVE node whose name equals the short hostname. Re-registering without DeviceID keeps the attachment.
+
+## Notification rules
+
+Store kind `notifyrule` (`core/notifyrules.go`). Without any rule every alert notification goes to all enabled
+channels, filtered by `notify.min_severity`, repeated every `general.renotify_hours` – as before. As soon as one
+rule exists, only the enabled rules decide (alerts no rule matches are not sent; `renotify_hours` is unused):
+
+- `NotifyRule {id, name, enabled, devices, folders (with subfolders; both empty = all devices; attached agents
+  through their parent), kinds (reach | checks | updates | events; empty = all), min_severity warn|crit, mail,
+  mail_to (comma list; empty = notify.mail_to), telegram, hook, repeat_minutes (0 = never), escalate_minutes
+  (0 = none), escalate_mail_to, escalate_telegram, escalate_hook, quiet_start, quiet_end ("22:00"; empty = no
+  quiet time; over midnight allowed), quiet_days (weekday the quiet time starts, 0 = Sunday; empty = every day),
+  quiet_critical, digest, created, updated}`. Channels are only used when switched on in the notify settings
+  (SMTP, Telegram chat, webhook stay global).
+- Each alert notification (open, worse, "Wieder OK") goes once to the union of the matching rules' targets
+  (`target` dedups mail addresses). "Wieder OK" only to rules that sent the alert. Per alert and rule the
+  progress (`ruleState`: sent, escalated, last) is kept in memory; alerts open at startup or older than a rule
+  count as notified (and as escalated when already overdue) – nothing is resent after a restart.
+- `notifyTick` (every 30 s): reminders ("Weiterhin …", every repeat_minutes, while not acknowledged) and
+  escalation ("Eskalation: <Gerät> – <Check> seit … nicht quittiert", once, escalate_minutes after the start,
+  to the escalation targets) – not while the device is muted.
+- Quiet time: notifications of the rule are held (critical ones too unless quiet_critical); reminders and
+  escalations wait. With `digest` the end of each quiet time sends one summary to the rule's targets (settings key
+  `notify_digests` remembers the last one; caught up for 6 h after a server restart): every alert of the rule
+  that started in the quiet time with its state – "Behoben um 01:00 Uhr" (duration) or "Noch offen" (quittiert
+  von …) – as `notify.Details.Rows`; title "Ruhezeit 22:00–07:00 Uhr: 3 Alarme, 1 noch offen". No alerts = no
+  message. Alerts held without digest are sent as "Weiterhin …" when the quiet time ends.
+- Events "Benachrichtigungsregel angelegt/geändert/gelöscht", "Zusammenfassung der Ruhezeit gesendet".
 
 ## Windows event log
 
@@ -433,6 +463,11 @@ Authenticated:
 - `GET /api/expiry` → `{rows:[ExpiryRow]}`: every check with `cert.days` or `domain.days` (and domain checks
   without a date), soonest first – `{device_id, device, group, check_key, name, kind: cert|domain, days (null =
   unknown), until, detail (issuer / registrar), state, acked, message}`.
+- `GET /api/notify/rules` → `{rules:[NotifyRuleView], channels:{mail, telegram, hook (switched on), mail_to}}`;
+  NotifyRuleView = NotifyRule + `{matches (devices), quiet (German text, "" = none), quiet_now}`, by name.
+  `POST /api/notify/rules` and `PUT /api/notify/rules/{id}` (NotifyRule) → NotifyRuleView (422 on name, kinds,
+  min_severity, targets, mail_to, channels, repeat_minutes, escalate_minutes, escalate_mail_to, quiet_start,
+  quiet_end, quiet_days); `DELETE /api/notify/rules/{id}` → `{ok}`.
 - `GET /api/eventlog` → `{agents (enabled Windows agents), rules:[EventRuleView], ignore:[EventIgnoreView], rows:[EventCheckRow],
   events:[EventItem], defaults:[EventRule]}`: `EventRuleView` = EventRule + `{builtin, changed, filter, trigger (German
   texts), off (agents that switched it off)}`; `EventIgnoreView` = EventIgnore + `{device_id, device}` (empty = all

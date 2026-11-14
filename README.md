@@ -28,7 +28,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,
   Hysterese, Quittieren und Wartung – spontan oder als wiederkehrendes Wartungsfenster für Geräte und Ordner
-  (z. B. monatlich zum Patchday).
+  (z. B. monatlich zum Patchday). Benachrichtigungsregeln legen fest, wer was bekommt – mit Erinnerung,
+  Eskalation und Ruhezeit samt Zusammenfassung am Morgen.
 - **Verlauf:** Diagramme bis zu einem Jahr (Rohwerte 2 Tage, 5-Minuten-Werte 35 Tage, Stundenwerte 400 Tage).
 - **Externe API** (nur lesend, API-Token) und optional Push der Zusammenfassung an eine **Zentrale**, die alle
   Kunden-Container zusammenführt.
@@ -413,6 +414,19 @@ kritische Alarme) und „Testnachricht senden“:
 - **Telegram:** Bot bei @BotFather anlegen (`/newbot`), dem Bot schreiben oder ihn in die Gruppe aufnehmen, dann
   „Chat-ID ermitteln“.
 - **ntfy**, **Gotify** oder **Webhook (JSON)** mit URL und optionalem Token.
+
+**Benachrichtigungsregeln** (darunter): Ohne Regel geht jeder Alarm an alle eingeschalteten Wege. Mit Regeln
+entscheiden nur sie – je Regel:
+
+- **Wofür:** Geräte und Ordner (leer = alle), Art der Alarme (Erreichbarkeit, Checks, Updates,
+  Windows-Ereignisse) und ab Warnung oder nur kritisch.
+- **Wohin:** E-Mail (eigene Empfänger oder die oben), Telegram, Push; Erinnerung alle N Minuten, solange
+  niemand quittiert.
+- **Eskalation:** nach N Minuten ohne Quittung einmal zusätzlich an andere Empfänger (z. B. den Chef).
+- **Ruhezeit:** z. B. 22–7 Uhr an Werktagen. Meldungen werden zurückgehalten; am Ende kommt eine Zusammenfassung
+  mit allen Alarmen der Nacht und ob sie schon wieder behoben sind. Kritische Alarme auf Wunsch trotzdem sofort.
+
+Wer über mehrere Regeln dran ist, bekommt jede Meldung nur einmal. Systemmeldungen gehen immer an alle Wege.
 
 ## Externe API und Zentrale
 
