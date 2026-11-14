@@ -4894,6 +4894,23 @@ function statusComponentDialog(cp, devices, groups, save) {
         box.innerHTML = `<span class="spinner"></span>`;
         const r = await GET(`/api/statuspage/checks?devices=${enc(t.devices.join(","))}&folders=${enc(t.folders.join(","))}`);
         if (my !== seq) return;
+        // Selections from templates (a group on every device, a pattern like net:*) become ticks
+        // on the devices listed; only what matches nothing stays a chip.
+        extra = extra.filter((x) => {
+          let hit = false;
+          for (const d of r.devices || []) {
+            if (x.device && x.device !== d.id) continue;
+            if (x.group && !x.key) {
+              if (d.checks.some((c) => c.group === x.group)) { sel.add(`g|${d.id}|${x.group}`); hit = true; }
+              continue;
+            }
+            for (const c of d.checks) {
+              if ((!x.key || evGlob(x.key, c.key)) && (!x.group || c.group === x.group)) { sel.add(`k|${d.id}|${c.key}`); hit = true; }
+            }
+          }
+          return !hit;
+        });
+        drawExtra();
         box.innerHTML = (r.devices || []).map((d) => {
           const byGroup = {};
           for (const c of d.checks) (byGroup[c.group || "Sonstiges"] ||= []).push(c);
@@ -5001,7 +5018,7 @@ PAGES["/statuspage"] = async (el, token) => {
         </div></div>
         <div class="panel"><div class="panel-head"><div class="panel-title">Vorschau</div></div>
           <p class="panel-intro">So sieht es gerade aus. Die Zahl der Geräte siehst nur du.</p>
-          <div class="sp-preview" data-sp-preview></div></div>
+          <div class="stp-preview" data-sp-preview></div></div>
       </div>`;
     bindCopy(el);
     if (window.PK95Status) window.PK95Status.render(qs("[data-sp-preview]", el), data.preview, { preview: true });

@@ -50,32 +50,32 @@
       else if (d.state === "crit") { crit++; t += `Störung, ${fmtDur(d.down)}`; }
       else if (d.state === "warn") { warn++; t += `eingeschränkt, ${fmtDur(d.limited)}`; }
       else t += "ohne Störung";
-      return `<span class="sp-bar ${esc(d.state)}" title="${esc(t)}"></span>`;
+      return `<span class="stp-bar ${esc(d.state)}" title="${esc(t)}"></span>`;
     }).join("");
     const label = `Verlauf der letzten ${days} Tage: ${crit ? `${crit} ${crit === 1 ? "Tag" : "Tage"} mit Störung` : "keine Störung"}${warn ? `, ${warn} eingeschränkt` : ""}`;
-    return `<div class="sp-bars" role="img" aria-label="${esc(label)}">${cells}</div>`;
+    return `<div class="stp-bars" role="img" aria-label="${esc(label)}">${cells}</div>`;
   }
 
   function component(c, days, preview) {
     const sub = c.since ? `seit ${fmtShort(c.since)}` : c.until ? `bis ${fmtShort(c.until)}` : "";
-    return `<section class="sp-comp">
-      <div class="sp-comp-head">
-        <div class="grow"><h3 class="sp-name">${esc(c.name)}</h3>${c.note ? `<div class="sp-note">${esc(c.note)}</div>` : ""}
-          ${preview ? `<div class="sp-note">${c.members ? `${c.members} ${c.members === 1 ? "Gerät" : "Geräte"}${c.units ? ` · ${c.units} ${c.units === 1 ? "Check" : "Checks"}` : ""}` : "Keine aktiven Geräte"}</div>` : ""}</div>
-        <div class="sp-state ${esc(c.state)}"><span class="sp-dot"></span>${esc(c.text)}${sub ? `<span class="sp-since">${esc(sub)}</span>` : ""}</div>
+    return `<section class="stp-comp">
+      <div class="stp-comp-head">
+        <div class="grow"><h3 class="stp-name">${esc(c.name)}</h3>${c.note ? `<div class="stp-note">${esc(c.note)}</div>` : ""}
+          ${preview ? `<div class="stp-note">${c.members ? `${c.members} ${c.members === 1 ? "Gerät" : "Geräte"}${c.units ? ` · ${c.units} ${c.units === 1 ? "Check" : "Checks"}` : ""}` : "Keine aktiven Geräte"}</div>` : ""}</div>
+        <div class="stp-state ${esc(c.state)}"><span class="stp-dot"></span>${esc(c.text)}${sub ? `<span class="stp-since">${esc(sub)}</span>` : ""}</div>
       </div>
       ${bars(c, days)}
-      <div class="sp-axis"><span>vor ${days} Tagen</span><span>${c.availability != null ? `${pct(c.availability)} verfügbar` : ""}</span><span>Heute</span></div>
+      <div class="stp-axis"><span>vor ${days} Tagen</span><span>${c.availability != null ? `${pct(c.availability)} verfügbar` : ""}</span><span>Heute</span></div>
     </section>`;
   }
 
   function maintenance(list) {
     if (!list || !list.length) return "";
-    return `<h2 class="sp-sec">Wartungsarbeiten</h2><div class="sp-card">${list.map((m) => `<div class="sp-mt">
-      <div class="sp-mt-head"><b>${esc(m.name)}</b>${m.running ? `<span class="pill blue pulse"><span class="d"></span>Läuft</span>` : `<span class="pill">Geplant</span>`}</div>
-      <div class="sp-mt-time">${icon("wrench")}${esc(fmtRange(m.start, m.end))}</div>
-      ${m.note ? `<div class="sp-note">${esc(m.note)}</div>` : ""}
-      ${m.components && m.components.length ? `<div class="sp-note">Betrifft: ${m.components.map(esc).join(", ")}</div>` : ""}
+    return `<h2 class="stp-sec">Wartungsarbeiten</h2><div class="stp-card">${list.map((m) => `<div class="stp-mt">
+      <div class="stp-mt-head"><b>${esc(m.name)}</b>${m.running ? `<span class="pill blue pulse"><span class="d"></span>Läuft</span>` : `<span class="pill">Geplant</span>`}</div>
+      <div class="stp-mt-time">${icon("wrench")}${esc(fmtRange(m.start, m.end))}</div>
+      ${m.note ? `<div class="stp-note">${esc(m.note)}</div>` : ""}
+      ${m.components && m.components.length ? `<div class="stp-note">Betrifft: ${m.components.map(esc).join(", ")}</div>` : ""}
     </div>`).join("")}</div>`;
   }
 
@@ -83,22 +83,22 @@
   // title and footer; opts.stale marks data that could not be refreshed.
   function render(el, s, opts = {}) {
     const days = s.days || 30;
-    el.innerHTML = `${opts.preview ? "" : `<header class="sp-head"><h1 class="sp-title">${esc(s.title || "Systemstatus")}</h1>${s.intro ? `<p class="sp-intro">${esc(s.intro)}</p>` : ""}</header>`}
-      <div class="sp-overall ${esc(s.state)}" role="status">${icon(BANNER_ICON[s.state] || "info")}<span>${esc(s.text)}</span></div>
-      ${s.notice ? `<div class="sp-notice ${esc(s.notice.level)}"><div class="sp-notice-head">${icon(s.notice.level === "info" ? "info" : "warn")}<b>${NOTICE[s.notice.level] || "Hinweis"}</b>${s.notice.at ? `<span class="sp-since">${esc(fmtTime(s.notice.at))}</span>` : ""}</div><p>${esc(s.notice.text)}</p></div>` : ""}
-      ${(s.components || []).length ? `<h2 class="sp-sec">Dienste</h2><div class="sp-card">${s.components.map((c) => component(c, days, opts.preview)).join("")}</div>` : ""}
+    el.innerHTML = `${opts.preview ? "" : `<header class="stp-head"><h1 class="stp-title">${esc(s.title || "Systemstatus")}</h1>${s.intro ? `<p class="stp-intro">${esc(s.intro)}</p>` : ""}</header>`}
+      <div class="stp-overall ${esc(s.state)}" role="status">${icon(BANNER_ICON[s.state] || "info")}<span>${esc(s.text)}</span></div>
+      ${s.notice ? `<div class="stp-notice ${esc(s.notice.level)}"><div class="stp-notice-head">${icon(s.notice.level === "info" ? "info" : "warn")}<b>${NOTICE[s.notice.level] || "Hinweis"}</b>${s.notice.at ? `<span class="stp-since">${esc(fmtTime(s.notice.at))}</span>` : ""}</div><p>${esc(s.notice.text)}</p></div>` : ""}
+      ${(s.components || []).length ? `<h2 class="stp-sec">Dienste</h2><div class="stp-card">${s.components.map((c) => component(c, days, opts.preview)).join("")}</div>` : ""}
       ${maintenance(s.maintenance)}
-      ${opts.preview ? "" : `<footer class="sp-foot">Stand: ${esc(fmtTime(s.updated))} · aktualisiert sich jede Minute${opts.stale ? " · <b>Verbindung unterbrochen – zeigt den letzten Stand</b>" : ""}</footer>`}`;
+      ${opts.preview ? "" : `<footer class="stp-foot">Stand: ${esc(fmtTime(s.updated))} · aktualisiert sich jede Minute${opts.stale ? " · <b>Verbindung unterbrochen – zeigt den letzten Stand</b>" : ""}</footer>`}`;
   }
 
   window.PK95Status = { render };
 
   // ---- the public page ----
-  const root = document.getElementById("sp");
+  const root = document.getElementById("stp");
   if (!root) return;
   const token = location.pathname.split("/").filter(Boolean)[1] || "";
   let last = null, timer = null;
-  const message = (title, text) => `<div class="sp-empty">${icon("info")}<h1 class="sp-title">${esc(title)}</h1><p class="sp-intro">${esc(text)}</p></div>`;
+  const message = (title, text) => `<div class="stp-empty">${icon("info")}<h1 class="stp-title">${esc(title)}</h1><p class="stp-intro">${esc(text)}</p></div>`;
   async function load() {
     let stale = false;
     try {
