@@ -22,6 +22,7 @@ import (
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/core"
 	"pk95monitoring/internal/fake/fakenut"
+	"pk95monitoring/internal/fake/fakepbs"
 	"pk95monitoring/internal/fake/fakepve"
 	"pk95monitoring/internal/fake/fakesnmp"
 	"pk95monitoring/internal/fake/fakeveeam"
@@ -86,6 +87,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 	ups.EnableDrift()
 
 	vbr := fakeveeam.New()
+	pbsSrv := fakepbs.New()
 	web := httptest.NewTLSServer(http.HandlerFunc(demoPage))
 	plain := httptest.NewServer(http.HandlerFunc(demoPage))
 	closeAll := func() {
@@ -94,12 +96,13 @@ func Setup(c *core.Core) (stop func(), err error) {
 		pve.Close()
 		ups.Close()
 		vbr.Close()
+		pbsSrv.Close()
 	}
 
 	netcheck.SetRDAPBootstrap(plain.URL + "/rdap/dns.json")
 	now := time.Now()
 	agents := demoAgents(now)
-	if err := createDevices(c, pve, ups, vbr, web, plain, agents, now); err != nil {
+	if err := createDevices(c, pve, ups, vbr, pbsSrv, web, plain, agents, now); err != nil {
 		closeAll()
 		return nil, err
 	}
@@ -202,7 +205,7 @@ const demoUPSName = "ups"
 
 // createDevices adds missing demo devices. The Proxmox cluster, the NUT UPS and the web site
 // are updated on every start because the simulated servers get new ports and certificates.
-func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
+func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
 	ts := now.Unix()
 	keep := func(id string, d model.Device) model.Device {
 		// Keep what the user changed in the UI (name, group, thresholds …).
@@ -219,6 +222,9 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 			}
 			if d.Veeam != nil {
 				old.Veeam = d.Veeam // new port and certificate on every start
+			}
+			if d.PBS != nil {
+				old.PBS = d.PBS
 			}
 			if d.Type == model.TypeNet {
 				old.Checks = d.Checks
@@ -275,6 +281,14 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 		Enabled: true, Interval: 60, Created: ts, Updated: ts, Veeam: &vcfg,
 		Notes: "Simulierter Veeam Backup & Replication 12 (Demo): Jobs mit Erfolg, Warnung und Fehler, zwei Repositories."}
 	if err := c.ImportDevice(keep(vd.ID, vd)); err != nil {
+		return err
+	}
+
+	pcfg := pbsSrv.Config()
+	bd := model.Device{ID: "demo-pbs", Name: "Backup-Server (PBS)", Type: model.TypePBS, Host: pbsSrv.Host(), Group: groupServer,
+		Enabled: true, Interval: 60, Created: ts, Updated: ts, PBS: &pcfg,
+		Notes: "Simulierter Proxmox Backup Server 3 (Demo): zwei Datastores, eine fehlgeschlagene Verifizierung, ein fehlgeschlagener Sync-Job."}
+	if err := c.ImportDevice(keep(bd.ID, bd)); err != nil {
 		return err
 	}
 

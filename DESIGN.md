@@ -27,6 +27,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/snmp` | SNMP collector (gosnmp); profiles incl. `unifi`, switch MIBs (LLDP, PoE) |
 | `internal/collect/nut` | NUT client + collector (upsd protocol, TCP 3493) |
 | `internal/collect/veeam` | Veeam Backup & Replication 12+ REST client + collector (jobs, repositories) |
+| `internal/collect/pbs` | Proxmox Backup Server REST client + collector (datastores, verification, groups, tasks) |
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
 | `internal/eventrules` | System log rules (Windows event log, Linux journal): built-in rules, merge, validation, XPath and journalctl queries, evaluation (pure Go; used by agent, core and demo) |
@@ -39,6 +40,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/fake/fakesnmp` | simulated SNMP devices (implements the snmp package's session interface), incl. a UniFi USW-Pro-24-PoE |
 | `internal/fake/fakenut` | simulated NUT server (upsd on 127.0.0.1) – used by tests and demo |
 | `internal/fake/fakeveeam` | simulated Veeam REST API (httptest TLS) – used by tests and demo |
+| `internal/fake/fakepbs` | simulated Proxmox Backup Server API (httptest TLS) – used by tests and demo |
 | `web/` | SPA: `index.html`, `app.js`, `style.css` (copied), `theme.js`, `logo.svg`, `fonts/` |
 | `deploy/updater.sh` | update helper on the Docker host (systemd path unit; see "Server update") |
 | `Dockerfile`, `docker-compose.yml` | image (linux/amd64, linux/arm64) with the server and the agent binaries for linux/amd64, linux/arm64, windows/amd64 |
@@ -127,6 +129,11 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | veeam | `veeam:server` | Veeam-Server | Server (version, name, database) |
 | veeam | `veeam:job:<id>` | job name | Jobs: last result (Failed crit, Warning warn, Success/None ok), facts Typ, Ziel, Objekte, Letzter/Nächster Lauf, Ergebnis; a scheduled run more than 2 h overdue (not running) = warn "Geplanter Lauf … nicht gestartet"; disabled = ok without metrics; metric `job.age` (h, instance job name, no threshold) |
 | veeam | `veeam:repo:<id>` | "Repository <name>" | Repositories: `storage.usage/used/total` (instance name); capacity 0 (object storage) = ok without metrics |
+| pbs | `pbs:server` | Backup-Server | version (`GET /version`) |
+| pbs | `pbs:ds:<store>` | "Datastore <store>" | `storage.usage/used/total` (instance store); `estimated-full-date` < 30 days = warn; facts Voll voraussichtlich, Sicherungsgruppen, Sicherungen; `error` or total 0 = unknown |
+| pbs | `pbs:verify:<store>` | "Verifizierung <store>" | newest snapshot of a group with verification `failed` = crit (lists the groups); facts Gruppen, Nicht verifiziert, Fehlgeschlagen |
+| pbs | `pbs:group:<store>:<ns>/<type>/<id>` | "[ns: ]type/id comment" | newest snapshot per group: `backup.age` (h) for `host` groups (threshold 30/54), `group.age` (h, display only) for vm/ct, `backup.size`; instance `<store>:[ns: ]type/id`; facts Datastore, Namespace, Sicherungen, Letzte Sicherung, Größe, Verifiziert, Ziel |
+| pbs | `pbs:task:<worker_type>:<worker_id>` | "<Typ> <worker_id>" | newest finished task of the last 7 days per job for verificationjob, verify, syncjob, prunejob, prune, garbage_collection: `OK` ok, `WARNINGS…` warn, else crit (status in the message); "Läuft gerade" prefix while one runs; `job.age` (h); facts Typ, Letzter Lauf, Ergebnis. Task list not readable: `pbs:tasks` unknown |
 | snmp | `snmp:system` | System | System (facts: Name, Beschreibung, Standort, Kontakt, Profil, Laufzeit, plus Modell, Seriennummer (printer, UPS, NAS, UniFi), Firmware (UniFi), DSM-Version (Synology) from the profile; metric `uptime`) |
 | snmp | `snmp:cpu`, `snmp:mem` | CPU / Arbeitsspeicher | System |
 | snmp | `snmp:storage:<descr>` | Speicher <descr> | Speicher |
@@ -166,7 +173,8 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `updates.failed` | "" | | agent Windows (default threshold warn 1) |
 | `backup.age` | h | `vm/<id>`, `ct/<id>` | pve: age of the newest backup of a guest (default threshold warn 30, crit 54) |
 | `backup.size` | B | `vm/<id>`, `ct/<id>` | pve: size of the newest backup |
-| `job.age` | h | job name | veeam: hours since the last run (display only) |
+| `job.age` | h | job name, `<type>:<id>` | veeam, pbs: hours since the last run (display only) |
+| `group.age` | h | `<store>:[ns: ]vm/<id>` | pbs: age of the newest snapshot of a VM/CT group (display only; PVE judges the guest) |
 | `events.count` | "" | | agent Windows: events of an event rule in its window, exceptions dropped (no threshold – the rule decides) |
 | `eventlog.errors` | "" | | removed in 0.16 (agents up to 0.15: System+Application Error/Critical in the last 24 h) |
 | `guest.cpu` | % | `vm/<id>` / `ct/<id>` | pve (100 % = all assigned cores) |
@@ -224,7 +232,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    `"Festplatte / 91 % ≥ 85 %"`. Device state = worst of all checks that are not unknown (unknown only when every check is unknown, e.g. no data yet; a single check without permission must not colour the device) (`reach` crit when unreachable:
    poll error twice in a row; agent: no report for max(3×interval, 180 s)).
    Separate checks (`model.SeparateCheck`: `updates`, `pve:updates:<node>`, `ev:<rule>`, `eventlog` of agents
-   before 0.16, and the backup checks `pve:backup`, `pve:bak:<vmid>`, `veeam:*` – `model.BackupCheck`) have their
+   before 0.16, and the backup checks `pve:backup`, `pve:bak:<vmid>`, `veeam:*`, `pbs:*` – `model.BackupCheck`) have their
    own pages (Updates, Systemprotokolle, Sicherungen; alerts and mail links lead there): they raise alerts and notifications like
    every check, but are left out of the device state and message, the check counts (device list, overview,
    summary, the problem text of a parent with attached agents), the inventory and the availability report. The
@@ -417,6 +425,19 @@ repositories out). TLS: pinned SHA-256 fingerprint of the leaf certificate, else
 errors make reach crit with a German message (wrong password, missing role "Restore Operator", certificate, port
 9419 blocked). Changing or deleting the device drops the cached client.
 
+## Proxmox Backup Server
+
+Device type `pbs` – like Veeam a backup server (`model.BackupServer`): managed on the page Sicherungen (section
+"Backup-Server"), left out of the device list and of "Gerät hinzufügen"; all its checks are separate
+(`PBSConfig {port (8007), token_id, secret, fingerprint}`; the secret is never sent to the UI, `has_secret`).
+Header `Authorization: PBSAPIToken=<token_id>:<secret>`, base `https://host:port/api2/json`, answers `{"data": …}`.
+Calls: `GET /version`, `/status/datastore-usage`, per datastore `/admin/datastore/{store}/namespace` (≤ 20) and
+`/admin/datastore/{store}/snapshots?ns=` (cached 30 min per device; a datastore whose snapshots cannot be read only
+loses its verify and group checks), `/nodes/localhost/tasks?since=<7 days>&limit=2000`. The token needs the role
+Audit on `/` (user and token, privilege separation). TLS: pinned SHA-256 fingerprint (colons allowed), else system
+CAs. Version or datastore list failing = reach crit with a German message (401 token rejected, 403 role missing,
+certificate, port 8007). Changing or deleting the device drops the cached client and snapshots.
+
 ## NUT (Network UPS Tools)
 
 Device type `nut` (`model.NUTConfig{port, ups, username, password}`; port default 3493): `internal/collect/nut`
@@ -507,10 +528,11 @@ Authenticated:
   worst first – `{device_id, device, name, check_key, group, type, os, platform, state, acked, message, pending,
   security, age, failed (null when not reported), reboot, last_install, titles, updated}`.
 - `GET /api/backups` → `{rows:[BackupRow], storages:[BackupStorage], servers:[BackupServer]}` (servers = the Veeam
-  devices `{id, name, host, group, type, enabled, state (reach), message, version, last_poll}`): checks `pve:bak:*`, `pve:backup`,
-  `veeam:job:*`, `ev:backup`, `ev:veeam` of the enabled devices, worst first – `{device_id, device, group, type,
-  check_key, name, kind: guest|tasks|job|log, age (h, backup.age or job.age), last, size, target, next, result,
-  job_type, state, acked, mode, message (threshold reason first)}`; storages = `veeam:repo:*` `{device_id, device,
+  and PBS devices `{id, name, host, group, type, enabled, state (reach), message, version, last_poll}`): checks `pve:bak:*`, `pve:backup`,
+  `veeam:job:*`, `pbs:group:*`, `pbs:task:*`, `pbs:verify:*`, `ev:backup`, `ev:veeam` of the enabled devices, worst
+  first – `{device_id, device, group, type, check_key, name, kind: guest|tasks|job|group|pbsjob|verify|log, age (h,
+  backup.age, group.age or job.age), last, size, target, next, result,
+  job_type, state, acked, mode, message (threshold reason first)}`; storages = `veeam:repo:*`, `pbs:ds:*` `{device_id, device,
   check_key, name, usage, used, total, state, message}`.
 - `GET /api/expiry` → `{rows:[ExpiryRow]}`: every check with `cert.days` or `domain.days` (and domain checks
   without a date), soonest first – `{device_id, device, group, check_key, name, kind: cert|domain, days (null =
@@ -559,6 +581,8 @@ Authenticated:
   (test endpoints answer 200 with `{ok:false, message}` when the device cannot be reached)
 - `POST /api/test/veeam {id?, host, veeam}` → `{ok, version, name, jobs:[name], message}` (empty password with id =
   the stored one); `POST /api/probe {host, port: 9419}` fetches the certificate fingerprint as for Proxmox.
+- `POST /api/test/pbs {id?, host, pbs}` → `{ok, version, datastores:[name], message}` (empty secret with id = the
+  stored one; no datastore visible = error "Rolle Audit"); fingerprint via `POST /api/probe {host, port: 8007}`.
 - `POST /api/test/nut {id?, host, nut}` → `{ok, server, ups:[{name, desc, model, status}], message}` (empty
   `nut.password` with `id` = the stored password; `status` is German text)
 - `POST /api/test/netcheck {host, check}` → `Check`
@@ -683,7 +707,9 @@ the end are down and stay ok), a UniFi USW-Pro-24-PoE `demo-unifi` (10.0.0.3, gr
 unifi; PoE on 12 ports, LLDP neighbors, fans, temperatures; "Alarm bei Link-Ausfall" on 0/13–0/15, 0/24–0/26),
 a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port updated on every start), a Veeam
 server `demo-veeam` on `fakeveeam` (jobs with success, warning, failure and a disabled one; a NAS and an S3
-repository; config updated on every start), guest backups on the shared storage "backup" (VM 106 in no job),
+repository; config updated on every start), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
+and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a
+9-day-old host backup, a failed sync job, a prune job with warnings), guest backups on the shared storage "backup" (VM 106 in no job),
 5 simulated agents (2 Debian, 2 Windows, plus `demo-pve1` attached to the cluster as node pve1; one with high disk
 usage, one with a stopped service; rules: `updates` quiet on db01, `disk:/boot*` off on web01) reporting through
 `core.IngestReport` every 30 s (the Windows ones with update history: fs01 last installed 47 days ago with a
@@ -755,7 +781,7 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   off, own rules, the device's exceptions).
 - Page `/backups` (nav "Sicherungen"): stat tiles (failed, warnings, guests without job, ok), filter
   "Handlungsbedarf" (`pk95mon-bak-filter`) / "Alle", table of `GET /api/backups` and the backup targets with
-  their fill level and the Veeam servers (add/edit open the device dialog of type veeam); refreshes every minute.
+  their fill level and the backup servers (Veeam and PBS; add/edit open the device dialog of their type); refreshes every minute.
   Nav "Sicherungen" after "Updates". Check pages of separate checks lead back to their page.
 - Page `/expiry` (nav "Ablaufdaten"): stat tiles and the `GET /api/expiry` table (certificates of HTTP(S)/TLS
   checks and Proxmox nodes, domains), soonest first.

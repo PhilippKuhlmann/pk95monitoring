@@ -100,7 +100,7 @@ func (c *Core) rows(all bool) []DeviceRow {
 	defer c.mu.Unlock()
 	kids := c.childMap()
 	for _, d := range devs {
-		if !all && c.attached(d) || d.Type == model.TypeVeeam { // Veeam servers are listed under Sicherungen
+		if !all && c.attached(d) || model.BackupServer(d.Type) { // backup servers are listed under Sicherungen
 			continue
 		}
 		rows = append(rows, c.row(d, vals, kids[d.ID], now))

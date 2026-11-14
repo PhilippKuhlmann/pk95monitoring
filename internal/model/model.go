@@ -47,6 +47,7 @@ const (
 	TypeNet     = "net"     // host or service checked only over the network (ping, HTTP, TCP, DNS, TLS)
 	TypeNUT     = "nut"     // UPS polled over a NUT server (Network UPS Tools, e.g. UniFi UPS)
 	TypeVeeam   = "veeam"   // Veeam Backup & Replication server, polled over its REST API
+	TypePBS     = "pbs"     // Proxmox Backup Server, polled over its REST API
 )
 
 // Device is one monitored thing. Stored as JSON (store kind "device").
@@ -76,6 +77,7 @@ type Device struct {
 	SNMP    *SNMPConfig    `json:"snmp,omitempty"`
 	NUT     *NUTConfig     `json:"nut,omitempty"`
 	Veeam   *VeeamConfig   `json:"veeam,omitempty"`
+	PBS     *PBSConfig     `json:"pbs,omitempty"`
 	Agent   *AgentConfig   `json:"agent,omitempty"`
 
 	// Checks are additional network checks; they work for every device type.
@@ -105,6 +107,10 @@ func (d Device) Clone() Device {
 	if d.Veeam != nil {
 		v := *d.Veeam
 		d.Veeam = &v
+	}
+	if d.PBS != nil {
+		p := *d.PBS
+		d.PBS = &p
 	}
 	if d.SNMP != nil {
 		s := *d.SNMP
@@ -191,7 +197,7 @@ func (d Device) HasRule(key string) bool {
 
 // SeparateCheck reports whether a check has its own page instead of belonging to the device:
 // update checks ("updates", "pve:updates:<node>"), the system logs ("ev:<rule>"; "eventlog" of
-// agents before 0.16) and backups ("pve:backup", "pve:bak:<vmid>", "veeam:…"). They raise
+// agents before 0.16) and backups ("pve:backup", "pve:bak:<vmid>", "veeam:…", "pbs:…"). They raise
 // alerts and notifications, but neither show on the device page nor colour the device, its
 // folder or the overview, and the availability report leaves them out.
 func SeparateCheck(key string) bool {
@@ -201,7 +207,7 @@ func SeparateCheck(key string) bool {
 
 // BackupCheck reports whether a check is about backups (page "Sicherungen").
 func BackupCheck(key string) bool {
-	return key == "pve:backup" || strings.HasPrefix(key, "pve:bak:") || strings.HasPrefix(key, "veeam:")
+	return key == "pve:backup" || strings.HasPrefix(key, "pve:bak:") || strings.HasPrefix(key, "veeam:") || strings.HasPrefix(key, "pbs:")
 }
 
 // CloneEventRules copies rules including their lists.
@@ -318,6 +324,19 @@ type VeeamConfig struct {
 	Password    string `json:"password,omitempty"`
 	Fingerprint string `json:"fingerprint"` // SHA-256 of the server certificate (pinning); empty = system CAs
 }
+
+// PBSConfig polls a Proxmox Backup Server over its REST API (HTTPS, port 8007) with an API
+// token that has the role Audit on / (Sys.Audit and Datastore.Audit).
+type PBSConfig struct {
+	Port        int    `json:"port"`     // default 8007
+	TokenID     string `json:"token_id"` // e.g. pk95mon@pbs!monitoring
+	Secret      string `json:"secret,omitempty"`
+	Fingerprint string `json:"fingerprint"` // SHA-256 of the server certificate (pinning); empty = system CAs
+}
+
+// BackupServer reports whether a device type is a backup server (managed on the page
+// "Sicherungen", not in the device list).
+func BackupServer(typ string) bool { return typ == TypeVeeam || typ == TypePBS }
 
 // NUTConfig polls a NUT server (upsd, TCP 3493): LIST UPS, LIST VAR.
 type NUTConfig struct {

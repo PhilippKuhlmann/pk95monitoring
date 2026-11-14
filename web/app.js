@@ -188,8 +188,8 @@ function groupBy(list, keyFn) {
 const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { numeric: true });
 
 // ---------- labels ----------
-const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam" };
-const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive" };
+const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server" };
+const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive" };
 const STATES = { ok: ["OK", "green"], warn: ["Warnung", "amber"], crit: ["Kritisch", "rose"], unknown: ["Unbekannt", ""], maintenance: ["Wartung", "blue"], disabled: ["Deaktiviert", ""] };
 const SDOT = { ok: "ok", warn: "warning", crit: "error", unknown: "", maintenance: "blue", disabled: "" };
 const RANK = { ok: 0, disabled: 0, maintenance: 0, unknown: 1, warn: 2, crit: 3 };
@@ -245,6 +245,7 @@ const METRIC_LABELS = {
   "backup.age": ["Alter der letzten Sicherung", "h"],
   "backup.size": ["Größe der letzten Sicherung", "B"],
   "job.age": ["Letzter Lauf vor", "h"],
+  "group.age": ["Alter der neuesten Sicherung (PBS)", "h"],
   "updates.security": ["Sicherheitsupdates", ""],
   "eventlog.errors": ["Fehler im Ereignisprotokoll (24 Std.)", ""],
   "events.count": ["Ereignisse", ""],
@@ -1231,6 +1232,10 @@ const SNMP_PROFILES = { auto: "Automatisch erkennen", generic: "Allgemein (nur S
 const PVE_TOKEN_CMDS = `pveum user add pk95mon@pve --comment "PK95 Monitoring"
 pveum acl modify / --users pk95mon@pve --roles PVEAuditor
 pveum user token add pk95mon@pve monitoring --privsep 0`;
+const PBS_TOKEN_CMDS = `proxmox-backup-manager user create pk95mon@pbs --comment "PK95 Monitoring"
+proxmox-backup-manager user generate-token pk95mon@pbs monitoring
+proxmox-backup-manager acl update / Audit --auth-id pk95mon@pbs
+proxmox-backup-manager acl update / Audit --auth-id 'pk95mon@pbs!monitoring'`;
 
 function deviceForm(dev, type, done) {
   const edit = !!dev;
@@ -1240,12 +1245,13 @@ function deviceForm(dev, type, done) {
   const sn = d0.snmp || { version: "2c", port: 161, profile: "auto", interfaces: [], oids: [] };
   const nu = d0.nut || { port: 3493, ups: "", username: "" };
   const vb = d0.veeam || { port: 9419, username: "", fingerprint: "" };
+  const pb = d0.pbs || { port: 8007, token_id: "", fingerprint: "" };
   const groups = [...new Set([...(state.groups || []), ...(d0.group ? [d0.group] : [])])].sort((a, b) => a.localeCompare(b, "de"));
-  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam";
-  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", agent: "" }[type];
+  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs";
+  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", agent: "" }[type];
   const fields = [
     { name: "name", label: "Name", value: d0.name, required: true, placeholder: namePh },
-    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
+    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
       placeholder: type === "net" ? "optional, z. B. 192.168.1.1" : "192.168.1.10",
       hint: type === "agent" ? "Meldet der Agent selbst; nur für Ping-Checks und die Anzeige." : type === "net" ? "Standardziel für Ping-Checks ohne eigenes Ziel." : type === "nut" ? "Die USV selbst (z. B. UniFi) oder der Server, an dem sie per USB hängt." : "" },
     { name: "group", label: "Gruppe", value: d0.group, list: "dl-groups", placeholder: "z. B. Server, Netzwerk" },
@@ -1309,14 +1315,27 @@ function deviceForm(dev, type, done) {
         <p class="hint">Ein Windows- bzw. Veeam-Benutzer, der sich an der Veeam-Konsole anmelden darf. Zum Lesen der Jobs und Repositories genügt in Veeam (Menü → Benutzer und Rollen) die Rolle <b>Restore Operator</b> – keine Administratorrechte nötig. Die REST-API (Dienst „Veeam Backup Server RESTful API“) ist ab Version 12 dabei; in der Windows-Firewall muss Port 9419 vom Monitoring aus erreichbar sein.</p></details>
     </div></div>`;
   }
+  if (type === "pbs") {
+    extra += `<div class="section"><div class="section-title">Proxmox Backup Server</div><div class="form-grid">
+      ${field({ name: "pbs.port", label: "Port", type: "number", min: 1, max: 65535, value: pb.port || 8007, hint: "API und Weboberfläche, Standard 8007." })}
+      ${field({ name: "pbs.token_id", label: "Token-ID", required: true, value: pb.token_id, mono: true, placeholder: "pk95mon@pbs!monitoring" })}
+      ${field({ name: "pbs.secret", label: "Secret", type: "password", required: !pb.has_secret, mono: true, placeholder: pb.has_secret ? "unverändert lassen" : "xxxxxxxx-xxxx-…" })}
+      ${field({ name: "pbs.fingerprint", label: "Fingerabdruck des Zertifikats", value: pb.fingerprint, wide: true, mono: true, button: "Abrufen", hint: "Steht im Backup-Server unter Dashboard → Fingerabdruck anzeigen. Leer = das Zertifikat muss von einer bekannten Stelle signiert sein." })}
+      <div class="field wide"><div class="flex"><button class="btn gray" type="button" data-test-pbs>${icon("signal")} Verbindung testen</button></div><div class="test-out" data-test-out></div></div>
+      <details class="howto wide"><summary>So legst du den API-Token an</summary>
+        <p class="hint">In der Shell des Backup-Servers (Weboberfläche → Verwaltung → Shell). Benutzer und Token bekommen nur Leserechte (Rolle Audit):</p>
+        ${codeBlock(PBS_TOKEN_CMDS)}
+        <p class="hint">Die Ausgabe zeigt Token-ID (<code>pk95mon@pbs!monitoring</code>) und Secret (<code>value</code>) – das Secret erscheint nur einmal.</p></details>
+    </div></div>`;
+  }
   extra += `<div class="section"><div class="section-title">Netzwerk-Checks</div>
     <div class="hint">${type === "net" ? "Ein Netzwerk-Gerät besteht aus seinen Checks. Ping ohne Ziel prüft den Host des Geräts." : "Zusätzliche Prüfungen von hier aus, z. B. ob die Weboberfläche antwortet oder das Zertifikat bald abläuft."}</div>
     <div class="ed-rows" data-checks></div>
     <div class="flex"><button class="btn gray sm" type="button" data-add-check>${icon("plus")} Check hinzufügen</button></div></div>`;
 
   let nc, oids, ifs;
-  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
-  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
+  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", pbs: "Proxmox Backup Server hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
+  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", pbs: "Datastores, Sicherungsgruppen, Verifizierung und Jobs eines Proxmox Backup Servers über einen API-Token mit Leserechten.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
   const pxValues = (v) => ({
     port: Number(v["proxmox.port"]) || 8006, token_id: (v["proxmox.token_id"] || "").trim(), secret: v["proxmox.secret"] || "",
     fingerprint: (v["proxmox.fingerprint"] || "").trim(), watch_guests: v["proxmox.watch_guests"] || "onboot",
@@ -1330,6 +1349,9 @@ function deviceForm(dev, type, done) {
   };
   const vbValues = (v) => ({
     port: Number(v["veeam.port"]) || 9419, username: (v["veeam.username"] || "").trim(), password: v["veeam.password"] || "", fingerprint: (v["veeam.fingerprint"] || "").trim(),
+  });
+  const pbValues = (v) => ({
+    port: Number(v["pbs.port"]) || 8007, token_id: (v["pbs.token_id"] || "").trim(), secret: (v["pbs.secret"] || "").trim(), fingerprint: (v["pbs.fingerprint"] || "").trim(),
   });
   const nuValues = (v) => ({
     port: Number(v["nut.port"]) || 3493, ups: (v["nut.ups"] || "").trim(), username: (v["nut.username"] || "").trim(), password: v["nut.password"] || "",
@@ -1420,6 +1442,28 @@ function deviceForm(dev, type, done) {
           } catch (e) { out.innerHTML = ""; showErrors(d, e); }
         });
       }
+      if (type === "pbs") {
+        const fb = qs('[data-fbtn="pbs.fingerprint"]', d);
+        fb.onclick = () => run(fb, async () => {
+          showErrors(d, null);
+          try {
+            const r = await POST("/api/probe", { host: host(), port: Number(qs('[name="pbs.port"]', d).value) || 8007 });
+            qs('[name="pbs.fingerprint"]', d).value = r.fingerprint;
+            toast("Fingerabdruck abgerufen.");
+          } catch (e) { showErrors(d, e.fields ? e : Object.assign(e, { fields: { "pbs.fingerprint": e.message } })); }
+        });
+        const tb = qs("[data-test-pbs]", d), out = qs("[data-test-out]", d);
+        tb.onclick = () => run(tb, async () => {
+          showErrors(d, null);
+          out.innerHTML = `<span class="spinner"></span> verbinde …`;
+          try {
+            const r = await POST("/api/test/pbs", { id: dev ? dev.id : "", host: host(), pbs: pbValues(formValues(form)) });
+            const ds = r.datastores || [];
+            out.innerHTML = r.ok === false ? `${pill("Fehler", "rose")} <span class="bad">${esc(r.message || "Verbindung fehlgeschlagen.")}</span>` :
+              `${pill("Verbunden", "green", true)} <span>Proxmox Backup Server ${esc(r.version || "")} · ${ds.length} ${ds.length === 1 ? "Datastore" : "Datastores"}</span>${ds.length ? `<div class="t-sub">${ds.slice(0, 8).map(esc).join(", ")}${ds.length > 8 ? " …" : ""}</div>` : ""}`;
+          } catch (e) { out.innerHTML = ""; showErrors(d, e); }
+        });
+      }
       if (type === "nut") {
         const tb = qs("[data-test-nut]", d), out = qs("[data-test-out]", d), box = qs("[data-nut-ups]", d);
         const upsInput = qs('[name="nut.ups"]', d);
@@ -1470,10 +1514,11 @@ function deviceForm(dev, type, done) {
       if (type === "snmp") out.snmp = snValues(v);
       if (type === "nut") out.nut = nuValues(v);
       if (type === "veeam") out.veeam = vbValues(v);
+      if (type === "pbs") out.pbs = pbValues(v);
       const r = edit ? await PUT(`/api/devices/${enc(dev.id)}`, out) : await POST("/api/devices", out);
       state.ovAt = 0;
       toast(edit ? "Gespeichert." : `${out.name} hinzugefügt – die erste Abfrage läuft.`);
-      if (!edit && r && r.id && type !== "veeam") go(`/devices/${enc(r.id)}`); // Veeam servers stay under Sicherungen
+      if (!edit && r && r.id && type !== "veeam" && type !== "pbs") go(`/devices/${enc(r.id)}`); // backup servers stay under Sicherungen
       else if (done) await done(r);
     },
   });
@@ -1990,7 +2035,7 @@ function applyGroupMode(rules, plan, mode) {
 // server applies new rules with the next poll or report), so a change shows at once.
 // separateCheck: updates and system log rules have their own pages (Updates, Systemprotokolle);
 // they alert, but neither show on the device page nor colour the device (as model.SeparateCheck).
-const backupCheck = (k) => k === "pve:backup" || String(k).startsWith("pve:bak:") || String(k).startsWith("veeam:");
+const backupCheck = (k) => k === "pve:backup" || String(k).startsWith("pve:bak:") || String(k).startsWith("veeam:") || String(k).startsWith("pbs:");
 const separateCheck = (k) => k === "updates" || k === "eventlog" || String(k).startsWith("pve:updates:") || String(k).startsWith("ev:") || backupCheck(k);
 // deviceView drops the separate checks from a (projected) status for the device page.
 const deviceView = (st) => ({ ...st, checks: (st.checks || []).filter((c) => !separateCheck(c.key)), hidden: (st.hidden || []).filter((h) => !separateCheck(h.key)) });
@@ -2297,8 +2342,8 @@ function cardValue(c) {
     return { word: true, text: n ? `${n.toLocaleString("de-DE")} ${n === 1 ? "Update" : "Updates"}${s ? ` (${s.toLocaleString("de-DE")} Sicherheit)` : ""}` : "Aktuell" };
   }
   if (has("services.failed")) { const n = int(v("services.failed")); return { word: true, text: n ? `${n.toLocaleString("de-DE")} fehlgeschlagen` : "Keine Fehler" }; }
-  if (has("backup.age") || has("job.age")) {
-    const h = has("backup.age") ? v("backup.age") : v("job.age");
+  if (has("backup.age") || has("job.age") || has("group.age")) {
+    const h = has("backup.age") ? v("backup.age") : has("group.age") ? v("group.age") : v("job.age");
     const txt = h < 1 ? `vor ${Math.max(1, Math.round(h * 60))} Min.` : h < 48 ? `vor ${Math.round(h)} Std.` : `vor ${Math.round(h / 24)} Tagen`;
     return { word: true, text: txt, sub: [has("backup.size") ? fmtBytes(v("backup.size")) : "", fa.Ziel || "", fa.Ergebnis || ""].filter(Boolean).join(" · ") || "letzte Sicherung" };
   }
@@ -3474,7 +3519,8 @@ const EXPLAIN = {
   "domain.days": { what: "Wie viele Tage die Domain noch registriert ist (laut Registry, abgefragt per RDAP).", why: "Läuft eine Domain ab, sind Webseite und E-Mail nicht mehr erreichbar – und nach der Schonfrist kann jemand anderes die Domain registrieren.", todo: ["Beim Provider oder Registrar prüfen, ob die automatische Verlängerung aktiv und die Zahlung hinterlegt ist.", "Die Domain rechtzeitig verlängern."] },
   "updates.age": { what: "Vor wie vielen Tagen Windows zuletzt ein Update installiert hat (Defender-Signaturen nicht mitgezählt).", why: "Microsoft veröffentlicht jeden Monat Sicherheitsupdates. Wer länger als einen Monat nicht patcht, hat bekannte Lücken offen – oft hängt Windows Update, ist per Richtlinie abgeschaltet oder der Server wurde nie neu gestartet.", todo: ["In „Einstellungen → Windows Update“ nach Updates suchen und Fehlermeldungen prüfen.", "Prüfen, ob WSUS oder eine Gruppenrichtlinie die Updates blockiert.", "Ein Wartungsfenster für den Patchday anlegen, damit Neustarts keine Alarme auslösen."] },
   "backup.age": { what: "Wie viele Stunden die neueste Sicherung des Gasts alt ist (aus den Sicherungsspeichern von Proxmox).", why: "Ist die letzte Sicherung zu alt, fehlen bei einem Ausfall alle Änderungen seither.", todo: ["Im Protokoll des Sicherungsjobs nachsehen, warum der Gast nicht gesichert wurde.", "Bei wöchentlichen Sicherungen die Grenze am Gerät anpassen (Einstellungen → Schwellwerte, Messwert backup.age)."] },
-  "job.age": { what: "Wie viele Stunden der letzte Lauf des Veeam-Jobs zurückliegt.", why: "Nur zur Anzeige – ob ein geplanter Lauf ausgefallen ist, erkennt der Check am nächsten geplanten Lauf.", todo: [] },
+  "job.age": { what: "Wie viele Stunden der letzte Lauf des Jobs zurückliegt (Veeam-Job oder Verify-, Sync-, Prune- und Garbage-Collection-Job des Proxmox Backup Servers).", why: "Nur zur Anzeige – ob ein Lauf fehlgeschlagen oder ausgefallen ist, zeigt der Check selbst.", todo: [] },
+  "group.age": { what: "Wie viele Stunden die neueste Sicherung einer VM- oder Container-Gruppe auf dem Proxmox Backup Server alt ist.", why: "Nur zur Anzeige – ob ein Gast zu alt gesichert ist, bewertet Proxmox VE je Gast (Messwert backup.age). Sicherungen von Hosts (proxmox-backup-client) bewertet der Backup-Server selbst über backup.age.", todo: [] },
   "updates.failed": { what: "Wie viele Updates in den letzten 30 Tagen beim letzten Versuch nicht installiert werden konnten.", why: "Ein fehlgeschlagenes Update wiederholt Windows oft ohne Erfolg – die Lücke bleibt offen, und spätere kumulative Updates scheitern häufig ebenfalls.", todo: ["Im Updateverlauf den Fehlercode des Updates nachsehen.", "Freien Speicher auf C: prüfen und den Server neu starten.", "Bei wiederholtem Fehler „DISM /Online /Cleanup-Image /RestoreHealth“ und „sfc /scannow“ ausführen."] },
   "updates.pending": { what: "Wie viele Updates ausstehen.", why: "Veraltete Systeme bekommen keine Fehlerbehebungen.", todo: ["Updates im nächsten Wartungsfenster einspielen."] },
   "services.failed": { what: "Wie viele systemd-Units fehlgeschlagen sind.", why: "Ein fehlgeschlagener Dienst erledigt seine Aufgabe nicht mehr.", todo: ["Auf dem Server `systemctl --failed` ausführen und `journalctl -u <unit>` ansehen."] },
@@ -4153,7 +4199,8 @@ PAGES["/updates"] = async (el, token) => {
 };
 
 // ---------- backups ----------
-const BAK_KINDS = { guest: "Proxmox – Gast", tasks: "Proxmox – Sicherungsaufgaben", job: "Veeam-Job", log: "Systemprotokoll" };
+const BAK_KINDS = { guest: "Proxmox – Gast", tasks: "Proxmox – Sicherungsaufgaben", job: "Veeam-Job", group: "PBS – Sicherungsgruppe", pbsjob: "PBS – Job", verify: "PBS – Verifizierung", log: "Systemprotokoll" };
+const BAK_SERVER_TYPES = ["veeam", "pbs"];
 
 PAGES["/backups"] = async (el, token) => {
   const BF_KEY = "pk95mon-bak-filter";
@@ -4181,15 +4228,15 @@ PAGES["/backups"] = async (el, token) => {
       return `<tr class="dt-row" data-href="${path}">
         <td data-l="Zustand">${r.acked ? pill("Quittiert", "green", true) : r.mode === "quiet" ? pill("Nur Anzeige") : statePill(r.state)}</td>
         <td data-l="Sicherung"><a class="t-main" href="${path}" data-go>${esc(r.name)}</a><div class="t-sub">${esc([kind, r.job_type].filter(Boolean).join(" · "))}</div>${r.state !== "ok" ? `<div class="small bak-msg">${esc(r.message)}</div>` : ""}</td>
-        <td data-l="Quelle">${r.type === "veeam" ? esc(r.device) : `<a href="/devices/${enc(r.device_id)}" data-go>${esc(r.device)}</a>`}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
+        <td data-l="Quelle">${BAK_SERVER_TYPES.includes(r.type) ? esc(r.device) : `<a href="/devices/${enc(r.device_id)}" data-go>${esc(r.device)}</a>`}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
         <td data-l="Letzte Sicherung" class="nowrap">${age(r)}</td>
         <td data-l="Ergebnis" class="small">${esc(r.result || "—")}</td>
         <td data-l="Ziel" class="small">${esc(r.target || "—")}</td>
         <td data-l="Größe" class="num nowrap">${r.size ? esc(fmtBytes(r.size)) : '<span class="muted">—</span>'}</td>
         <td data-l="Nächster Lauf" class="small nowrap">${esc(r.next || "—")}</td></tr>`;
     }).join("");
-    el.innerHTML = pageHead("Sicherungen", "Letzte Sicherung jedes Proxmox-Gasts, die Veeam-Jobs und die Sicherungsziele – was fehlschlägt oder zu alt ist, steht oben.",
-      `<button class="btn" type="button" data-vbr-add>${icon("plus")} Veeam-Server</button>`) +
+    el.innerHTML = pageHead("Sicherungen", "Letzte Sicherung jedes Proxmox-Gasts, Veeam-Jobs, Proxmox Backup Server und die Sicherungsziele – was fehlschlägt oder zu alt ist, steht oben.",
+      `<button class="btn gray" type="button" data-bs-add="pbs">${icon("plus")} Proxmox Backup Server</button><button class="btn" type="button" data-bs-add="veeam">${icon("plus")} Veeam-Server</button>`) +
       `<div class="rp-stats">
         ${stat("Fehlgeschlagen", failed, "kritisch", failed ? "rp-bad" : "rp-ok")}
         ${stat("Warnungen", warned, "zu alt, mit Warnung, Lauf ausgefallen", warned ? "rp-warn" : "rp-ok")}
@@ -4198,26 +4245,26 @@ PAGES["/backups"] = async (el, token) => {
       </div>
       <div class="rp-bar"><div class="seg" role="group" aria-label="Filter"><button type="button" data-bf="todo" aria-pressed="${filter === "todo"}">Handlungsbedarf <span class="seg-n">${rows.filter(todo).length}</span></button><button type="button" data-bf="all" aria-pressed="${filter === "all"}">Alle <span class="seg-n">${rows.length}</span></button></div></div>` +
       (list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp bak-table"><thead><tr><th>Zustand</th><th>Sicherung</th><th>Quelle</th><th>Letzte Sicherung</th><th>Ergebnis</th><th>Ziel</th><th class="num">Größe</th><th>Nächster Lauf</th></tr></thead><tbody>${body}</tbody></table></div></div>
-        <p class="muted small" style="margin:0 12px">Proxmox: neueste Sicherung je Gast aus den Sicherungsspeichern (Warnung ab 30, kritisch ab 54 Stunden – änderbar unter Einstellungen → Schwellwerte, Messwert „backup.age“; bei wöchentlichen Sicherungen am Gerät höher setzen). Veeam: letztes Ergebnis je Job, ein ausgefallener geplanter Lauf ist eine Warnung.</p>`
-        : `<div class="panel">${empty(rows.length ? "Kein Handlungsbedarf" : "Noch keine Sicherungen", rows.length ? "Alle Sicherungen sind in Ordnung." : "Proxmox VE liefert die letzte Sicherung je Gast automatisch (der Token braucht dafür Leserechte auf die Sicherungsspeicher, Rolle PVEAuditor). Für Veeam unter Geräte → Hinzufügen „Veeam Backup & Replication“ wählen.", "", "archive")}</div>`) +
+        <p class="muted small" style="margin:0 12px">Proxmox: neueste Sicherung je Gast aus den Sicherungsspeichern (Warnung ab 30, kritisch ab 54 Stunden – änderbar unter Einstellungen → Schwellwerte, Messwert „backup.age“; bei wöchentlichen Sicherungen am Gerät höher setzen). Veeam: letztes Ergebnis je Job, ein ausgefallener geplanter Lauf ist eine Warnung. Proxmox Backup Server: neueste Sicherung je Gruppe, fehlgeschlagene Verifizierung (kritisch), Verify-, Sync-, Prune- und Garbage-Collection-Jobs der letzten 7 Tage; Host-Sicherungen werden wie Gäste nach Alter bewertet.</p>`
+        : `<div class="panel">${empty(rows.length ? "Kein Handlungsbedarf" : "Noch keine Sicherungen", rows.length ? "Alle Sicherungen sind in Ordnung." : "Proxmox VE liefert die letzte Sicherung je Gast automatisch (der Token braucht dafür Leserechte auf die Sicherungsspeicher, Rolle PVEAuditor). Veeam-Server und Proxmox Backup Server fügst du oben rechts hinzu.", "", "archive")}</div>`) +
       (stores.length ? `<div class="panel flush mt"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Sicherungsziele</div></div><div class="table-wrap"><table class="resp bak-store"><thead><tr><th>Ziel</th><th>Server</th><th>Belegung</th><th>Frei</th></tr></thead><tbody>
         ${stores.map((s) => `<tr class="dt-row" data-href="${checkPath(s.device_id, s.check_key)}"><td data-l="Ziel"><a class="t-main" href="${checkPath(s.device_id, s.check_key)}" data-go>${esc(s.name)}</a>${s.state !== "ok" ? ` ${statePill(s.state)}` : ""}</td>
           <td data-l="Server">${esc(s.device)}</td>
           <td data-l="Belegung" class="bak-bar">${s.usage != null ? pctBar(s.usage) : '<span class="muted">unbekannt</span>'}</td>
           <td data-l="Frei" class="small nowrap">${s.total != null && s.used != null ? `${esc(fmtBytes(Math.max(0, s.total - s.used)))} von ${esc(fmtBytes(s.total))}` : '<span class="muted">—</span>'}</td></tr>`).join("")}
         </tbody></table></div></div>` : "") +
-      `<div class="panel flush mt"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Veeam-Server</div><div class="actions"><button class="btn sm gray" type="button" data-vbr-add>${icon("plus")} Hinzufügen</button></div></div>
+      `<div class="panel flush mt"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Backup-Server</div><div class="actions"><button class="btn sm gray" type="button" data-bs-add="pbs">${icon("plus")} PBS</button><button class="btn sm gray" type="button" data-bs-add="veeam">${icon("plus")} Veeam</button></div></div>
         ${servers.length ? `<div class="table-wrap"><table class="resp bak-srv"><thead><tr><th>Zustand</th><th>Server</th><th>Version</th><th>Letzte Abfrage</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
           ${servers.map((v) => `<tr><td data-l="Zustand">${statePill(v.state)}</td>
-            <td data-l="Server"><b>${esc(v.name)}</b><div class="t-sub mono">${esc(v.host)}</div>${v.state !== "ok" && v.message ? `<div class="small bak-msg">${esc(v.message)}</div>` : ""}</td>
+            <td data-l="Server"><b>${esc(v.name)}</b><div class="t-sub"><span class="mono">${esc(v.host)}</span> · ${esc(TYPE_LABELS[v.type] || v.type)}</div>${v.state !== "ok" && v.message ? `<div class="small bak-msg">${esc(v.message)}</div>` : ""}</td>
             <td data-l="Version" class="small">${esc(v.version || "—")}</td>
             <td data-l="Letzte Abfrage" class="small nowrap">${v.last_poll ? esc(fmtAgo(v.last_poll)) : "—"}</td>
             <td class="actions-cell"><div class="flex nowrap"><button class="ib" type="button" data-vbr-poll="${esc(v.id)}" title="Jetzt abfragen" aria-label="${esc(v.name)} jetzt abfragen">${icon("refresh")}</button><button class="ib" type="button" data-vbr-edit="${esc(v.id)}" title="Bearbeiten" aria-label="${esc(v.name)} bearbeiten">${icon("pencil")}</button><button class="ib" type="button" data-vbr-del="${esc(v.id)}" title="Löschen" aria-label="${esc(v.name)} löschen">${icon("trash")}</button></div></td></tr>`).join("")}
-          </tbody></table></div>` : `<div style="padding:0 16px 16px">${empty("Kein Veeam-Server", "Veeam Backup & Replication ab Version 12 über die REST-API (Port 9419) – Jobs mit letztem Ergebnis, ausgefallene Läufe und Repositories.", "", "archive")}</div>`}</div>`;
+          </tbody></table></div>` : `<div style="padding:0 16px 16px">${empty("Kein Backup-Server", "Proxmox Backup Server über einen API-Token (Port 8007) – Datastores, Sicherungsgruppen, Verifizierung und Jobs. Veeam Backup & Replication ab Version 12 über die REST-API (Port 9419) – Jobs und Repositories.", "", "archive")}</div>`}</div>`;
     bindRowLinks(el);
     qsa("[data-bf]", el).forEach((b) => b.onclick = () => { filter = b.dataset.bf; lsSet(BF_KEY, filter); draw(); });
-    qsa("[data-vbr-add]", el).forEach((b) => b.onclick = () => deviceForm(null, "veeam", reload));
-    qsa("[data-vbr-edit]", el).forEach((b) => b.onclick = () => run(b, async () => deviceForm((await GET(`/api/devices/${enc(b.dataset.vbrEdit)}`)).device, "veeam", reload)));
+    qsa("[data-bs-add]", el).forEach((b) => b.onclick = () => deviceForm(null, b.dataset.bsAdd, reload));
+    qsa("[data-vbr-edit]", el).forEach((b) => b.onclick = () => run(b, async () => { const dv = (await GET(`/api/devices/${enc(b.dataset.vbrEdit)}`)).device; deviceForm(dv, dv.type, reload); }));
     qsa("[data-vbr-poll]", el).forEach((b) => b.onclick = () => run(b, async () => { await POST(`/api/devices/${enc(b.dataset.vbrPoll)}/poll`); await reload(); }, "Abgefragt."));
     qsa("[data-vbr-del]", el).forEach((b) => b.onclick = () => {
       const v = servers.find((x) => x.id === b.dataset.vbrDel);

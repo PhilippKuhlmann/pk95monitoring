@@ -58,6 +58,14 @@ func TestRedactDevice(t *testing.T) {
 		t.Error("redaction changed the original")
 	}
 
+	pb := model.Device{ID: "b", Type: model.TypePBS, PBS: &model.PBSConfig{Port: 8007, TokenID: "mon@pbs!pk95", Secret: "pbs-s3cret"}}
+	if b, _ := json.Marshal(redactDevice(pb)); strings.Contains(string(b), "pbs-s3cret") {
+		t.Errorf("PBS secret in %s", b)
+	}
+	if pm := toMap(t, redactDevice(pb))["pbs"].(map[string]any); pm["has_secret"] != true || pm["token_id"] != "mon@pbs!pk95" || pm["port"] != 8007.0 {
+		t.Errorf("pbs %v", pm)
+	}
+
 	sn := model.Device{ID: "s", Type: model.TypeSNMP, SNMP: &model.SNMPConfig{Version: "3", User: "mon", AuthPass: "a", PrivPass: "p", Interfaces: []string{"ge-1"}}}
 	b, _ := json.Marshal(redactDevice(sn))
 	for _, secret := range []string{`"a"`, `"p"`} {

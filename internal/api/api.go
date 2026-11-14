@@ -153,6 +153,7 @@ func (s *Server) routes() {
 	a("POST /api/test/snmp", s.testSNMP)
 	a("POST /api/test/nut", s.testNUT)
 	a("POST /api/test/veeam", s.testVeeam)
+	a("POST /api/test/pbs", s.testPBS)
 	a("POST /api/test/netcheck", s.testNetCheck)
 	a("GET /api/alerts", s.alerts)
 	a("POST /api/alerts/{id}/ack", s.ackAlert)

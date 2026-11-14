@@ -34,6 +34,7 @@ var metricLabels = map[string][2]string{
 	"backup.age":         {"Alter der letzten Sicherung", "h"},
 	"backup.size":        {"Größe der letzten Sicherung", "B"},
 	"job.age":            {"Letzter Lauf vor", "h"},
+	"group.age":          {"Alter der neuesten Sicherung (PBS)", "h"},
 	"eventlog.errors":    {"Fehler im Ereignisprotokoll (24 Std.)", ""},
 	"events.count":       {"Ereignisse", ""},
 	"guest.cpu":          {"Gast-CPU", "%"},

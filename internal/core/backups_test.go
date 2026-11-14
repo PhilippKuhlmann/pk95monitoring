@@ -1,8 +1,10 @@
 package core
 
 import (
+	"context"
 	"testing"
 
+	"pk95monitoring/internal/fake/fakepbs"
 	"pk95monitoring/internal/model"
 )
 
@@ -54,5 +56,57 @@ func TestVeeamServerOnBackupPage(t *testing.T) {
 		if !model.SeparateCheck(k) || alertKind(k) != NotifyBackups {
 			t.Errorf("%s not a separate backup check", k)
 		}
+	}
+}
+
+// A Proxmox Backup Server is polled like Veeam: listed under Sicherungen with its datastores,
+// groups, jobs and verification; its checks never colour a device.
+func TestPBSOnBackupPage(t *testing.T) {
+	e := newEnv(t, Options{})
+	srv := fakepbs.New()
+	t.Cleanup(srv.Close)
+	cfg := srv.Config()
+	d := model.Device{ID: "pbs", Name: "PBS", Type: model.TypePBS, Host: srv.Host(), Enabled: true, PBS: &cfg}
+	if err := e.c.ImportDevice(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.c.PollNow(context.Background(), d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rowOf(e.c.Rows(), "pbs"); ok {
+		t.Fatal("PBS in the device list")
+	}
+	ov := e.c.Backups()
+	if len(ov.Servers) != 1 || ov.Servers[0].Version != "3.4.2" || ov.Servers[0].State != model.StateOK {
+		t.Fatalf("servers: %+v", ov.Servers)
+	}
+	if len(ov.Storages) != 2 || ov.Storages[0].Name != "backup" || ov.Storages[1].State != model.StateWarn {
+		t.Fatalf("storages: %+v", ov.Storages)
+	}
+	kinds := map[string]int{}
+	for _, r := range ov.Rows {
+		kinds[r.Kind]++
+		if r.Kind == "group" && r.Age == nil {
+			t.Errorf("group without age: %+v", r)
+		}
+	}
+	if kinds["group"] != 8 || kinds["verify"] != 2 || kinds["pbsjob"] != 5 {
+		t.Fatalf("kinds %v", kinds)
+	}
+	if ov.Rows[0].State != model.StateCrit {
+		t.Fatalf("worst first: %+v", ov.Rows[0])
+	}
+	_, errs, _ := e.c.SaveDevice(model.Device{Name: "x", Type: model.TypePBS, Host: "h", PBS: &model.PBSConfig{TokenID: "kaputt", Fingerprint: "zz"}})
+	if errs["pbs.token_id"] == "" || errs["pbs.secret"] == "" || errs["pbs.fingerprint"] == "" {
+		t.Fatalf("validation %v", errs)
+	}
+	// an edit without a secret keeps the stored one
+	stored, _ := e.c.Device("pbs")
+	stored.PBS.Secret = ""
+	if _, errs, err := e.c.SaveDevice(stored); err != nil || len(errs) > 0 {
+		t.Fatalf("edit: %v %v", errs, err)
+	}
+	if after, _ := e.c.Device("pbs"); after.PBS.Secret != fakepbs.Secret || after.PBS.Port != srv.Port() {
+		t.Fatalf("secret lost: %+v", after.PBS)
 	}
 }

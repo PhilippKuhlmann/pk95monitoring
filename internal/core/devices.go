@@ -11,6 +11,7 @@ import (
 
 	"pk95monitoring/internal/collect/netcheck"
 	"pk95monitoring/internal/collect/nut"
+	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/collect/veeam"
@@ -169,7 +170,7 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 // Values are compared as printed, so a nil and an empty list are the same.
 func collectChanged(a, b model.Device) bool {
 	show := func(d model.Device) string {
-		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam))
+		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam), deref(d.PBS))
 		if d.Agent != nil {
 			s += fmt.Sprintf("|%v|%v|%v", d.Agent.Services, d.Agent.WatchAutoServices, d.Agent.IgnoreServices)
 		}
@@ -199,6 +200,8 @@ func typeLabel(t string) string {
 		return "USV (NUT)"
 	case model.TypeVeeam:
 		return "Veeam"
+	case model.TypePBS:
+		return "Proxmox Backup Server"
 	}
 	return t
 }
@@ -222,7 +225,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		errs["notes"] = "Höchstens 4000 Zeichen."
 	}
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS:
 	case model.TypeAgent:
 		if old == nil {
 			errs["type"] = "Agents werden bei der Installation des Agents automatisch angelegt."
@@ -235,7 +238,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 	}
 	if d.Host != "" && (len(d.Host) > 253 || !hostRe.MatchString(d.Host)) {
 		errs["host"] = "Hostname oder IP-Adresse ohne Protokoll und Pfad angeben."
-	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || d.Type == model.TypeVeeam) {
+	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || model.BackupServer(d.Type)) {
 		errs["host"] = "Hostname oder IP-Adresse angeben."
 	} else if d.Host == "" && d.Type == model.TypeNet && len(d.Checks) == 0 {
 		errs["host"] = "Host oder mindestens einen Check angeben."
@@ -263,6 +266,11 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		validateVeeam(d, old, errs)
 	} else {
 		d.Veeam = nil
+	}
+	if d.Type == model.TypePBS {
+		validatePBS(d, old, errs)
+	} else {
+		d.PBS = nil
 	}
 	if d.Type == model.TypeAgent && old != nil {
 		in := d.Agent
@@ -543,6 +551,8 @@ func (c *Core) forgetCollector(d model.Device) {
 		c.Proxmox.Forget(d.ID)
 	case model.TypeVeeam:
 		c.Veeam.Forget(d.ID)
+	case model.TypePBS:
+		c.PBS.Forget(d.ID)
 	}
 }
 
@@ -590,6 +600,49 @@ func (c *Core) TestVeeam(ctx context.Context, id, host string, cfg model.VeeamCo
 	}
 	cfg.Username = strings.TrimSpace(cfg.Username)
 	return veeam.Test(ctx, strings.TrimSpace(host), cfg)
+}
+
+func validatePBS(d *model.Device, old *model.Device, errs map[string]string) {
+	if d.PBS == nil {
+		d.PBS = &model.PBSConfig{}
+	}
+	p := d.PBS
+	if p.Secret == "" && old != nil && old.PBS != nil {
+		p.Secret = old.PBS.Secret
+	}
+	p.TokenID, p.Secret, p.Fingerprint = strings.TrimSpace(p.TokenID), strings.TrimSpace(p.Secret), strings.TrimSpace(p.Fingerprint)
+	if p.Port == 0 {
+		p.Port = pbs.DefaultPort
+	}
+	if p.Port < 1 || p.Port > 65535 {
+		errs["pbs.port"] = "Port zwischen 1 und 65535."
+	}
+	switch {
+	case p.TokenID == "":
+		errs["pbs.token_id"] = "Token-ID angeben, z. B. monitoring@pbs!pk95."
+	case len(p.TokenID) > 128 || !tokenIDRe.MatchString(p.TokenID):
+		errs["pbs.token_id"] = "Form benutzer@realm!tokenname, z. B. monitoring@pbs!pk95."
+	}
+	switch {
+	case p.Secret == "":
+		errs["pbs.secret"] = "Secret des Tokens angeben."
+	case len(p.Secret) > 256 || strings.ContainsAny(p.Secret, " \r\n\t\x00"):
+		errs["pbs.secret"] = "Ungültiges Secret."
+	}
+	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(p.Fingerprint)); f != "" && !fpRe.MatchString(f) {
+		errs["pbs.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
+	}
+}
+
+// TestPBS checks the token of a Proxmox Backup Server and lists its datastores. When
+// cfg.Secret is empty and id names an existing PBS device, the stored secret is used.
+func (c *Core) TestPBS(ctx context.Context, id, host string, cfg model.PBSConfig) (pbs.TestResult, error) {
+	if cfg.Secret == "" && id != "" {
+		if d, err := c.Device(id); err == nil && d.PBS != nil {
+			cfg.Secret = d.PBS.Secret
+		}
+	}
+	return pbs.Test(ctx, strings.TrimSpace(host), cfg)
 }
 
 // upsNameRe is a UPS name as upsd lists it (section name in ups.conf).

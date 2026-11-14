@@ -25,8 +25,9 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   einem Knoten des Proxmox-Clusters) – ein Gerät, alle Daten.
 - **Netzwerk-Checks** für jedes Gerät: Ping (Antwortzeit, Verlust), HTTP(S) (Statuscode, Antwortzeit,
   Schlüsselwort), TLS-Zertifikat (Resttage), TCP-Port, DNS (Antwort, erwarteter Wert) und Domain-Ablauf (RDAP).
-- **Sicherungen:** letzte Sicherung jedes Proxmox-Gasts (auch auf PBS), Veeam Backup & Replication (Jobs,
-  ausgefallene Läufe, Repositories) und eine eigene Seite mit allen Sicherungen.
+- **Sicherungen:** letzte Sicherung jedes Proxmox-Gasts (auch auf PBS), Proxmox Backup Server direkt (Datastores,
+  Verifizierung, Sicherungsgruppen, Sync-/Prune-/Verify-Jobs), Veeam Backup & Replication (Jobs, ausgefallene Läufe,
+  Repositories) und eine eigene Seite mit allen Sicherungen.
 - **Übersichten:** Update-Stand aller Server, Systemprotokolle (Windows und Linux) mit Regeln und Ausnahmen, Ablaufdaten aller Zertifikate und Domains, Verfügbarkeitsberichte
   (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,
@@ -352,7 +353,7 @@ das den NUT-Server bereitstellt, als Host eintragen und mit „Verbindung testen
 
 ## Veeam Backup & Replication
 
-Ab Version 12 über die REST-API (HTTPS, Port 9419): unter **Sicherungen → Veeam-Server → Hinzufügen** Host,
+Ab Version 12 über die REST-API (HTTPS, Port 9419): unter **Sicherungen → Veeam-Server** Host,
 Benutzer und Kennwort eintragen, Fingerabdruck mit „Abrufen“ holen (Veeam nutzt ein selbst
 signiertes Zertifikat) und „Verbindung testen“. Ein Benutzer mit der Veeam-Rolle **Restore Operator** genügt.
 
@@ -362,13 +363,39 @@ signiertes Zertifikat) und „Verbindung testen“. Ein Benutzer mit der Veeam-R
 - **Repositories:** Belegung, frei und gesamt (Schwellwerte wie bei Speichern: 85 / 95 %); Objektspeicher ohne
   bekannte Kapazität ohne Werte.
 
+## Proxmox Backup Server
+
+Direkt über die API (HTTPS, Port 8007) mit einem API-Token: unter **Sicherungen → Proxmox Backup Server** Host,
+Token-ID und Secret eintragen, Fingerabdruck mit „Abrufen“ holen und „Verbindung testen“. Benutzer und Token brauchen
+nur die Rolle **Audit** auf `/` (in der Shell des Backup-Servers):
+
+```sh
+proxmox-backup-manager user create pk95mon@pbs --comment "PK95 Monitoring"
+proxmox-backup-manager user generate-token pk95mon@pbs monitoring
+proxmox-backup-manager acl update / Audit --auth-id pk95mon@pbs
+proxmox-backup-manager acl update / Audit --auth-id 'pk95mon@pbs!monitoring'
+```
+
+- **Datastores:** Belegung, frei und gesamt (85 / 95 %); schätzt der Backup-Server, dass ein Datastore in weniger
+  als 30 Tagen voll ist, ist das eine Warnung.
+- **Verifizierung:** ist die neueste Sicherung einer Gruppe bei der Verifizierung durchgefallen, ist das kritisch –
+  sie lässt sich womöglich nicht wiederherstellen.
+- **Sicherungsgruppen:** neueste Sicherung je Gruppe (auch in Namespaces) mit Alter, Größe und Anzahl.
+  Host-Sicherungen (`proxmox-backup-client`) werden wie Proxmox-Gäste nach Alter bewertet (`backup.age`, 30 / 54 h);
+  VM- und Container-Gruppen zeigen ihr Alter nur an (`group.age`), denn die bewertet schon Proxmox VE je Gast.
+- **Jobs:** letzter Lauf jedes Verify-, Sync-, Prune- und Garbage-Collection-Jobs der letzten 7 Tage
+  (Fehler = kritisch, Warnungen = Warnung).
+
+Die Snapshot-Listen werden höchstens zweimal pro Stunde gelesen.
+
 ## Sicherungen (Übersicht)
 
 Sicherungen haben einen eigenen Menüpunkt und stehen nicht bei den Geräten: Die Seite **Sicherungen** fasst alles
 zusammen: die letzte Sicherung jedes Proxmox-Gasts, die vzdump-Aufgaben,
-die Veeam-Jobs und die Windows-Regeln „Windows-Server-Sicherung“ und „Veeam-Sicherung“ – mit Zustand, letzter
-Sicherung, Ergebnis, Ziel, Größe und nächstem Lauf, Handlungsbedarf zuerst. Darunter stehen die Sicherungsziele
-(Veeam-Repositories) mit ihrer Belegung und die Veeam-Server. Wie Updates und Systemprotokolle lösen Sicherungen
+die Veeam-Jobs, Gruppen, Jobs und Verifizierung der Proxmox Backup Server und die Windows-Regeln
+„Windows-Server-Sicherung“ und „Veeam-Sicherung“ – mit Zustand, letzter Sicherung, Ergebnis, Ziel, Größe und nächstem
+Lauf, Handlungsbedarf zuerst. Darunter stehen die Sicherungsziele (Veeam-Repositories, PBS-Datastores) mit ihrer
+Belegung und die Backup-Server. Wie Updates und Systemprotokolle lösen Sicherungen
 Alarme aus (in den Benachrichtigungsregeln als Art „Sicherungen“), färben aber weder das Gerät noch die Übersicht;
 ein Alarm führt auf diese Seite.
 

@@ -10,7 +10,9 @@ import (
 
 // BackupRow is one backup on the page "Sicherungen": the last backup of a Proxmox guest
 // ("pve:bak:<vmid>"), the vzdump tasks of a cluster ("pve:backup"), a Veeam job
-// ("veeam:job:<id>") or a system log rule about backups ("ev:backup", "ev:veeam").
+// ("veeam:job:<id>"), a backup group, job or verification of a Proxmox Backup Server
+// ("pbs:group:…", "pbs:task:…", "pbs:verify:…") or a system log rule about backups
+// ("ev:backup", "ev:veeam").
 type BackupRow struct {
 	DeviceID string   `json:"device_id"`
 	Device   string   `json:"device"`
@@ -18,21 +20,21 @@ type BackupRow struct {
 	Type     string   `json:"type"`            // device type
 	CheckKey string   `json:"check_key"`
 	Name     string   `json:"name"`
-	Kind     string   `json:"kind"`           // guest, tasks, job, log
+	Kind     string   `json:"kind"`           // guest, tasks, job, group, pbsjob, verify, log
 	Age      *float64 `json:"age"`            // hours since the last backup or run; nil = none
 	Last     int64    `json:"last,omitempty"` // time of the last backup or run
 	Size     *float64 `json:"size"`
 	Target   string   `json:"target,omitempty"`   // storage or repository
 	Next     string   `json:"next,omitempty"`     // next run (Veeam)
-	Result   string   `json:"result,omitempty"`   // Veeam result, PVE verification
-	JobType  string   `json:"job_type,omitempty"` // Veeam job type
+	Result   string   `json:"result,omitempty"`   // job result, verification
+	JobType  string   `json:"job_type,omitempty"` // Veeam job type, PBS task type
 	State    string   `json:"state"`
 	Acked    bool     `json:"acked,omitempty"`
 	Mode     string   `json:"mode,omitempty"`
 	Message  string   `json:"message"`
 }
 
-// BackupStorage is a backup repository with its fill level (Veeam repositories).
+// BackupStorage is a backup target with its fill level (Veeam repositories, PBS datastores).
 type BackupStorage struct {
 	DeviceID string   `json:"device_id"`
 	Device   string   `json:"device"`
@@ -45,8 +47,8 @@ type BackupStorage struct {
 	Message  string   `json:"message"`
 }
 
-// BackupServer is a Veeam server (device type veeam): they are managed on the page
-// "Sicherungen", not in the device list.
+// BackupServer is a Veeam server or Proxmox Backup Server (model.BackupServer): they are
+// managed on the page "Sicherungen", not in the device list.
 type BackupServer struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
@@ -75,6 +77,12 @@ func backupKind(key string) string {
 		return "tasks"
 	case strings.HasPrefix(key, "veeam:job:"):
 		return "job"
+	case strings.HasPrefix(key, "pbs:group:"):
+		return "group"
+	case strings.HasPrefix(key, "pbs:task:"):
+		return "pbsjob"
+	case strings.HasPrefix(key, "pbs:verify:"):
+		return "verify"
 	case key == "ev:backup" || key == "ev:veeam":
 		return "log"
 	}
@@ -99,7 +107,7 @@ func (c *Core) Backups() BackupOverview {
 	ov := BackupOverview{Rows: []BackupRow{}, Storages: []BackupStorage{}, Servers: []BackupServer{}}
 	for id, d := range c.devices {
 		rt := c.rt[id]
-		if d.Type == model.TypeVeeam {
+		if model.BackupServer(d.Type) {
 			srv := BackupServer{ID: id, Name: d.Name, Host: d.Host, Group: d.Group, Type: d.Type, Enabled: d.Enabled, State: model.StateUnknown}
 			if rt != nil {
 				srv.LastPoll = rt.st.LastPoll
@@ -107,7 +115,7 @@ func (c *Core) Backups() BackupOverview {
 					switch cs.Key {
 					case reachKey:
 						srv.State, srv.Message = cs.State, cs.Message
-					case "veeam:server":
+					case "veeam:server", "pbs:server":
 						srv.Version = cs.Facts["Version"]
 					}
 				}
@@ -125,8 +133,9 @@ func (c *Core) Backups() BackupOverview {
 			group = p.Group
 		}
 		for _, cs := range rt.st.Checks {
-			if strings.HasPrefix(cs.Key, "veeam:repo:") {
-				ov.Storages = append(ov.Storages, BackupStorage{DeviceID: id, Device: name, CheckKey: cs.Key, Name: strings.TrimPrefix(cs.Name, "Repository "),
+			if strings.HasPrefix(cs.Key, "veeam:repo:") || strings.HasPrefix(cs.Key, "pbs:ds:") {
+				sname := strings.TrimPrefix(strings.TrimPrefix(cs.Name, "Repository "), "Datastore ")
+				ov.Storages = append(ov.Storages, BackupStorage{DeviceID: id, Device: name, CheckKey: cs.Key, Name: sname,
 					Usage: metricOf(cs, "storage.usage"), Used: metricOf(cs, "storage.used"), Total: metricOf(cs, "storage.total"), State: cs.State, Message: cs.Message})
 				continue
 			}
@@ -140,9 +149,10 @@ func (c *Core) Backups() BackupOverview {
 			if cs.Reason != "" && cs.Reason != cs.Message && (cs.State == model.StateWarn || cs.State == model.StateCrit) {
 				r.Message = cs.Reason + " – " + cs.Message // a threshold decided (age of the backup)
 			}
-			r.Age = metricOf(cs, "backup.age")
-			if r.Age == nil {
-				r.Age = metricOf(cs, "job.age")
+			for _, m := range []string{"backup.age", "group.age", "job.age"} {
+				if r.Age == nil {
+					r.Age = metricOf(cs, m)
+				}
 			}
 			if r.Age != nil {
 				// the age was measured at the last poll

@@ -42,12 +42,19 @@ type veeamOut struct {
 	HasPassword bool   `json:"has_password"`
 }
 
+type pbsOut struct {
+	model.PBSConfig
+	Secret    string `json:"secret"`
+	HasSecret bool   `json:"has_secret"`
+}
+
 type deviceOut struct {
 	model.Device
 	Proxmox *proxmoxOut `json:"proxmox,omitempty"`
 	SNMP    *snmpOut    `json:"snmp,omitempty"`
 	NUT     *nutOut     `json:"nut,omitempty"`
 	Veeam   *veeamOut   `json:"veeam,omitempty"`
+	PBS     *pbsOut     `json:"pbs,omitempty"`
 }
 
 func redactDevice(d model.Device) deviceOut {
@@ -81,7 +88,12 @@ func redactDevice(d model.Device) deviceOut {
 		c.Password = ""
 		out.Veeam = &veeamOut{VeeamConfig: c, HasPassword: v.Password != ""}
 	}
-	out.Device.Proxmox, out.Device.SNMP, out.Device.NUT, out.Device.Veeam = nil, nil, nil, nil
+	if p := d.PBS; p != nil {
+		c := *p
+		c.Secret = ""
+		out.PBS = &pbsOut{PBSConfig: c, HasSecret: p.Secret != ""}
+	}
+	out.Device.Proxmox, out.Device.SNMP, out.Device.NUT, out.Device.Veeam, out.Device.PBS = nil, nil, nil, nil, nil
 	return out
 }
 

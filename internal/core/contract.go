@@ -16,6 +16,7 @@ import (
 
 	"pk95monitoring/internal/agentdist"
 	"pk95monitoring/internal/collect/nut"
+	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/collect/veeam"
@@ -170,6 +171,7 @@ type Core struct {
 	SNMP    *snmp.Collector
 	NUT     *nut.Collector
 	Veeam   *veeam.Collector
+	PBS     *pbs.Collector
 
 	// Notify delivers a notification (default notify.Send); tests replace it.
 	Notify func(ctx context.Context, s notify.Settings, m notify.Message) error
