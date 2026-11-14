@@ -8,17 +8,27 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
 )
 
 // updatesWait is how long a report waits for a running update search.
 const updatesWait = 20 * time.Second
 
-// platformState holds the Linux caches.
+// platformState holds the Linux caches. The update search and the journal queries run in
+// the background so a slow one never delays a report.
 type platformState struct {
 	updates *periodic[updateCount]
+	events  *periodic[map[string]eventrules.Result]
+
+	evMu      sync.Mutex
+	evQueries []eventrules.Query
+	evKey     string      // JSON of evQueries
+	noGrep    atomic.Bool // journalctl was built without pattern matching
 }
 
 func platformMachineID() string {
@@ -42,6 +52,21 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 	}
 	if ch, ok := updatesCheck(ctx, c.plat.updates, c.WaitSlow); ok {
 		out = append(out, ch)
+	}
+	if len(cfg.EventRules) > 0 && systemdBooted() {
+		if c.plat.events == nil {
+			c.plat.events = newPeriodic(5*time.Minute, 2*time.Minute, 3*time.Minute, c.plat.queryEvents)
+		}
+		c.plat.setQueries(eventrules.Queries(cfg.EventRules, cfg.EventIgnore))
+		if res, err, have := c.plat.events.Get(ctx, c.WaitSlow); have {
+			if err != nil {
+				res = map[string]eventrules.Result{}
+				for _, r := range cfg.EventRules {
+					res[r.ID] = eventrules.Result{Err: err.Error()}
+				}
+			}
+			out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
+		}
 	}
 	return out
 }

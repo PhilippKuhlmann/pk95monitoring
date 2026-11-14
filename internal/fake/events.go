@@ -1,22 +1,22 @@
 package fake
 
 import (
-	"strings"
 	"time"
 
 	"pk95monitoring/internal/core"
+	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
-	"pk95monitoring/internal/winevent"
 )
 
-// Demo Windows event log: each Windows agent has a fixed set of events relative to the
-// current hour, evaluated with the real rules and exceptions (package winevent), so switching
-// rules and ignoring events works in the demo as on a real host.
+// Demo system logs: each Windows and Linux agent has a fixed set of events (event log or
+// journal) relative to the current hour, evaluated with the real rules and exceptions (package
+// eventrules), so switching rules and ignoring events works in the demo as on a real host.
 
 // demoEvent happens `ago` seconds before the full hour and, with count > 1, every `every`
 // seconds before that.
 type demoEvent struct {
 	log, src   string
+	unit       string // Linux: systemd unit
 	id, level  int
 	ago, every int64
 	count      int
@@ -29,7 +29,22 @@ const (
 	msgLogon    = "Fehler beim Anmelden eines Kontos.\nKontoname: administrator\nFehlerursache: Unbekannter Benutzername oder ungültiges Kennwort.\nQuellnetzwerkadresse: 203.0.113.47"
 )
 
+const msgSSH = "Failed password for invalid user admin from 203.0.113.81 port 51432 ssh2"
+
 var demoEventLogs = map[string][]demoEvent{
+	"web01": {
+		{log: "journal", src: "sshd-session", unit: "ssh.service", level: 6, ago: -1800, every: 120, count: 28, msg: msgSSH},
+		{log: "kernel", src: "kernel", level: 6, ago: 4*3600 + 610,
+			msg: "php-fpm8.4[48211]: segfault at 0 ip 00005609e3f1c2b4 sp 00007ffd3b2a7e40 error 4 in php-fpm8.4[5609e3c00000+3a0000]"},
+		{log: "journal", src: "nginx", unit: "nginx.service", level: 3, ago: 1200, every: 1800, count: 30,
+			msg: "upstream timed out (110: Connection timed out) while reading response header from upstream"},
+	},
+	"db01": {
+		{log: "kernel", src: "kernel", level: 3, ago: 2*3600 + 300,
+			msg: "Out of memory: Killed process 1873 (postgres) total-vm:8123456kB, anon-rss:6012344kB, file-rss:0kB, shmem-rss:2048kB"},
+		{log: "kernel", src: "kernel", level: 4, ago: 2*3600 + 301,
+			msg: "oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/system.slice/postgresql.service,task=postgres,pid=1873,uid=110"},
+	},
 	"dc01": {
 		{log: "System", src: "Microsoft-Windows-DistributedCOM", id: 10016, level: 2, ago: 1020, every: 7200, count: 12, msg: msgDCOM},
 		{log: "Security", src: "Microsoft-Windows-Security-Auditing", id: 4625, ago: -1500, every: 600, count: 4, msg: msgLogon},
@@ -56,7 +71,7 @@ func (a *simAgent) events(t int64) []model.EventEntry {
 			if ts > t {
 				ts -= 3600 // not yet this hour
 			}
-			out = append(out, model.EventEntry{Time: ts, Log: d.log, Source: d.src, ID: d.id, Level: d.level, Message: d.msg})
+			out = append(out, model.EventEntry{Time: ts, Log: d.log, Source: d.src, Unit: d.unit, ID: d.id, Level: d.level, Message: d.msg})
 		}
 	}
 	return out
@@ -70,24 +85,9 @@ func (a *simAgent) eventChecks(c *core.Core, t int64) []model.Check {
 	}
 	rules, ignore := c.AgentEvents(d)
 	events := a.events(t)
-	res := map[string]winevent.Result{}
+	res := map[string]eventrules.Result{}
 	for _, r := range rules {
-		list := []model.EventEntry{}
-		for _, e := range events {
-			if slicesContainsFold(r.Logs, e.Log) {
-				list = append(list, e)
-			}
-		}
-		res[r.ID] = winevent.Result{Events: list}
+		res[r.ID] = eventrules.Result{Events: events} // eventrules.Match picks the rule's events
 	}
-	return winevent.Evaluate(rules, ignore, res, time.Unix(t, 0))
-}
-
-func slicesContainsFold(list []string, s string) bool {
-	for _, x := range list {
-		if strings.EqualFold(x, s) {
-			return true
-		}
-	}
-	return false
+	return eventrules.Evaluate(rules, ignore, res, time.Unix(t, 0))
 }

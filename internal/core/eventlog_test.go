@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
-	"pk95monitoring/internal/winevent"
 )
 
 func ruleIDs(list []model.EventRule) []string {
@@ -22,22 +22,23 @@ func TestEventRulesReply(t *testing.T) {
 	e := newEnv(t, Options{})
 	lin := e.agentDevice(t, "lin", nil)
 	win := e.agentDevice(t, "win", nil)
-	if r := e.report(t, lin); len(r.EventRules) != 0 || r.EventRules == nil || r.EventIgnore == nil {
-		t.Fatalf("linux agent got event rules: %+v", r.EventRules)
+	// a Linux agent gets the Linux rules only, a Windows agent the Windows rules
+	if r := e.report(t, lin); r.EventIgnore == nil || !slices.Contains(ruleIDs(r.EventRules), "oom") || slices.Contains(ruleIDs(r.EventRules), "disk") {
+		t.Fatalf("linux agent: %v", ruleIDs(r.EventRules))
 	}
 	r := e.winReport(t, win)
 	ids := ruleIDs(r.EventRules)
-	if !slices.Contains(ids, "disk") || slices.Contains(ids, "system_errors") || len(r.EventIgnore) != 0 {
+	if !slices.Contains(ids, "disk") || slices.Contains(ids, "system_errors") || slices.Contains(ids, "oom") || len(r.EventIgnore) != 0 {
 		t.Fatalf("default rules: %v", ids)
 	}
 
 	// central: switch the catch-all rule on, change a built-in one, add an own rule
-	sysErr, _ := winevent.Default("system_errors")
+	sysErr, _ := eventrules.Default("system_errors")
 	sysErr.Enabled = true
 	if _, errs, err := e.c.SaveEventRule(sysErr); err != nil || len(errs) > 0 {
 		t.Fatalf("save: %v %v", errs, err)
 	}
-	logons, _ := winevent.Default("failed_logons")
+	logons, _ := eventrules.Default("failed_logons")
 	logons.Count = 50
 	v, errs, err := e.c.SaveEventRule(logons)
 	if err != nil || len(errs) > 0 || !v.Builtin || !v.Changed || v.Trigger != "ab 50 Ereignissen in der letzten Stunde: Warnung" {
@@ -137,12 +138,12 @@ func TestEventLogOverview(t *testing.T) {
 	now := e.clk.Now().Unix()
 	ev := model.EventEntry{Time: now - 600, Log: "System", Source: "disk", ID: 7, Level: 2, Message: "Fehlerhafter Block"}
 	e.winReport(t, win,
-		model.Check{Key: "ev:disk", Name: "Festplattenfehler", Group: winevent.Group, State: model.StateCrit, Message: "1 Ereignis",
-			Metrics: []model.Metric{{Name: winevent.MetricCount, Value: 1}}, Events: []model.EventEntry{ev}},
-		model.Check{Key: "ev:system_errors", Name: "Alle Fehler (System)", Group: winevent.Group, State: model.StateWarn,
-			Metrics: []model.Metric{{Name: winevent.MetricCount, Value: 1}}, Events: []model.EventEntry{ev}},
-		model.Check{Key: "ev:lockout", Name: "Konto gesperrt", Group: winevent.Group, State: model.StateOK,
-			Metrics: []model.Metric{{Name: winevent.MetricCount, Value: 0}}},
+		model.Check{Key: "ev:disk", Name: "Festplattenfehler", Group: eventrules.Group, State: model.StateCrit, Message: "1 Ereignis",
+			Metrics: []model.Metric{{Name: eventrules.MetricCount, Value: 1}}, Events: []model.EventEntry{ev}},
+		model.Check{Key: "ev:system_errors", Name: "Alle Fehler (System)", Group: eventrules.Group, State: model.StateWarn,
+			Metrics: []model.Metric{{Name: eventrules.MetricCount, Value: 1}}, Events: []model.EventEntry{ev}},
+		model.Check{Key: "ev:lockout", Name: "Konto gesperrt", Group: eventrules.Group, State: model.StateOK,
+			Metrics: []model.Metric{{Name: eventrules.MetricCount, Value: 0}}},
 	)
 	ov := e.c.EventLog()
 	if ov.Agents != 1 || len(ov.Rows) != 3 || ov.Rows[0].CheckKey != "ev:disk" || ov.Rows[0].Group != "Server" || ov.Rows[0].Last != ev.Time {
@@ -163,7 +164,7 @@ func TestEventChecksNotDiscovered(t *testing.T) {
 	win := e.agentDevice(t, "win", func(d *model.Device) { d.AutoAccept = false })
 	svc := model.Check{Key: "svc:Spooler", Name: "Druckwarteschlange", Group: "Dienste", State: model.StateOK}
 	e.winReport(t, win, svc)
-	ev := model.Check{Key: "ev:service_crash", Name: "Dienst abgestürzt", Group: winevent.Group, State: model.StateWarn, Message: "1 Ereignis"}
+	ev := model.Check{Key: "ev:service_crash", Name: "Dienst abgestürzt", Group: eventrules.Group, State: model.StateWarn, Message: "1 Ereignis"}
 	e.winReport(t, win, svc, ev)
 	st := e.c.Status(win)
 	if cs, _ := findCheck(st, "ev:service_crash"); cs.State != model.StateWarn || cs.Mode != "" {
@@ -188,7 +189,7 @@ func TestSeparateChecks(t *testing.T) {
 	win := e.agentDevice(t, "win", nil)
 	start := e.clk.Now().Unix()
 	upd := model.Check{Key: "updates", Name: "Updates", Group: "Updates", State: model.StateWarn, Message: "Neustart erforderlich"}
-	ev := model.Check{Key: "ev:disk", Name: "Festplattenfehler", Group: winevent.Group, State: model.StateCrit, Message: "1 Ereignis"}
+	ev := model.Check{Key: "ev:disk", Name: "Festplattenfehler", Group: eventrules.Group, State: model.StateCrit, Message: "1 Ereignis"}
 	cpu := metricCheck("cpu", "CPU", model.Metric{Name: "cpu.usage", Value: 10, Unit: "%"})
 	e.winReport(t, win, upd, ev, cpu)
 	e.wait()
@@ -210,6 +211,47 @@ func TestSeparateChecks(t *testing.T) {
 	for _, d := range rep.Devices {
 		if d.ID == win && (d.Alerts != 0 || d.ProblemTime != 0) {
 			t.Fatalf("report: %+v", d)
+		}
+	}
+}
+
+func TestLinuxEventRules(t *testing.T) {
+	e := newEnv(t, Options{})
+	lin := e.agentDevice(t, "lin", nil)
+	e.report(t, lin)
+	d, _ := e.c.Device(lin)
+	d.Agent.EventRules = []model.EventRule{{Name: "nginx-Fehler", Enabled: true, Sources: []string{"nginx"}, Levels: []int{3}}}
+	saved, errs, err := e.c.SaveDevice(d)
+	if err != nil || len(errs) > 0 || saved.Agent.EventRules[0].OS != eventrules.OSLinux || saved.Agent.EventRules[0].Logs[0] != eventrules.LogJournal {
+		t.Fatalf("own linux rule: %+v %v %v", saved.Agent.EventRules, errs, err)
+	}
+	r := e.report(t, lin)
+	if !slices.Contains(ruleIDs(r.EventRules), saved.Agent.EventRules[0].ID) {
+		t.Fatalf("own rule not sent: %v", ruleIDs(r.EventRules))
+	}
+	// a central Linux rule; IDs are refused, the OS of a built-in rule stays
+	if _, errs, _ := e.c.SaveEventRule(model.EventRule{OS: eventrules.OSLinux, Name: "x", Text: "a", IDs: []int{1}}); errs["ids"] == "" {
+		t.Fatalf("ids accepted: %v", errs)
+	}
+	oom, _ := eventrules.Default("oom")
+	oom.OS, oom.Count = "", 3
+	if v, errs, err := e.c.SaveEventRule(oom); err != nil || len(errs) > 0 || v.OS != eventrules.OSLinux || !v.Changed {
+		t.Fatalf("built-in: %+v %v %v", v, errs, err)
+	}
+	e.c.mu.Lock()
+	d = e.c.devices[lin]
+	e.c.mu.Unlock()
+	d.Agent.EventOff = []string{"oom"}
+	if _, errs, err := e.c.SaveDevice(d); err != nil || len(errs) > 0 {
+		t.Fatal(errs, err)
+	}
+	ov := e.c.EventLog()
+	if ov.Agents != 1 || ov.Linux != 1 || ov.Windows != 0 {
+		t.Fatalf("counts: %+v", ov)
+	}
+	for _, v := range ov.Rules {
+		if v.ID == "oom" && v.Off != 1 || v.ID == "disk" && v.Off != 0 {
+			t.Fatalf("off: %+v", v)
 		}
 	}
 }

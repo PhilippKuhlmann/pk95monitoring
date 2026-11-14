@@ -324,7 +324,7 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 		}
 	}
 	out = append(out, up)
-	if a.os == "windows" {
+	if a.os == "windows" || a.os == "linux" {
 		out = append(out, a.eventChecks(c, t)...)
 	}
 	return out

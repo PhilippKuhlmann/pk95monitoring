@@ -65,7 +65,7 @@ type AgentSettings struct {
 	WindowsServices []string `json:"windows_services"`
 	LinuxServices   []string `json:"linux_services"`
 	// EventRules are the changed built-in and the own central Windows event rules (see
-	// winevent.Merge); EventIgnore the exceptions for all Windows agents.
+	// eventrules.Merge); EventIgnore the exceptions for all Windows agents.
 	EventRules  []model.EventRule   `json:"event_rules"`
 	EventIgnore []model.EventIgnore `json:"event_ignore"`
 }

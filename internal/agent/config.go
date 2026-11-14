@@ -52,6 +52,9 @@ type Config struct {
 	// CentralServices come from the server's central setting: names or patterns, monitored
 	// where present (like patterns).
 	CentralServices []string `json:"central_services,omitempty"`
+	// SelfRestarts are the times (unix) of the last restarts for a self-update: Windows logs
+	// them as "terminated unexpectedly" (7031), which the event rules must not count.
+	SelfRestarts []int64 `json:"self_restarts,omitempty"`
 	// EventRules and EventIgnore (Windows) come from the server: the event log rules of this
 	// host and the exceptions that drop events before the rules count them.
 	EventRules  []model.EventRule   `json:"event_rules,omitempty"`

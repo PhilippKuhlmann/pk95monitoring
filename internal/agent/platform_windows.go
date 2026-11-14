@@ -12,18 +12,18 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
+	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
-	"pk95monitoring/internal/winevent"
 )
 
 // platformState holds the Windows caches. Update search and event log query run in the
 // background so a slow search never delays a report.
 type platformState struct {
 	updates *periodic[updateCount]
-	events  *periodic[map[string]winevent.Result]
+	events  *periodic[map[string]eventrules.Result]
 
 	evMu      sync.Mutex
-	evQueries []winevent.Query
+	evQueries []eventrules.Query
 	evKey     string // JSON of evQueries
 }
 
@@ -58,15 +58,16 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 			Message: "Updatesuche läuft"})
 	}
 	if len(cfg.EventRules) > 0 {
-		c.plat.setQueries(winevent.Queries(cfg.EventRules, cfg.EventIgnore))
+		c.plat.setQueries(eventrules.Queries(cfg.EventRules, cfg.EventIgnore))
 		if res, err, have := c.plat.events.Get(ctx, c.WaitSlow); have {
 			if err != nil {
-				res = map[string]winevent.Result{}
+				res = map[string]eventrules.Result{}
 				for _, r := range cfg.EventRules {
-					res[r.ID] = winevent.Result{Err: err.Error()}
+					res[r.ID] = eventrules.Result{Err: err.Error()}
 				}
 			}
-			out = append(out, winevent.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
+			res = dropSelfRestarts(res, cfg.SelfRestarts)
+			out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 		}
 	}
 	return out

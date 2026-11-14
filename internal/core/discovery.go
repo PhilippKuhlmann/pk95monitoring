@@ -5,9 +5,9 @@ import (
 	"slices"
 	"strings"
 
+	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/store"
-	"pk95monitoring/internal/winevent"
 )
 
 // Discovery (inventory): the first successful collection of a device records every check
@@ -28,7 +28,7 @@ const (
 // discovery check, not network checks and Windows event rules (both are configured), not the
 // event log check of agents before 0.16 (replaced by the rules).
 func inventoryKey(k string) bool {
-	return k != "" && k != reachKey && k != model.DiscoveryKey && k != "eventlog" && !strings.HasPrefix(k, "net:") && !strings.HasPrefix(k, winevent.KeyPrefix)
+	return k != "" && k != reachKey && k != model.DiscoveryKey && k != "eventlog" && !strings.HasPrefix(k, "net:") && !strings.HasPrefix(k, eventrules.KeyPrefix)
 }
 
 // reindex rebuilds the set of new keys and the vanished list from the inventory.

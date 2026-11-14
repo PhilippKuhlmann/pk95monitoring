@@ -1,4 +1,4 @@
-package winevent
+package eventrules
 
 import (
 	"strings"

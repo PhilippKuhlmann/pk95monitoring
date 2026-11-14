@@ -98,6 +98,7 @@ func (a *Agent) Cycle(ctx context.Context) (time.Duration, error) {
 	a.flush(ctx)
 	if reply.Update != nil && a.Updater != nil {
 		if err := a.Updater.Apply(ctx, *reply.Update); errors.Is(err, ErrRestart) {
+			a.noteSelfRestart(time.Now())
 			return 0, err
 		}
 	}
@@ -168,6 +169,18 @@ func (a *Agent) applyReply(r model.AgentReply) {
 	}
 	a.Log.Info("applied configuration from server", "interval", a.Config.IntervalSeconds(),
 		"services", len(a.Config.Services), "central_services", len(a.Config.CentralServices), "auto_services", a.Config.WatchAutoServices)
+	if a.ConfigPath == "" {
+		return
+	}
+	if err := Save(a.ConfigPath, a.Config); err != nil {
+		a.Log.Error("cannot save configuration", "err", err)
+	}
+}
+
+// noteSelfRestart records a restart for a self-update (the last 5) in the configuration.
+func (a *Agent) noteSelfRestart(t time.Time) {
+	list := append(a.Config.SelfRestarts, t.Unix())
+	a.Config.SelfRestarts = list[max(0, len(list)-5):]
 	if a.ConfigPath == "" {
 		return
 	}

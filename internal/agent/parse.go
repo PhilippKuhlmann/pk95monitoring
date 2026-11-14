@@ -4,11 +4,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"unicode/utf16"
 
+	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
-	"pk95monitoring/internal/winevent"
 )
 
 // Pure parsers for the output of system tools. They live in an untagged file so their tests
@@ -197,8 +198,70 @@ func (l *psList[T]) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// journalLine is one entry of "journalctl -o json".
+type journalLine struct {
+	Time       string          `json:"__REALTIME_TIMESTAMP"` // microseconds
+	Priority   string          `json:"PRIORITY"`
+	Identifier string          `json:"SYSLOG_IDENTIFIER"`
+	Comm       string          `json:"_COMM"`
+	Unit       string          `json:"_SYSTEMD_UNIT"`
+	AboutUnit  string          `json:"UNIT"` // systemd's messages about a unit
+	Transport  string          `json:"_TRANSPORT"`
+	Message    json.RawMessage `json:"MESSAGE"` // a string, or an array of bytes for binary data
+}
+
+// parseJournal decodes the output of "journalctl -o json" (one object per line). Lines that
+// are not JSON (e.g. "-- No entries --") are skipped.
+func parseJournal(out string) []model.EventEntry {
+	var list []model.EventEntry
+	for line := range strings.Lines(out) {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var j journalLine
+		if json.Unmarshal([]byte(line), &j) != nil {
+			continue
+		}
+		us, err := strconv.ParseInt(j.Time, 10, 64)
+		if err != nil {
+			continue
+		}
+		e := model.EventEntry{Time: us / 1_000_000, Log: eventrules.LogJournal, Source: j.Identifier, Unit: j.Unit, Level: 6}
+		if j.Transport == "kernel" {
+			e.Log = eventrules.LogKernel
+			if e.Source == "" {
+				e.Source = "kernel"
+			}
+		}
+		if e.Source == "" {
+			e.Source = j.Comm
+		}
+		if j.AboutUnit != "" {
+			e.Unit = j.AboutUnit
+		}
+		if p, err := strconv.Atoi(j.Priority); err == nil && p >= 0 && p <= 7 {
+			e.Level = p
+		}
+		var msg string
+		if json.Unmarshal(j.Message, &msg) != nil {
+			var ints []int
+			var raw []byte
+			if json.Unmarshal(j.Message, &ints) == nil {
+				for _, v := range ints {
+					raw = append(raw, byte(v))
+				}
+			}
+			msg = strings.ToValidUTF8(string(raw), "?")
+		}
+		e.Message = truncate(msg, 1000)
+		list = append(list, e)
+	}
+	return list
+}
+
 // parseEventlog decodes the output of the Windows event log script: one result per rule.
-func parseEventlog(out string) (map[string]winevent.Result, error) {
+func parseEventlog(out string) (map[string]eventrules.Result, error) {
 	var doc struct {
 		Rules psList[struct {
 			ID     string                   `json:"id"`
@@ -210,9 +273,9 @@ func parseEventlog(out string) (map[string]winevent.Result, error) {
 	if err := parsePSJSON(out, &doc); err != nil {
 		return nil, err
 	}
-	res := make(map[string]winevent.Result, len(doc.Rules))
+	res := make(map[string]eventrules.Result, len(doc.Rules))
 	for _, r := range doc.Rules {
-		res[r.ID] = winevent.Result{Events: r.Events, Full: r.Full, Err: r.Err}
+		res[r.ID] = eventrules.Result{Events: r.Events, Full: r.Full, Err: r.Err}
 	}
 	return res, nil
 }

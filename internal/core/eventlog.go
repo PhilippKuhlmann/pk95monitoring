@@ -6,13 +6,13 @@ import (
 	"slices"
 	"strings"
 
+	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/store"
-	"pk95monitoring/internal/winevent"
 )
 
-// Windows event log: central rules (the built-in ones of package winevent, changed or not,
-// plus own rules) live in Settings.Agent; each agent may switch central rules off, add its
+// System logs (Windows event log, Linux journal): central rules (the built-in ones of
+// package eventrules, changed or not, plus own rules) live in Settings.Agent; each agent may switch central rules off, add its
 // own rules and exceptions (model.AgentConfig). The agent evaluates the rules and reports
 // one check "ev:<rule>" per rule with the latest matching events.
 
@@ -23,7 +23,7 @@ type EventRuleView struct {
 	Changed bool   `json:"changed"` // a built-in rule that differs from its default
 	Filter  string `json:"filter"`  // German summary of the filters
 	Trigger string `json:"trigger"` // when it alerts
-	Off     int    `json:"off"`     // Windows agents that switched it off
+	Off     int    `json:"off"`     // agents (of the rule's OS) that switched it off
 }
 
 // EventIgnoreView is an exception with the device it belongs to (none = all devices).
@@ -57,9 +57,11 @@ type EventItem struct {
 	Rule     string `json:"rule"`
 }
 
-// EventOverview is the page of the Windows event log.
+// EventOverview is the page of the system logs.
 type EventOverview struct {
-	Agents   int               `json:"agents"` // enabled Windows agents
+	Agents   int               `json:"agents"`  // enabled agents with system log rules
+	Windows  int               `json:"windows"` // of them Windows
+	Linux    int               `json:"linux"`   // of them Linux
 	Rules    []EventRuleView   `json:"rules"`
 	Ignore   []EventIgnoreView `json:"ignore"`
 	Rows     []EventCheckRow   `json:"rows"`
@@ -70,21 +72,29 @@ type EventOverview struct {
 // maxOverviewEvents limits the events listed on the overview.
 const maxOverviewEvents = 200
 
-func isWindowsAgent(d model.Device) bool {
-	return d.Type == model.TypeAgent && d.Agent != nil && d.Agent.OS == "windows"
+// eventOS is the OS of an agent whose system log the rules read ("" = none).
+func eventOS(d model.Device) string {
+	if d.Type != model.TypeAgent || d.Agent == nil {
+		return ""
+	}
+	switch d.Agent.OS {
+	case eventrules.OSWindows, eventrules.OSLinux:
+		return d.Agent.OS
+	}
+	return ""
 }
 
 // eventRuleViews lists the central rules. Caller holds c.mu (for the device counts).
 func (c *Core) eventRuleViews() []EventRuleView {
-	central := winevent.Merge(c.Settings().Agent.EventRules)
+	central := eventrules.Merge(c.Settings().Agent.EventRules)
 	out := make([]EventRuleView, 0, len(central))
 	for _, r := range central {
-		v := EventRuleView{EventRule: r, Filter: winevent.Describe(r), Trigger: winevent.Trigger(r)}
-		if def, ok := winevent.Default(r.ID); ok {
+		v := EventRuleView{EventRule: r, Filter: eventrules.Describe(r), Trigger: eventrules.Trigger(r)}
+		if def, ok := eventrules.Default(r.ID); ok {
 			v.Builtin, v.Changed = true, !sameRule(def, r)
 		}
 		for _, d := range c.devices {
-			if isWindowsAgent(d) && slices.Contains(d.Agent.EventOff, r.ID) {
+			if eventOS(d) == eventrules.RuleOS(r) && slices.Contains(d.Agent.EventOff, r.ID) {
 				v.Off++
 			}
 		}
@@ -100,19 +110,20 @@ func sameRule(a, b model.EventRule) bool {
 		a.Hours == b.Hours && a.Severity == b.Severity
 }
 
-// EventLog returns the overview of the Windows event log: rules, exceptions, the event
-// checks of all enabled Windows agents (worst first) and their latest events.
+// EventLog returns the overview of the system logs: rules, exceptions, the event checks of
+// all enabled Windows and Linux agents (worst first) and their latest events.
 func (c *Core) EventLog() EventOverview {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ov := EventOverview{Rules: c.eventRuleViews(), Ignore: []EventIgnoreView{}, Rows: []EventCheckRow{}, Events: []EventItem{},
-		Defaults: winevent.Defaults()}
+		Defaults: eventrules.Defaults()}
 	for _, ig := range c.Settings().Agent.EventIgnore {
 		ov.Ignore = append(ov.Ignore, EventIgnoreView{EventIgnore: ig})
 	}
 	seen := map[string]bool{}
 	for id, d := range c.devices {
-		if !isWindowsAgent(d) {
+		os := eventOS(d)
+		if os == "" {
 			continue
 		}
 		name := c.displayName(d)
@@ -124,18 +135,23 @@ func (c *Core) EventLog() EventOverview {
 			continue
 		}
 		ov.Agents++
+		if os == eventrules.OSLinux {
+			ov.Linux++
+		} else {
+			ov.Windows++
+		}
 		group := d.Group
 		if p, ok := c.parentOf(d); ok && group == "" {
 			group = p.Group
 		}
 		for _, cs := range rt.st.Checks {
-			if !strings.HasPrefix(cs.Key, winevent.KeyPrefix) {
+			if !strings.HasPrefix(cs.Key, eventrules.KeyPrefix) {
 				continue
 			}
 			row := EventCheckRow{DeviceID: id, Device: name, Group: group, CheckKey: cs.Key, Name: cs.Name, State: cs.State,
 				Acked: cs.Acked, Mode: cs.Mode, Message: cs.Message}
 			for _, m := range cs.Metrics {
-				if m.Name == winevent.MetricCount {
+				if m.Name == eventrules.MetricCount {
 					row.Count = m.Value
 				}
 			}
@@ -191,25 +207,27 @@ func (c *Core) updateAgentSettings(fn func(a *AgentSettings)) error {
 // with its default settings is reset (its stored copy is dropped).
 func (c *Core) SaveEventRule(r model.EventRule) (EventRuleView, map[string]string, error) {
 	stored := c.Settings().Agent.EventRules
-	builtin := winevent.IsBuiltin(r.ID)
+	builtin := eventrules.IsBuiltin(r.ID)
 	idx := slices.IndexFunc(stored, func(s model.EventRule) bool { return s.ID == r.ID })
 	switch {
 	case r.ID == "":
-		if len(stored) >= winevent.MaxRules+len(winevent.Defaults()) {
-			return EventRuleView{}, map[string]string{"name": fmt.Sprintf("Höchstens %d eigene Regeln.", winevent.MaxRules)}, nil
+		if len(stored) >= eventrules.MaxRules+len(eventrules.Defaults()) {
+			return EventRuleView{}, map[string]string{"name": fmt.Sprintf("Höchstens %d eigene Regeln.", eventrules.MaxRules)}, nil
 		}
 		r.ID = newID(6)
-		for winevent.IsBuiltin(r.ID) {
+		for eventrules.IsBuiltin(r.ID) {
 			r.ID = newID(6)
 		}
 	case !builtin && idx < 0:
 		return EventRuleView{}, nil, store.ErrNotFound
 	}
-	def, _ := winevent.Default(r.ID)
+	def, _ := eventrules.Default(r.ID)
 	if builtin {
-		r.Hint = def.Hint // the hint of a built-in rule is not editable
+		r.Hint, r.OS = def.Hint, def.OS // hint and OS of a built-in rule are fixed
+	} else if idx >= 0 {
+		r.OS = stored[idx].OS
 	}
-	if errs := winevent.Validate(&r, ""); len(errs) > 0 {
+	if errs := eventrules.Validate(&r, ""); len(errs) > 0 {
 		return EventRuleView{}, errs, nil
 	}
 	err := c.updateAgentSettings(func(a *AgentSettings) {
@@ -226,7 +244,7 @@ func (c *Core) SaveEventRule(r model.EventRule) (EventRuleView, map[string]strin
 	if err != nil {
 		return EventRuleView{}, nil, err
 	}
-	c.Event("info", "Windows-Ereignisse", "Ereignisregel gespeichert", r.Name+": "+winevent.Describe(r)+" – "+winevent.Trigger(r)+".", nil, false)
+	c.Event("info", "Systemprotokolle", "Ereignisregel gespeichert", r.Name+": "+eventrules.Describe(r)+" – "+eventrules.Trigger(r)+".", nil, false)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, v := range c.eventRuleViews() {
@@ -243,7 +261,7 @@ func (c *Core) DeleteEventRule(id string) error {
 	stored := c.Settings().Agent.EventRules
 	i := slices.IndexFunc(stored, func(s model.EventRule) bool { return s.ID == id })
 	if i < 0 {
-		if winevent.IsBuiltin(id) {
+		if eventrules.IsBuiltin(id) {
 			return nil // already the default
 		}
 		return store.ErrNotFound
@@ -255,28 +273,28 @@ func (c *Core) DeleteEventRule(id string) error {
 		return err
 	}
 	title := "Ereignisregel gelöscht"
-	if winevent.IsBuiltin(id) {
+	if eventrules.IsBuiltin(id) {
 		title = "Ereignisregel zurückgesetzt"
 	}
-	c.Event("info", "Windows-Ereignisse", title, name+".", nil, false)
+	c.Event("info", "Systemprotokolle", title, name+".", nil, false)
 	return nil
 }
 
 // AddEventIgnore adds an exception for one agent (deviceID) or for all (empty deviceID).
 func (c *Core) AddEventIgnore(deviceID string, ig model.EventIgnore) (EventIgnoreView, map[string]string, error) {
-	if errs := winevent.ValidateIgnore(&ig, ""); len(errs) > 0 {
+	if errs := eventrules.ValidateIgnore(&ig, ""); len(errs) > 0 {
 		return EventIgnoreView{}, errs, nil
 	}
 	ig.ID, ig.Created = newID(6), c.Now().Unix()
 	what := ignoreText(ig)
 	if deviceID == "" {
-		if len(c.Settings().Agent.EventIgnore) >= winevent.MaxIgnores {
-			return EventIgnoreView{}, map[string]string{"source": fmt.Sprintf("Höchstens %d Ausnahmen.", winevent.MaxIgnores)}, nil
+		if len(c.Settings().Agent.EventIgnore) >= eventrules.MaxIgnores {
+			return EventIgnoreView{}, map[string]string{"source": fmt.Sprintf("Höchstens %d Ausnahmen.", eventrules.MaxIgnores)}, nil
 		}
 		if err := c.updateAgentSettings(func(a *AgentSettings) { a.EventIgnore = append(a.EventIgnore, ig) }); err != nil {
 			return EventIgnoreView{}, nil, err
 		}
-		c.Event("info", "Windows-Ereignisse", "Ausnahme für alle Geräte angelegt", what+".", nil, false)
+		c.Event("info", "Systemprotokolle", "Ausnahme für alle Geräte angelegt", what+".", nil, false)
 		return EventIgnoreView{EventIgnore: ig}, nil, nil
 	}
 	c.mu.Lock()
@@ -285,9 +303,9 @@ func (c *Core) AddEventIgnore(deviceID string, ig model.EventIgnore) (EventIgnor
 		c.mu.Unlock()
 		return EventIgnoreView{}, nil, store.ErrNotFound
 	}
-	if len(d.Agent.EventIgnore) >= winevent.MaxIgnores {
+	if len(d.Agent.EventIgnore) >= eventrules.MaxIgnores {
 		c.mu.Unlock()
-		return EventIgnoreView{}, map[string]string{"source": fmt.Sprintf("Höchstens %d Ausnahmen.", winevent.MaxIgnores)}, nil
+		return EventIgnoreView{}, map[string]string{"source": fmt.Sprintf("Höchstens %d Ausnahmen.", eventrules.MaxIgnores)}, nil
 	}
 	d = d.Clone()
 	d.Agent.EventIgnore = append(d.Agent.EventIgnore, ig)
@@ -298,7 +316,7 @@ func (c *Core) AddEventIgnore(deviceID string, ig model.EventIgnore) (EventIgnor
 	c.devices[d.ID] = d
 	name := c.displayName(d)
 	c.mu.Unlock()
-	c.Event("info", "Windows-Ereignisse", "Ausnahme angelegt", name+": "+what+".", nil, false)
+	c.Event("info", "Systemprotokolle", "Ausnahme angelegt", name+": "+what+".", nil, false)
 	return EventIgnoreView{EventIgnore: ig, DeviceID: d.ID, Device: name}, nil, nil
 }
 
@@ -359,34 +377,34 @@ func validateEvents(rules *[]model.EventRule, ignore *[]model.EventIgnore, now i
 	if *ignore == nil {
 		*ignore = []model.EventIgnore{}
 	}
-	if len(*rules) > winevent.MaxRules+len(winevent.Defaults()) {
-		errs[prefix+"event_rules"] = fmt.Sprintf("Höchstens %d Regeln.", winevent.MaxRules)
+	if len(*rules) > eventrules.MaxRules+len(eventrules.Defaults()) {
+		errs[prefix+"event_rules"] = fmt.Sprintf("Höchstens %d Regeln.", eventrules.MaxRules)
 	}
 	ids := map[string]bool{}
 	for i := range *rules {
 		r := &(*rules)[i]
-		if !winevent.ValidID(r.ID) || ids[r.ID] {
+		if !eventrules.ValidID(r.ID) || ids[r.ID] {
 			r.ID = newID(6)
 		}
 		ids[r.ID] = true
-		for k, v := range winevent.Validate(r, fmt.Sprintf("%sevent_rules.%d.", prefix, i)) {
+		for k, v := range eventrules.Validate(r, fmt.Sprintf("%sevent_rules.%d.", prefix, i)) {
 			errs[k] = v
 		}
 	}
-	if len(*ignore) > winevent.MaxIgnores {
-		errs[prefix+"event_ignore"] = fmt.Sprintf("Höchstens %d Ausnahmen.", winevent.MaxIgnores)
+	if len(*ignore) > eventrules.MaxIgnores {
+		errs[prefix+"event_ignore"] = fmt.Sprintf("Höchstens %d Ausnahmen.", eventrules.MaxIgnores)
 	}
 	ids = map[string]bool{}
 	for i := range *ignore {
 		ig := &(*ignore)[i]
-		if !winevent.ValidID(ig.ID) || ids[ig.ID] {
+		if !eventrules.ValidID(ig.ID) || ids[ig.ID] {
 			ig.ID = newID(6)
 		}
 		ids[ig.ID] = true
 		if ig.Created == 0 {
 			ig.Created = now
 		}
-		for k, v := range winevent.ValidateIgnore(ig, fmt.Sprintf("%sevent_ignore.%d.", prefix, i)) {
+		for k, v := range eventrules.ValidateIgnore(ig, fmt.Sprintf("%sevent_ignore.%d.", prefix, i)) {
 			errs[k] = v
 		}
 	}
@@ -396,24 +414,31 @@ func validateEvents(rules *[]model.EventRule, ignore *[]model.EventIgnore, now i
 func validateAgentEvents(a *model.AgentConfig, now int64, errs map[string]string) {
 	off := []string{}
 	for _, id := range a.EventOff {
-		if id = strings.TrimSpace(id); winevent.ValidID(id) && !slices.Contains(off, id) {
+		if id = strings.TrimSpace(id); eventrules.ValidID(id) && !slices.Contains(off, id) {
 			off = append(off, id)
 		}
 	}
 	a.EventOff = off
-	if len(a.EventRules) > winevent.MaxRules {
-		errs["agent.event_rules"] = fmt.Sprintf("Höchstens %d Regeln.", winevent.MaxRules)
+	if len(a.EventRules) > eventrules.MaxRules {
+		errs["agent.event_rules"] = fmt.Sprintf("Höchstens %d Regeln.", eventrules.MaxRules)
+	}
+	for i := range a.EventRules { // own rules read the log of the agent's OS
+		a.EventRules[i].OS = ""
+		if a.OS == eventrules.OSLinux {
+			a.EventRules[i].OS = eventrules.OSLinux
+		}
 	}
 	validateEvents(&a.EventRules, &a.EventIgnore, now, "agent.", errs)
 }
 
 // AgentEvents returns the event rules and exceptions of an agent (sent with every reply).
 func (c *Core) AgentEvents(d model.Device) ([]model.EventRule, []model.EventIgnore) {
-	if !isWindowsAgent(d) {
+	os := eventOS(d)
+	if os == "" {
 		return []model.EventRule{}, []model.EventIgnore{}
 	}
 	set := c.Settings().Agent
-	rules := winevent.Effective(winevent.Merge(set.EventRules), d.Agent.EventOff, d.Agent.EventRules)
+	rules := eventrules.Effective(eventrules.ForOS(eventrules.Merge(set.EventRules), os), d.Agent.EventOff, eventrules.ForOS(d.Agent.EventRules, os))
 	ignore := append(model.CloneEventIgnores(set.EventIgnore), model.CloneEventIgnores(d.Agent.EventIgnore)...)
 	if ignore == nil {
 		ignore = []model.EventIgnore{}

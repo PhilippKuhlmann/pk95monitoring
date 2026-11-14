@@ -348,21 +348,28 @@ const (
 	EventInfo     = 4
 )
 
-// EventRule watches the Windows event log of agents. The events of the last Hours that match
-// every filled filter are counted; with Count or more the check "ev:<ID>" gets Severity.
+// EventRule watches the system log of agents: the Windows event log or, with OS "linux", the
+// systemd journal. The events of the last Hours that match every filled filter are counted;
+// with Count or more the check "ev:<ID>" gets Severity.
 type EventRule struct {
-	ID       string   `json:"id"` // built-in rules have word IDs ("disk"), own rules random ones
-	Name     string   `json:"name"`
-	Enabled  bool     `json:"enabled"`
-	Logs     []string `json:"logs"`           // e.g. System, Application, Security, Microsoft-Windows-Backup
-	Sources  []string `json:"sources"`        // provider names, "*" patterns; empty = any
-	IDs      []int    `json:"ids"`            // event IDs; empty = any
-	Levels   []int    `json:"levels"`         // EventCritical …; empty = any
-	Text     string   `json:"text,omitempty"` // the message must contain this (case-insensitive)
-	Count    int      `json:"count"`          // events needed for an alert, default 1
-	Hours    int      `json:"hours"`          // time window, default 24
-	Severity string   `json:"severity"`       // warn or crit
-	Hint     string   `json:"hint,omitempty"` // what to do (German, shown with the check)
+	ID      string `json:"id"` // built-in rules have word IDs ("disk"), own rules random ones
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	OS      string `json:"os,omitempty"` // windows (also when empty) or linux
+	// Windows: event logs (System, Application, Security, Microsoft-Windows-Backup …).
+	// Linux: "journal" (all messages) or "kernel" (only kernel messages).
+	Logs []string `json:"logs"`
+	// Windows: provider names. Linux: syslog identifiers (sshd, kernel) or systemd units
+	// (nginx.service). "*" patterns; empty = any.
+	Sources []string `json:"sources"`
+	IDs     []int    `json:"ids"`    // Windows event IDs; empty = any
+	Levels  []int    `json:"levels"` // Windows EventCritical …, Linux syslog priority 0–7; empty = any
+	// Text: the message must contain this (case-insensitive); "|" separates alternatives.
+	Text     string `json:"text,omitempty"`
+	Count    int    `json:"count"`          // events needed for an alert, default 1
+	Hours    int    `json:"hours"`          // time window, default 24
+	Severity string `json:"severity"`       // warn or crit
+	Hint     string `json:"hint,omitempty"` // what to do (German, shown with the check)
 }
 
 // EventIgnore drops matching events before any rule counts them: every filled field must
@@ -378,9 +385,10 @@ type EventIgnore struct {
 
 // EventEntry is one event of the Windows event log.
 type EventEntry struct {
-	Time    int64  `json:"t"` // unix seconds
-	Log     string `json:"log"`
-	Source  string `json:"src"`
+	Time    int64  `json:"t"`              // unix seconds
+	Log     string `json:"log"`            // Windows event log; Linux "kernel" or "journal"
+	Source  string `json:"src"`            // provider (Windows) or syslog identifier (Linux)
+	Unit    string `json:"unit,omitempty"` // Linux: systemd unit
 	ID      int    `json:"id"`
 	Level   int    `json:"lvl"`
 	Message string `json:"msg,omitempty"`

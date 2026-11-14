@@ -1,9 +1,10 @@
-// Package winevent turns Windows event log entries into checks. Rules say which events count
+// Package eventrules turns system log entries – the Windows event log and the systemd journal
+// on Linux – into checks. Rules say which events count
 // (log, source, ID, level, text) and how many of them within some hours raise an alert;
 // exceptions drop events every host keeps logging. The agent queries the event log with the
 // filters of the rules and evaluates them here; the server validates and merges the rules.
 // The package is pure Go, so it runs (and is tested) on every OS.
-package winevent
+package eventrules
 
 import (
 	"cmp"
@@ -40,13 +41,54 @@ const (
 	maxQueryEvents = 500 // events read per rule and log
 )
 
-// LevelNames are the German names of the event levels.
+// Operating systems of rules (EventRule.OS; empty = windows).
+const (
+	OSWindows = "windows"
+	OSLinux   = "linux"
+)
+
+// Linux logs: the whole journal or only kernel messages.
+const (
+	LogJournal = "journal"
+	LogKernel  = "kernel"
+)
+
+// LevelNames are the German names of the Windows event levels.
 var LevelNames = map[int]string{0: "Überwachung", 1: "Kritisch", 2: "Fehler", 3: "Warnung", 4: "Information", 5: "Ausführlich"}
 
-// Defaults are the built-in rules: events that mean something on any Windows server. The
-// catch-all rules for every error are off by default – the event log is never free of errors.
+// LinuxLevelNames are the German names of the syslog priorities.
+var LinuxLevelNames = map[int]string{0: "Notfall", 1: "Alarm", 2: "Kritisch", 3: "Fehler", 4: "Warnung", 5: "Hinweis", 6: "Info", 7: "Debug"}
+
+// RuleOS is the operating system of a rule (windows when empty).
+func RuleOS(r model.EventRule) string {
+	if r.OS == OSLinux {
+		return OSLinux
+	}
+	return OSWindows
+}
+
+// ForOS keeps the rules of one operating system.
+func ForOS(list []model.EventRule, os string) []model.EventRule {
+	out := []model.EventRule{}
+	for _, r := range list {
+		if RuleOS(r) == os {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func levelNames(os string) map[int]string {
+	if os == OSLinux {
+		return LinuxLevelNames
+	}
+	return LevelNames
+}
+
+// Defaults are the built-in rules: events that mean something on any Windows or Linux server.
+// The catch-all rules for every error are off by default – no log is ever free of errors.
 func Defaults() []model.EventRule {
-	return []model.EventRule{
+	rules := []model.EventRule{
 		{ID: "disk", Name: "Festplattenfehler", Enabled: true, Logs: []string{"System"},
 			Sources: []string{"disk", "Ntfs", "Microsoft-Windows-Ntfs", "volmgr", "stornvme", "storahci", "iaStorA", "iaStorAVC", "megasas", "megasas2i"},
 			IDs:     []int{7, 11, 15, 51, 52, 55, 98, 153}, Levels: []int{1, 2, 3}, Count: 1, Hours: 24, Severity: model.StateCrit,
@@ -85,6 +127,7 @@ func Defaults() []model.EventRule {
 			Levels: []int{1, 2}, Count: 1, Hours: 24, Severity: model.StateWarn,
 			Hint: "Meldet jeden Fehler im Anwendungsprotokoll. Unwichtige Meldungen mit „Ignorieren“ ausblenden."},
 	}
+	return append(rules, linuxDefaults()...)
 }
 
 // Default returns the built-in rule with this id.
@@ -186,6 +229,20 @@ func Validate(r *model.EventRule, prefix string) map[string]string {
 	r.Name, r.Text, r.Hint = strings.TrimSpace(r.Name), strings.TrimSpace(r.Text), strings.TrimSpace(r.Hint)
 	r.Logs, r.Sources = cleanStrings(r.Logs), cleanStrings(r.Sources)
 	r.IDs, r.Levels = cleanInts(r.IDs), cleanInts(r.Levels)
+	os := RuleOS(*r)
+	if os == OSWindows {
+		r.OS = ""
+	} else {
+		for i, l := range r.Logs {
+			r.Logs[i] = strings.ToLower(l)
+		}
+		if len(r.Logs) == 0 || slices.Contains(r.Logs, LogJournal) {
+			r.Logs = []string{LogJournal} // the journal holds the kernel messages too
+		}
+		if len(r.IDs) > 0 {
+			errs[prefix+"ids"] = "Das Linux-Journal kennt keine Ereignis-IDs."
+		}
+	}
 	if r.Count == 0 {
 		r.Count = 1
 	}
@@ -208,7 +265,7 @@ func Validate(r *model.EventRule, prefix string) map[string]string {
 		errs[prefix+"logs"] = fmt.Sprintf("Höchstens %d Protokolle.", MaxLogs)
 	}
 	for _, l := range r.Logs {
-		if len(l) > 255 || badText(l) {
+		if len(l) > 255 || badText(l) || os == OSLinux && l != LogJournal && l != LogKernel {
 			errs[prefix+"logs"] = "Ungültiger Protokollname."
 		}
 	}
@@ -229,7 +286,7 @@ func Validate(r *model.EventRule, prefix string) map[string]string {
 		}
 	}
 	for _, l := range r.Levels {
-		if _, ok := LevelNames[l]; !ok {
+		if _, ok := levelNames(os)[l]; !ok {
 			errs[prefix+"levels"] = "Ungültige Stufe."
 		}
 	}
@@ -237,7 +294,11 @@ func Validate(r *model.EventRule, prefix string) map[string]string {
 		errs[prefix+"text"] = fmt.Sprintf("Höchstens %d Zeichen, eine Zeile.", MaxText)
 	}
 	if len(r.Sources) == 0 && len(r.IDs) == 0 && len(r.Levels) == 0 && r.Text == "" {
-		errs[prefix+"ids"] = "Mindestens Quelle, Ereignis-ID, Stufe oder Text angeben – sonst zählt jedes Ereignis."
+		if os == OSLinux {
+			errs[prefix+"sources"] = "Mindestens Quelle, Stufe oder Text angeben – sonst zählt jede Meldung."
+		} else {
+			errs[prefix+"ids"] = "Mindestens Quelle, Ereignis-ID, Stufe oder Text angeben – sonst zählt jedes Ereignis."
+		}
 	}
 	if r.Count < 1 || r.Count > MaxCount {
 		errs[prefix+"count"] = fmt.Sprintf("Anzahl zwischen 1 und %d.", MaxCount)
@@ -291,12 +352,38 @@ func containsFold(s, sub string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
 }
 
+// Alternatives splits a text filter at "|" ("Failed password|Invalid user").
+func Alternatives(text string) []string {
+	var out []string
+	for _, p := range strings.Split(text, "|") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// textMatch reports whether the message contains one of the alternatives of text.
+func textMatch(msg, text string) bool {
+	return text == "" || slices.ContainsFunc(Alternatives(text), func(a string) bool { return containsFold(msg, a) })
+}
+
+// sourceMatch matches a source pattern against an event: its provider or syslog identifier,
+// or its systemd unit (also without ".service").
+func sourceMatch(pattern string, e model.EventEntry) bool {
+	return globFold(pattern, e.Source) || e.Unit != "" && (globFold(pattern, e.Unit) || globFold(pattern, strings.TrimSuffix(e.Unit, ".service")))
+}
+
 // Match reports whether an event is counted by a rule (the time window is not checked).
 func Match(r model.EventRule, e model.EventEntry) bool {
-	if !slices.ContainsFunc(r.Logs, func(l string) bool { return strings.EqualFold(l, e.Log) }) {
+	if RuleOS(r) == OSLinux {
+		if !slices.Contains(r.Logs, LogJournal) && e.Log != LogKernel {
+			return false // kernel messages only
+		}
+	} else if !slices.ContainsFunc(r.Logs, func(l string) bool { return strings.EqualFold(l, e.Log) }) {
 		return false
 	}
-	if len(r.Sources) > 0 && !slices.ContainsFunc(r.Sources, func(s string) bool { return globFold(s, e.Source) }) {
+	if len(r.Sources) > 0 && !slices.ContainsFunc(r.Sources, func(s string) bool { return sourceMatch(s, e) }) {
 		return false
 	}
 	if len(r.IDs) > 0 && !slices.Contains(r.IDs, e.ID) {
@@ -305,7 +392,7 @@ func Match(r model.EventRule, e model.EventEntry) bool {
 	if len(r.Levels) > 0 && !slices.Contains(r.Levels, e.Level) {
 		return false
 	}
-	return r.Text == "" || containsFold(e.Message, r.Text)
+	return textMatch(e.Message, r.Text)
 }
 
 // Ignored returns the exception that drops the event, if any.
@@ -314,13 +401,13 @@ func Ignored(list []model.EventIgnore, e model.EventEntry) (model.EventIgnore, b
 		if ig.Source == "" && len(ig.IDs) == 0 && ig.Text == "" {
 			continue
 		}
-		if ig.Source != "" && !globFold(ig.Source, e.Source) {
+		if ig.Source != "" && !sourceMatch(ig.Source, e) {
 			continue
 		}
 		if len(ig.IDs) > 0 && !slices.Contains(ig.IDs, e.ID) {
 			continue
 		}
-		if ig.Text != "" && !containsFold(e.Message, ig.Text) {
+		if !textMatch(e.Message, ig.Text) {
 			continue
 		}
 		return ig, true
@@ -328,15 +415,18 @@ func Ignored(list []model.EventIgnore, e model.EventEntry) (model.EventIgnore, b
 	return model.EventIgnore{}, false
 }
 
-// Query is what the agent asks the event log for one rule: XPath is run against each log.
-// It narrows by source, ID, level and time; Match checks every filter again (patterns and
-// text are only checked there).
+// Query is what the agent asks the system log for one rule. Windows: XPath is run against
+// each log. Linux: journalctl with Args (plus --since) and, when the rule filters by text,
+// --grep Grep. Both narrow the result; Match checks every filter again.
 type Query struct {
 	ID    string   `json:"id"`
-	Logs  []string `json:"logs"`
-	XPath string   `json:"xpath"`
-	Max   int      `json:"max"`  // events per log
-	Text  bool     `json:"text"` // the message of every event is needed (text filters)
+	Logs  []string `json:"logs,omitempty"`
+	XPath string   `json:"xpath,omitempty"`
+	Max   int      `json:"max"`            // events per log
+	Text  bool     `json:"text,omitempty"` // Windows: the message of every event is needed (text filters)
+	Args  []string `json:"args,omitempty"` // Linux: journalctl arguments without --since and --grep
+	Grep  string   `json:"grep,omitempty"` // Linux: case-insensitive regular expression for --grep
+	Hours int      `json:"hours,omitempty"`
 }
 
 // maxTerms keeps the XPath short: the event log rejects queries with many expressions.
@@ -392,9 +482,13 @@ func Queries(rules []model.EventRule, ignore []model.EventIgnore) []Query {
 	textIgnore := slices.ContainsFunc(ignore, func(ig model.EventIgnore) bool { return ig.Text != "" })
 	out := make([]Query, 0, len(rules))
 	for _, r := range rules {
-		out = append(out, Query{ID: r.ID, Logs: slices.Clone(r.Logs), XPath: XPath(r), Text: r.Text != "" || textIgnore,
-			// room for events dropped by exceptions
-			Max: min(maxQueryEvents, max(100, 3*r.Count))})
+		// room for events dropped by exceptions
+		n := min(maxQueryEvents, max(100, 3*r.Count))
+		if RuleOS(r) == OSLinux {
+			out = append(out, Query{ID: r.ID, Max: n, Hours: max(1, r.Hours), Args: JournalArgs(r, n), Grep: grepOf(r.Text)})
+			continue
+		}
+		out = append(out, Query{ID: r.ID, Logs: slices.Clone(r.Logs), XPath: XPath(r), Text: r.Text != "" || textIgnore, Max: n})
 	}
 	return out
 }
@@ -435,7 +529,14 @@ func intList(list []int) string {
 
 // Describe summarises the filters of a rule in German.
 func Describe(r model.EventRule) string {
+	os := RuleOS(r)
 	parts := []string{strings.Join(r.Logs, ", ")}
+	if os == OSLinux {
+		parts[0] = "Journal"
+		if !slices.Contains(r.Logs, LogJournal) {
+			parts[0] = "Kernel-Meldungen"
+		}
+	}
 	if len(r.Sources) > 0 {
 		parts = append(parts, plural(len(r.Sources), "Quelle ", "Quellen ")+strings.Join(r.Sources, ", "))
 	}
@@ -445,12 +546,12 @@ func Describe(r model.EventRule) string {
 	if len(r.Levels) > 0 {
 		names := make([]string, len(r.Levels))
 		for i, l := range r.Levels {
-			names[i] = LevelNames[l]
+			names[i] = levelNames(os)[l]
 		}
 		parts = append(parts, strings.Join(names, ", "))
 	}
-	if r.Text != "" {
-		parts = append(parts, "Text „"+r.Text+"“")
+	if alt := Alternatives(r.Text); len(alt) > 0 {
+		parts = append(parts, "Text „"+strings.Join(alt, "“ oder „")+"“")
 	}
 	return strings.Join(parts, " · ")
 }
@@ -487,7 +588,10 @@ func firstLine(s string, n int) string {
 
 // Summary is one line about an event ("14.11. 03:12 disk (7): Das Gerät … hat einen fehlerhaften Block.").
 func Summary(e model.EventEntry) string {
-	s := time.Unix(e.Time, 0).Local().Format("02.01. 15:04") + " " + e.Source + " (" + strconv.Itoa(e.ID) + ")"
+	s := time.Unix(e.Time, 0).Local().Format("02.01. 15:04") + " " + e.Source
+	if e.Log != LogJournal && e.Log != LogKernel { // Windows: with the event ID
+		s += " (" + strconv.Itoa(e.ID) + ")"
+	}
 	if m := firstLine(e.Message, 160); m != "" {
 		s += ": " + m
 	}
