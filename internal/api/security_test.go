@@ -21,6 +21,7 @@ func TestRouteAccess(t *testing.T) {
 		"GET /api/session": true, "POST /api/login": true, "POST /api/logout": true, "POST /api/setup": true,
 		"GET /agent/install.sh": true, "GET /agent/install.ps1": true, "GET /agent/download/{os}/{arch}": true,
 		"GET /agent/version": true, "POST /agent/v1/register": true,
+		"GET /status/{token}": true, "GET /api/status/{token}": true,
 	}
 	seen := 0
 	for _, rt := range s.routeList {

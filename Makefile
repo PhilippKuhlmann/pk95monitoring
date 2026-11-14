@@ -33,6 +33,7 @@ check: vet
 	done
 	@files="$$(gofmt -l .)"; if [ -n "$$files" ]; then echo "not gofmt-formatted:"; echo "$$files"; exit 1; fi
 	node --check web/app.js
+	node --check web/status.js
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o pk95monitoring .

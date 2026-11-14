@@ -105,6 +105,9 @@ func New(st *store.Store, opt Options) (*Core, error) {
 	for _, r := range nrules {
 		c.nrules[r.ID] = r
 	}
+	if err := st.GetSetting(keyStatusPage, &c.status); err != nil {
+		return nil, fmt.Errorf("status page: %w", err)
+	}
 	if err := st.GetSetting(keyDigests, &c.digests); err != nil {
 		return nil, fmt.Errorf("digests: %w", err)
 	}

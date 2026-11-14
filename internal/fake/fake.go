@@ -113,6 +113,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 		log.Printf("demo: back-fill: %v", err)
 	}
 	createWindows(c)
+	createStatusPage(c, now)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
@@ -173,6 +174,58 @@ func createWindows(c *core.Core) {
 	}
 }
 
+// createStatusPage sets up the status page on the first demo start: services from the demo
+// devices, the two maintenance windows announced and a few past problems for the history.
+func createStatusPage(c *core.Core, now time.Time) {
+	if c.StatusPage().Token != "" {
+		return
+	}
+	p := core.StatusPage{Enabled: true, Title: "IT-Status Muster GmbH",
+		Intro: "Bei Störungen erreichen Sie uns unter 0221 123456-0 oder support@muster-it.example.",
+		Components: []core.StatusComponent{
+			{Name: "Anmeldung und Benutzerkonten", Note: "Windows-Anmeldung, Kennwörter", Mode: core.StatusAll, Devices: []string{"demo-dc01"}},
+			{Name: "Dateiablage", Note: "Laufwerke S: und P:", Devices: []string{"demo-fs01", "demo-nas"}},
+			{Name: "Warenwirtschaft", Note: "ERP und Datenbank", Devices: []string{"demo-hv01", "demo-db01"}},
+			{Name: "Webseite", Note: "www.muster-gmbh.com", Devices: []string{"demo-web", "demo-web01"}},
+			{Name: "Netzwerk und Internet", Folders: []string{groupNet}},
+			{Name: "Drucken", Mode: core.StatusAll, Devices: []string{"demo-printer"}},
+		}}
+	if _, errs, err := c.SaveStatusPage(p); err != nil || len(errs) > 0 {
+		log.Printf("demo: status page: %v %v", errs, err)
+		return
+	}
+	for _, w := range c.Windows() {
+		if (w.Name == "Patchday Server" || w.Name == "Neustart Netzwerk") && !w.Public {
+			w.MaintWindow.Public = true
+			if _, errs, err := c.SaveWindow(w.MaintWindow); err != nil || len(errs) > 0 {
+				log.Printf("demo: window %s: %v %v", w.Name, errs, err)
+			}
+		}
+	}
+	day := func(d, h, m int) int64 {
+		t := now.AddDate(0, 0, -d)
+		return time.Date(t.Year(), t.Month(), t.Day(), h, m, 0, 0, t.Location()).Unix()
+	}
+	for _, a := range []model.Alert{
+		{DeviceID: "demo-fs01", DeviceName: "fs01", CheckKey: "reach", CheckName: "Erreichbarkeit", Severity: model.StateCrit,
+			Message: "Agent meldet sich nicht", Started: day(5, 14, 10), Ended: day(5, 14, 32)},
+		{DeviceID: "demo-web", DeviceName: "Webseite", CheckKey: "net:http01", CheckName: "Startseite", Severity: model.StateCrit,
+			Message: "HTTP 503", Started: day(3, 9, 5), Ended: day(3, 9, 50)},
+		{DeviceID: "demo-printer", DeviceName: "Drucker Empfang", CheckKey: "snmp:printer", CheckName: "Drucker", Severity: model.StateWarn,
+			Message: "Papierstau", Started: day(1, 11, 20), Ended: day(1, 13, 5)},
+		{DeviceID: "demo-switch", DeviceName: "Switch Serverraum", CheckKey: "reach", CheckName: "Erreichbarkeit", Severity: model.StateCrit,
+			Message: "Keine Antwort", Started: day(2, 6, 0), Ended: day(2, 6, 4)},
+	} {
+		id, err := c.St.OpenAlert(a)
+		if err == nil {
+			err = c.St.CloseAlert(id, a.Ended)
+		}
+		if err != nil {
+			log.Printf("demo: alert %s: %v", a.DeviceID, err)
+		}
+	}
+}
+
 // demoPage is the web site of the network checks.
 func demoPage(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/rdap/") {
@@ -210,6 +263,9 @@ const demoUPSName = "ups"
 // are updated on every start because the simulated servers get new ports and certificates.
 func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, bmc *fakeredfish.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
 	ts := now.Unix()
+	// New demo devices date back to the start of the back-filled history, so reports and the
+	// status page history cover it.
+	created := now.AddDate(0, 0, -max(BackfillDays, 0)).Unix()
 	keep := func(id string, d model.Device) model.Device {
 		// Keep what the user changed in the UI (name, group, thresholds …).
 		if old, err := c.Device(id); err == nil {
@@ -243,7 +299,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 	cfg := pve.Config()
 	pd := model.Device{ID: "demo-pve", Name: "Proxmox-Cluster", Type: model.TypeProxmox, Host: pve.Host(),
 		Group: groupServer, Enabled: true, Interval: 30, Proxmox: &cfg,
-		Notes: "Simulierter Cluster mit drei Knoten (Demo).", Created: ts, Updated: ts}
+		Notes: "Simulierter Cluster mit drei Knoten (Demo).", Created: created, Updated: ts}
 	if err := c.ImportDevice(keep(pd.ID, pd)); err != nil {
 		return err
 	}
@@ -251,7 +307,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 	snmpDev := func(id, name, host, group, profile string) model.Device {
 		return model.Device{ID: id, Name: name, Type: model.TypeSNMP, Host: host, Group: group, Enabled: true,
 			Interval: 30, SNMP: &model.SNMPConfig{Version: "2c", Port: 161, Community: "public", Profile: profile},
-			Created: ts, Updated: ts}
+			Created: created, Updated: ts}
 	}
 	// The switch alarms only when one of its named ports (uplink, servers, NAS, UPS) loses
 	// its link; the free ports at the end are down and stay OK ("Kein Link").
@@ -275,7 +331,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 	}
 
 	nd := model.Device{ID: "demo-nut", Name: "USV Technik (UniFi)", Type: model.TypeNUT, Host: ups.Host(), Group: groupInfra,
-		Enabled: true, Interval: 30, Created: ts, Updated: ts,
+		Enabled: true, Interval: 30, Created: created, Updated: ts,
 		Notes: "Simulierte UniFi UPS 2U am NUT-Server (Demo).",
 		NUT:   &model.NUTConfig{Port: ups.Port(), UPS: demoUPSName}}
 	if err := c.ImportDevice(keep(nd.ID, nd)); err != nil {
@@ -284,7 +340,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 
 	vcfg := vbr.Config()
 	vd := model.Device{ID: "demo-veeam", Name: "Veeam Backup", Type: model.TypeVeeam, Host: vbr.Host(), Group: groupServer,
-		Enabled: true, Interval: 60, Created: ts, Updated: ts, Veeam: &vcfg,
+		Enabled: true, Interval: 60, Created: created, Updated: ts, Veeam: &vcfg,
 		Notes: "Simulierter Veeam Backup & Replication 12 (Demo): Jobs mit Erfolg, Warnung und Fehler, zwei Repositories."}
 	if err := c.ImportDevice(keep(vd.ID, vd)); err != nil {
 		return err
@@ -292,7 +348,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 
 	pcfg := pbsSrv.Config()
 	bd := model.Device{ID: "demo-pbs", Name: "Backup-Server (PBS)", Type: model.TypePBS, Host: pbsSrv.Host(), Group: groupServer,
-		Enabled: true, Interval: 60, Created: ts, Updated: ts, PBS: &pcfg,
+		Enabled: true, Interval: 60, Created: created, Updated: ts, PBS: &pcfg,
 		Notes: "Simulierter Proxmox Backup Server 3 (Demo): zwei Datastores, eine fehlgeschlagene Verifizierung, ein fehlgeschlagener Sync-Job."}
 	if err := c.ImportDevice(keep(bd.ID, bd)); err != nil {
 		return err
@@ -300,7 +356,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 
 	rcfg := bmc.Config()
 	rd := model.Device{ID: "demo-idrac", Name: "iDRAC hv01", Type: model.TypeRedfish, Host: bmc.Host(), Group: groupServer,
-		Enabled: true, Interval: 60, Created: ts, Updated: ts, Redfish: &rcfg,
+		Enabled: true, Interval: 60, Created: created, Updated: ts, Redfish: &rcfg,
 		Notes: "Simulierter Dell iDRAC 9 eines PowerEdge R650 (Demo): Netzteil 2 ohne Eingangsstrom, eine SSD mit vorhergesagtem Ausfall."}
 	if err := c.ImportDevice(keep(rd.ID, rd)); err != nil {
 		return err
@@ -311,7 +367,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 	// chain) would be red forever. The HTTPS check accepts it and still reports the days left
 	// (cert.days) and the issuer, which is what the demo should show.
 	wd := model.Device{ID: "demo-web", Name: "Webseite", Type: model.TypeNet, Host: "127.0.0.1", Group: groupWeb,
-		Enabled: true, Interval: 30, Created: ts, Updated: ts,
+		Enabled: true, Interval: 30, Created: created, Updated: ts,
 		Notes: "Prüft einen lokalen Test-Webserver (Demo): Startseite mit Suchbegriff, Zertifikatslaufzeit, HTTP-Port, Ping und Domain-Ablauf.",
 		Checks: []model.NetCheck{
 			{ID: "http01", Type: model.NetHTTP, Name: "Startseite", Target: web.URL + "/", Keyword: "Willkommen", IgnoreTLS: true},
@@ -325,7 +381,7 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 	}
 
 	for _, a := range agents {
-		if err := importOrUpgrade(c, a.device(ts), ts); err != nil {
+		if err := importOrUpgrade(c, a.device(created, ts), ts); err != nil {
 			return err
 		}
 	}

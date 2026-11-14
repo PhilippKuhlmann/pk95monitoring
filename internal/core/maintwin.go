@@ -57,8 +57,10 @@ type MaintWindow struct {
 	Devices []string `json:"devices"`
 	Folders []string `json:"folders"`
 	Note    string   `json:"note"`
-	Created int64    `json:"created"`
-	Updated int64    `json:"updated"`
+	// Public: announced on the status page (statuspage.go) with name and note.
+	Public  bool  `json:"public"`
+	Created int64 `json:"created"`
+	Updated int64 `json:"updated"`
 }
 
 // WindowView is a maintenance window as the API lists it.
@@ -294,25 +296,7 @@ func inGroup(g, f string) bool { return g == f || strings.HasPrefix(g, f+"/") }
 // windowMatches reports whether a window applies to device d (directly, by folder or through
 // its parent). Caller holds c.mu.
 func (c *Core) windowMatches(w MaintWindow, d model.Device) bool {
-	match := func(x model.Device) bool {
-		if slices.Contains(w.Devices, x.ID) {
-			return true
-		}
-		for _, f := range w.Folders {
-			if inGroup(x.Group, f) {
-				return true
-			}
-		}
-		return false
-	}
-	if match(d) {
-		return true
-	}
-	if d.ParentID == "" {
-		return false
-	}
-	p, ok := c.devices[d.ParentID]
-	return ok && match(p)
+	return c.targetMatches(w.Devices, w.Folders, d)
 }
 
 // windowView builds the API view of a window. Caller holds c.mu.

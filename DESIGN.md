@@ -477,6 +477,31 @@ first: for every fill level metric with a rate, `forecast.days` = (100 − curre
 already have the fact "Voll voraussichtlich" (PBS datastores) are left alone. Default threshold: below 30 warn,
 below 7 crit (label "Voll in"). The demo disk E: of fs01 grows 1.1 points per day from the demo start.
 
+## Status page (`core/statuspage.go`)
+
+A public, read-only page for the customer behind a secret link. Configuration `StatusPage` in settings key
+`status_page`: `{enabled, token (32 characters, set by the server, kept on save), title ("" = instance name), intro,
+notice, notice_level (info|warn|crit), notice_at (set when notice or level changes), components:[{id, name, note,
+mode (outage|all), devices:[id], folders:[path]}] (≤ 30), updated}`. Members of a service: its enabled devices,
+the devices in its folders (and subfolders) and the agents attached to either (`targetMatches`, shared with the
+maintenance windows).
+
+Current state per service (members in maintenance or without status are left out). `outage`: a member whose
+`reach` check is crit is down (a member without a reach check, e.g. a net device, when its state is crit); some down = warn
+"Teilweise gestört", all down = crit "Störung". `all`: device state crit = "Störung", warn = "Eingeschränkt".
+Otherwise "Wartungsarbeiten" (any member in maintenance, with `until`), "Betriebsbereit" or "Keine aktuellen
+Daten". `since` = earliest start of the problem. History: 30 local days from the alerts (separate checks left out):
+`reach` alerts are disruptions, with `all` (or for a member without a reach check) also crit alerts, with `all` warn alerts limitations; unions over the members;
+days before the oldest member's creation are `none`. Availability = covered time without disruption. Public
+maintenance: enabled windows with `public: true` that run or start within 14 days, with the services they affect.
+Overall: crit (all services crit = "Größere Störung") > warn > maint > ok; unknown only when nothing else is known.
+
+`PublicStatus` = `{title, intro?, notice?:{level, text, at}, state, text, components:[{name, note?, state, text,
+since?, until?, availability (null without members), history:[{day, state, down, limited}], members? (preview
+only)}], maintenance:[{name, note?, start, end, running, components:[name]}], days, updated}` – no device ids,
+names, hosts, checks or messages. Cached 30 s; saving or a new token drops the cache. Events "Statusseite
+eingeschaltet/ausgeschaltet", "Hinweis auf der Statusseite", "Neuer Link für die Statusseite".
+
 ## Redfish (server hardware)
 
 Device type `redfish` – an ordinary device (device list, state, inventory). `RedfishConfig {port (443), username,
@@ -545,6 +570,9 @@ notify passwords/tokens, central token) are never sent back: they come as `""` p
 Public:
 - `GET /api/session` → `{setup, version, instance, user?}` (`user` only with a valid session)
 - `POST /api/login {username, password}` → `{user}` (rate limited: 10 failures / 15 min per client); `POST /api/logout` → `{ok}`; `POST /api/setup {code, username, password}` → `{user}`
+- `GET /status/{token}` → `web/status.html` (404 with the same page for an unknown token or a switched-off page;
+  `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`); `GET /api/status/{token}` → PublicStatus (404 likewise;
+  60 requests per minute and client like the external API). `web/status.js` renders it and reloads every minute.
 
 Authenticated:
 - `GET /api/overview` → `{counts:{ok,warn,crit,unknown,maintenance,disabled}, devices:[DeviceRow], alerts:[Alert active], events:[Event ×10], groups:[string]}`
@@ -574,6 +602,13 @@ Authenticated:
   months), offset (days, −7…14, monthly with week), start ("22:00", local time), minutes (5…10080), devices:[id],
   folders:[path], note, created, updated}`; `WindowView` adds `schedule` (German text), `active_until`, `next`,
   `matches`. `GET /api/devices/{id}` has `windows:[WindowView]` (enabled windows of the device, by next start).
+  `public: true` announces the window on the status page.
+- `GET /api/statuspage` → `{page: StatusPage, path: "/status/<token>" ("" before the first save), url (with the
+  public URL, else ""), preview: PublicStatus with members}`; `PUT /api/statuspage` (StatusPage; the token is
+  ignored) → same (422 on title, intro, notice, notice_level, components, `components.N.name|note|mode|targets`);
+  `POST /api/statuspage/token` → same with a new token. Page `/statuspage` (nav "Statusseite"): settings with the
+  link (copy, "Neuer Link"), the services (dialog with mode and folder/device pick list, order arrows) and a
+  preview drawn by `PK95Status.render` from `status.js` (loaded by index.html too).
 - `GET /api/updates` → `{rows:[UpdateRow]}`: every `updates` / `pve:updates:<node>` check of the enabled devices,
   worst first – `{device_id, device, name, check_key, group, type, os, platform, state, acked, message, pending,
   security, age, failed (null when not reported), reboot, last_install, titles, updated}`.
@@ -775,7 +810,10 @@ failed update; and with event logs evaluated by the real rules (`fake/events.go`
 limit and a locked account, fs01 a crashed "Windows Search" service plus DCOM 10016 and Schannel noise), and a net device "Webseite" with HTTP, TCP, ping and two domain checks against local httptest
 servers (the demo page also serves an RDAP registry via `netcheck.SetRDAPBootstrap`: muster-gmbh.com expires in
 26 days, muster-gmbh.de has no date). On the first start two maintenance windows are created ("Patchday Server",
-"Neustart Netzwerk"). Existing demo databases get new demo devices (keep/import logic keeps user changes). Values
+"Neustart Netzwerk"), and the status page "IT-Status Muster GmbH" with six services (both maintenance windows announced; past
+problems for the history: fs01 down 22 min 5 days ago, the web page down 45 min 3 days ago, the switch down 4 min 2
+days ago, a paper jam yesterday). New demo devices are created BackfillDays (7) back, so history and reports
+cover the back-filled week. Existing demo databases get new demo devices (keep/import logic keeps user changes). Values
 move realistically (sine + noise). Every demo device without history (all on the first start, new ones on later
 starts) is back-filled for 7 days so charts show data. `fake.DiscoveryAfter` (3 min) after the start the cluster
 gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections have something to show.

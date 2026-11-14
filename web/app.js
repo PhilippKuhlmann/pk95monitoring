@@ -509,6 +509,7 @@ const NAV = [
   { path: "/reports", label: "Berichte", icon: "chart" },
   { head: "Einrichtung" },
   { path: "/maintenance", label: "Wartungsfenster", icon: "wrench" },
+  { path: "/statuspage", label: "Statusseite", icon: "globe" },
   { path: "/agents", label: "Agents", icon: "download" },
   { path: "/settings", label: "Einstellungen", icon: "cog" },
 ];
@@ -4648,20 +4649,41 @@ function windowTargets(w, names) {
   return parts.join(", ");
 }
 
+// targetPicker is the folder/device list of a dialog (field "targets"); sel holds "f:<folder>"
+// and "d:<id>". bindTargetPicker wires search and counter, pickedTargets reads the choice.
+function targetPicker(devices, groups, sel, label = "Gilt für") {
+  const items = [...allFolders(groups).map((f) => ["f:" + f, f, "Ordner", true]), ...devices.map((d) => ["d:" + d.id, d.name, d.group || "", false])];
+  return `<span class="fl">${esc(label)}<span class="req" aria-hidden="true">*</span> <span class="muted small" data-tcount></span></span>
+    <input type="search" data-tfind placeholder="Ordner oder Gerät suchen …" aria-label="Ordner oder Gerät suchen">
+    <div class="pick-list mw-pick">${items.length ? items.map(([k, l, sub, isF]) => `<label class="check" data-tl="${esc((l + " " + sub).toLowerCase())}"><input type="checkbox" data-t="${esc(k)}" ${sel.has(k) ? "checked" : ""}><span>${isF ? icon("folder", "ic-inline") : ""}<b>${esc(l)}</b>${sub && !isF ? ` <span class="muted small">${esc(sub)}</span>` : ""}${isF ? ` <span class="muted small">mit Unterordnern</span>` : ""}</span></label>`).join("") : `<span class="muted">Noch keine Geräte.</span>`}</div>
+    <span class="hint">Ein Ordner gilt auch für Geräte, die später hineinkommen. Angehängte Agents sind immer dabei.</span><span class="err" hidden></span>`;
+}
+function bindTargetPicker(dl) {
+  const count = () => {
+    const n = qsa("[data-t]:checked", dl).length;
+    qs("[data-tcount]", dl).textContent = n ? `(${n} gewählt)` : "";
+  };
+  qsa("[data-t]", dl).forEach((x) => x.addEventListener("change", count));
+  count();
+  qs("[data-tfind]", dl).addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    qsa("[data-tl]", dl).forEach((l) => { l.hidden = q && !l.dataset.tl.includes(q); });
+  });
+}
+function pickedTargets(dl) {
+  const picked = qsa("[data-t]:checked", dl).map((x) => x.dataset.t);
+  return { folders: picked.filter((k) => k.startsWith("f:")).map((k) => k.slice(2)), devices: picked.filter((k) => k.startsWith("d:")).map((k) => k.slice(2)) };
+}
+const targetSet = (x) => new Set([...(x.folders || []).map((f) => "f:" + f), ...(x.devices || []).map((id) => "d:" + id)]);
+
 // windowDialog creates (w = null) or edits a maintenance window.
 function windowDialog(w, devices, groups, done) {
   w = w || { enabled: true, repeat: "monthly", week: 2, weekdays: [2], offset: 0, day: 1, start: "22:00", minutes: 240, devices: [], folders: [], note: "" };
-  const folders = allFolders(groups);
-  const sel = new Set([...(w.folders || []).map((f) => "f:" + f), ...(w.devices || []).map((id) => "d:" + id)]);
   const mmode = w.repeat === "monthly" && !w.week ? "day" : "week";
   const wd1 = (w.weekdays || [])[0] ?? 2;
   const chips = `<span class="fl">Wochentage</span><div class="wd-chips">${WDAYS.map(([d, sh, l]) =>
     `<label class="wd-chip" title="${l}"><input type="checkbox" data-wd value="${d}" ${(w.weekdays || []).includes(d) ? "checked" : ""}><span>${sh}</span></label>`).join("")}</div><span class="err" hidden></span>`;
-  const items = [...folders.map((f) => ["f:" + f, f, "Ordner", true]), ...devices.map((d) => ["d:" + d.id, d.name, d.group || "", false])];
-  const targets = `<span class="fl">Gilt für<span class="req" aria-hidden="true">*</span> <span class="muted small" data-tcount></span></span>
-    <input type="search" data-tfind placeholder="Ordner oder Gerät suchen …" aria-label="Ordner oder Gerät suchen">
-    <div class="pick-list mw-pick">${items.length ? items.map(([k, l, sub, isF]) => `<label class="check" data-tl="${esc((l + " " + sub).toLowerCase())}"><input type="checkbox" data-t="${esc(k)}" ${sel.has(k) ? "checked" : ""}><span>${isF ? icon("folder", "ic-inline") : ""}<b>${esc(l)}</b>${sub && !isF ? ` <span class="muted small">${esc(sub)}</span>` : ""}${isF ? ` <span class="muted small">mit Unterordnern</span>` : ""}</span></label>`).join("") : `<span class="muted">Noch keine Geräte.</span>`}</div>
-    <span class="hint">Ein Ordner gilt auch für Geräte, die später hineinkommen. Angehängte Agents sind immer dabei.</span><span class="err" hidden></span>`;
+  const targets = targetPicker(devices, groups, targetSet(w));
   const d = formDialog({
     title: w.id ? "Wartungsfenster bearbeiten" : "Neues Wartungsfenster", ic: "wrench", button: "Speichern",
     text: "Während des Fensters gibt es für die Geräte keine Alarme und Benachrichtigungen, und die Zeit zählt im Bericht als verfügbar. Die Werte werden weiter aufgezeichnet.",
@@ -4680,6 +4702,7 @@ function windowDialog(w, devices, groups, done) {
       { type: "html", name: "targets", wide: true, html: targets },
       { name: "note", label: "Notiz", value: w.note, placeholder: "z. B. Patchday, Neustarts erlaubt", wide: true },
       { name: "enabled", label: "Aktiv", type: "checkbox", value: w.enabled, wide: true, hint: "Ausgeschaltete Fenster bleiben gespeichert, starten aber keine Wartung." },
+      { name: "public", label: "Auf der Statusseite ankündigen", type: "checkbox", value: w.public, wide: true, hint: "Name, Notiz und Zeit stehen dort ab 14 Tage vorher – mit den betroffenen Diensten." },
     ],
     onMount: (dl) => {
       const f = qs("form", dl);
@@ -4692,23 +4715,12 @@ function windowDialog(w, devices, groups, done) {
       };
       qsa('[name="repeat"], [name="mmode"]', dl).forEach((x) => x.addEventListener("change", show));
       show();
-      const count = () => {
-        const n = qsa("[data-t]:checked", dl).length;
-        qs("[data-tcount]", dl).textContent = n ? `(${n} gewählt)` : "";
-      };
-      qsa("[data-t]", dl).forEach((x) => x.addEventListener("change", count));
-      count();
-      qs("[data-tfind]", dl).addEventListener("input", (e) => {
-        const q = e.target.value.trim().toLowerCase();
-        qsa("[data-tl]", dl).forEach((l) => { l.hidden = q && !l.dataset.tl.includes(q); });
-      });
+      bindTargetPicker(dl);
     },
     submit: async (v, dl) => {
-      const picked = qsa("[data-t]:checked", dl).map((x) => x.dataset.t);
       const body = {
-        name: v.name, enabled: v.enabled, repeat: v.repeat, start: v.start, minutes: Math.round((v.hours || 0) * 60), note: v.note,
-        folders: picked.filter((k) => k.startsWith("f:")).map((k) => k.slice(2)),
-        devices: picked.filter((k) => k.startsWith("d:")).map((k) => k.slice(2)), weekdays: [],
+        name: v.name, enabled: v.enabled, public: v.public, repeat: v.repeat, start: v.start, minutes: Math.round((v.hours || 0) * 60), note: v.note,
+        ...pickedTargets(dl), weekdays: [],
       };
       if (v.repeat === "once") body.date = v.date;
       if (v.repeat === "weekly") body.weekdays = qsa("[data-wd]:checked", dl).map((x) => Number(x.value));
@@ -4745,7 +4757,7 @@ PAGES["/maintenance"] = async (el, token) => {
       `<button class="btn" type="button" data-new>${icon("plus")} Wartungsfenster</button>`) +
       (list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp mw-table"><thead><tr><th>Name</th><th>Zeitplan</th><th>Gilt für</th><th>Status</th><th>Nächstes Mal</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
         ${list.map((w) => `<tr>
-          <td data-l="Name"><b>${esc(w.name)}</b>${w.note ? `<div class="muted small">${esc(w.note)}</div>` : ""}</td>
+          <td data-l="Name"><b>${esc(w.name)}</b>${w.public ? ` ${pill("Statusseite", "blue")}` : ""}${w.note ? `<div class="muted small">${esc(w.note)}</div>` : ""}</td>
           <td data-l="Zeitplan">${esc(w.schedule)}</td>
           <td data-l="Gilt für">${windowTargets(w, names) || "—"}<div class="muted small">${w.matches} ${w.matches === 1 ? "Gerät" : "Geräte"}</div></td>
           <td data-l="Status">${windowState(w)}</td>
@@ -4761,6 +4773,105 @@ PAGES["/maintenance"] = async (el, token) => {
       const w = list.find((x) => x.id === b.dataset.del);
       if (!await confirmDialog({ title: `„${w.name}“ löschen?`, text: w.active_until > nowSec() ? "Das Fenster läuft gerade – die Wartung der Geräte endet damit sofort." : "" })) return;
       await run(b, async () => { await DEL(`/api/maintenance/${enc(w.id)}`); await reload(); }, "Wartungsfenster gelöscht.");
+    });
+  };
+  draw();
+};
+
+// ---------- status page ----------
+const SP_MODES = [
+  ["outage", "Nur Ausfälle", "Gestört, wenn ein Gerät nicht erreichbar ist oder sein Agent schweigt (Netzwerk-Checks: wenn einer kritisch ist). Fehlen nur einige Geräte: „Teilweise gestört“."],
+  ["all", "Alle Probleme", "Jeder kritische Alarm gilt als Störung, jede Warnung als Einschränkung – z. B. auch ein gestoppter Dienst oder eine gestörte Replikation."],
+];
+
+// statusComponentDialog creates (cp = null) or edits a service of the status page.
+function statusComponentDialog(cp, devices, groups, save) {
+  cp = cp || { mode: "outage", devices: [], folders: [] };
+  return formDialog({
+    title: cp.name ? `Dienst „${cp.name}“` : "Neuer Dienst", ic: "globe",
+    text: "Ein Dienst fasst die Geräte zusammen, die deine Kunden als eine Sache kennen – z. B. „E-Mail“ oder „Warenwirtschaft“. Auf der Statusseite stehen nur Name und Beschreibung, nie die Geräte.",
+    fields: [
+      { name: "name", label: "Name", value: cp.name, required: true, placeholder: "z. B. Dateiablage", wide: true },
+      { name: "note", label: "Beschreibung (optional)", value: cp.note, placeholder: "z. B. Laufwerke S: und P:", wide: true },
+      { name: "mode", label: "Als gestört zeigen bei", type: "radio", value: cp.mode, options: SP_MODES },
+      { type: "html", name: "targets", wide: true, html: targetPicker(devices, groups, targetSet(cp), "Geräte dahinter") },
+    ],
+    onMount: bindTargetPicker,
+    submit: (v, dl) => save({ ...cp, name: v.name, note: v.note, mode: v.mode, ...pickedTargets(dl) }),
+  });
+}
+
+PAGES["/statuspage"] = async (el, token) => {
+  let [data, dv] = await Promise.all([GET("/api/statuspage"), GET("/api/devices")]);
+  if (token !== pageToken) return;
+  const devices = (dv.devices || []).slice().sort(byName);
+  const names = Object.fromEntries(devices.map((d) => [d.id, d.name]));
+  // put stores the page with changed components (idx: the edited one, for its field errors).
+  const put = async (body, idx) => {
+    try { data = await PUT("/api/statuspage", body); }
+    catch (err) { throw idx === undefined ? err : stripErr(err, `components.${idx}`); }
+    if (token === pageToken) draw();
+  };
+  const saveComponents = (list, idx) => put({ ...data.page, components: list }, idx);
+  const draw = () => {
+    const p = data.page, comps = p.components || [];
+    const link = data.path ? (data.url || location.origin + data.path) : "";
+    el.innerHTML = pageHead("Statusseite", "Eine öffentliche Seite für deine Kunden: ob ihre Dienste laufen, wie die letzten 30 Tage aussahen und welche Wartung ansteht – ohne Gerätenamen, Adressen oder Details.",
+      link && p.enabled ? `<a class="btn gray" href="${esc(link)}" target="_blank" rel="noopener">${icon("external")} Statusseite öffnen</a>` : "") +
+      `<div class="grid set-grid"><div>
+        <div class="panel"><div class="panel-head"><div class="panel-title">Seite</div><div class="actions">${p.enabled ? pill("Öffentlich", "green", true) : pill("Aus")}</div></div>
+          <form class="form" data-spform novalidate><div class="form-error" hidden></div>
+            <div class="form-grid">
+              ${field({ name: "enabled", label: "Statusseite einschalten", type: "checkbox", value: p.enabled, wide: true, hint: "Wer den Link kennt, sieht die Seite – ohne Anmeldung. Ausgeschaltet zeigt der Link nichts an." })}
+              ${field({ name: "title", label: "Überschrift", value: p.title, placeholder: state.instance || "Systemstatus", wide: true, hint: "Leer = der Instanzname." })}
+              ${field({ name: "intro", label: "Einleitung (optional)", type: "textarea", rows: 2, value: p.intro, placeholder: "z. B. Bei Störungen erreichen Sie uns unter 0123 456789.", wide: true })}
+              ${field({ name: "notice", label: "Aktueller Hinweis (optional)", type: "textarea", rows: 3, value: p.notice, placeholder: "z. B. Der Internetanbieter hat eine Störung. Wir sind dran und melden uns.", wide: true, hint: p.notice_at ? `Steht seit ${fmtTime(p.notice_at, true)} oben auf der Seite. Leeren, um ihn zu entfernen.` : "Steht oben auf der Seite, bis du ihn wieder leerst." })}
+              ${field({ name: "notice_level", label: "Art des Hinweises", type: "select", value: p.notice_level || "info", options: [["info", "Hinweis"], ["warn", "Einschränkung"], ["crit", "Störung"]] })}
+              ${field({ type: "html", name: "components", wide: true, html: `<span class="err" hidden></span>` })}
+            </div>
+            <div class="flex"><button class="btn" type="submit">Speichern</button></div>
+          </form>
+          <div class="section mt"><div class="section-title">Link</div>
+            ${link ? `${codeBlock(link)}<div class="flex mt"><button class="btn gray sm" type="button" data-rotate>${icon("refresh")} Neuer Link</button><span class="muted small">Macht den bisherigen Link ungültig.</span></div>`
+              : `<p class="muted small">Der Link entsteht beim ersten Speichern.</p>`}
+          </div></div>
+        <div class="panel"><div class="panel-head"><div class="panel-title">Dienste</div><div class="actions"><button class="btn sm" type="button" data-sc-new>${icon("plus")} Dienst</button></div></div>
+          ${comps.length ? `<p class="panel-intro">In dieser Reihenfolge auf der Seite. Wartungsfenster erscheinen dort, wenn sie „Auf der Statusseite ankündigen“ haben (<a href="/maintenance" data-go>Wartungsfenster</a>).</p>
+            ${comps.map((c, i) => `<div class="spc-row"><div class="grow"><b>${esc(c.name)}</b> ${pill(c.mode === "all" ? "Alle Probleme" : "Nur Ausfälle")}${c.note ? `<div class="muted small">${esc(c.note)}</div>` : ""}<div class="small">${windowTargets(c, names) || "—"}</div></div>
+              <div class="flex nowrap"><button class="ib spc-up" type="button" data-sc-up="${i}" title="Nach oben" aria-label="${esc(c.name)} nach oben" ${i === 0 ? "disabled" : ""}>${icon("chevron-down")}</button><button class="ib" type="button" data-sc-down="${i}" title="Nach unten" aria-label="${esc(c.name)} nach unten" ${i === comps.length - 1 ? "disabled" : ""}>${icon("chevron-down")}</button>
+              <button class="ib" type="button" data-sc-edit="${i}" title="Bearbeiten" aria-label="${esc(c.name)} bearbeiten">${icon("pencil")}</button><button class="ib" type="button" data-sc-del="${i}" title="Löschen" aria-label="${esc(c.name)} löschen">${icon("trash")}</button></div></div>`).join("")}`
+            : empty("Noch keine Dienste", "Lege an, was deine Kunden kennen – z. B. „E-Mail“, „Dateiablage“ oder „Internet“ – und ordne die Geräte dahinter zu.", `<button class="btn" type="button" data-sc-new2>${icon("plus")} Dienst anlegen</button>`, "globe")}
+        </div></div>
+        <div class="panel"><div class="panel-head"><div class="panel-title">Vorschau</div></div>
+          <p class="panel-intro">So sieht es gerade aus. Die Zahl der Geräte siehst nur du.</p>
+          <div class="sp-preview" data-sp-preview></div></div>
+      </div>`;
+    bindCopy(el);
+    if (window.PK95Status) window.PK95Status.render(qs("[data-sp-preview]", el), data.preview, { preview: true });
+    formSubmit(qs("[data-spform]", el), async (v) => {
+      await put({ ...p, enabled: v.enabled, title: v.title, intro: v.intro, notice: v.notice, notice_level: v.notice_level, components: comps });
+      toast(v.enabled ? "Gespeichert – die Statusseite ist über ihren Link erreichbar." : "Gespeichert.");
+    });
+    const rot = qs("[data-rotate]", el);
+    if (rot) rot.onclick = async () => {
+      if (!await confirmDialog({ title: "Neuen Link erzeugen?", text: "Der bisherige Link funktioniert danach nicht mehr – wer ihn hat, braucht den neuen.", button: "Neuer Link", tone: "", ic: "refresh" })) return;
+      await run(rot, async () => { data = await POST("/api/statuspage/token", {}); draw(); }, "Neuer Link erzeugt.");
+    };
+    const edit = (i) => statusComponentDialog(i === undefined ? null : comps[i], devices, dv.groups, async (c) => {
+      const list = comps.slice();
+      if (i === undefined) list.push(c); else list[i] = c;
+      await saveComponents(list, i === undefined ? list.length - 1 : i);
+      toast("Dienst gespeichert.");
+    });
+    qsa("[data-sc-new], [data-sc-new2]", el).forEach((b) => b.onclick = () => edit());
+    qsa("[data-sc-edit]", el).forEach((b) => b.onclick = () => edit(+b.dataset.scEdit));
+    const move = (i, j) => { const list = comps.slice(); [list[i], list[j]] = [list[j], list[i]]; return saveComponents(list); };
+    qsa("[data-sc-up]", el).forEach((b) => b.onclick = () => run(b, () => move(+b.dataset.scUp, +b.dataset.scUp - 1)));
+    qsa("[data-sc-down]", el).forEach((b) => b.onclick = () => run(b, () => move(+b.dataset.scDown, +b.dataset.scDown + 1)));
+    qsa("[data-sc-del]", el).forEach((b) => b.onclick = async () => {
+      const i = +b.dataset.scDel;
+      if (!await confirmDialog({ title: `„${comps[i].name}“ löschen?`, text: "Der Dienst verschwindet von der Statusseite." })) return;
+      await run(b, () => saveComponents(comps.filter((_, k) => k !== i)), "Dienst gelöscht.");
     });
   };
   draw();

@@ -107,6 +107,9 @@ func (s *Server) routes() {
 	pub("POST /api/login", s.login)
 	pub("POST /api/logout", s.logout)
 	pub("POST /api/setup", s.setup)
+	// status page behind its secret link
+	pub("GET /status/{token}", s.statusHTML)
+	pub("GET /api/status/{token}", s.publicStatus)
 
 	a := func(pattern string, h http.HandlerFunc) {
 		s.routeList = append(s.routeList, route{pattern, "session"})
@@ -130,6 +133,9 @@ func (s *Server) routes() {
 	a("GET /api/updates", s.updates)
 	a("GET /api/expiry", s.expiry)
 	a("GET /api/backups", s.backups)
+	a("GET /api/statuspage", s.getStatusPage)
+	a("PUT /api/statuspage", s.putStatusPage)
+	a("POST /api/statuspage/token", s.rotateStatusToken)
 	a("GET /api/maintenance", s.listWindows)
 	a("POST /api/maintenance", s.saveWindow)
 	a("PUT /api/maintenance/{id}", s.saveWindow)

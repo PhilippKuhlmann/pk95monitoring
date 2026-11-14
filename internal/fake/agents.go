@@ -264,10 +264,10 @@ func (a *simAgent) selectServices(listed, central, ignore []string) []string {
 }
 
 // device is the demo device of the agent (as registration would create it).
-func (a *simAgent) device(ts int64) model.Device {
+func (a *simAgent) device(created, ts int64) model.Device {
 	return model.Device{ID: a.id, Name: a.name, Type: model.TypeAgent, Host: a.ip, Group: a.group, Enabled: true,
 		ParentID: a.parent, Node: a.node,
-		Checks: []model.NetCheck{}, Thresholds: []model.Threshold{}, Rules: slices.Clone(a.rules), Created: ts, Updated: ts,
+		Checks: []model.NetCheck{}, Thresholds: []model.Threshold{}, Rules: slices.Clone(a.rules), Created: created, Updated: ts,
 		Agent: &model.AgentConfig{AgentID: a.id + "-machine", OS: a.os, Platform: a.platform, PlatformVersion: a.ver,
 			Kernel: a.kernel, Arch: "amd64", Hostname: a.name, IPs: []string{a.ip},
 			Services: slices.Clone(a.services), IgnoreServices: []string{}}}

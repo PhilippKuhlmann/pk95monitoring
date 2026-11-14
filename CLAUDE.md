@@ -3,12 +3,12 @@
 Monitoring server (one Docker container per customer): Proxmox VE over its API, Linux/Windows
 hosts via pk95agent (push over HTTPS, optionally attached to an API/SNMP device), SNMP devices
 (incl. UniFi switches), server hardware over Redfish, UPS over NUT, backup servers (Veeam, PBS) and
-network checks. Single Go binary,
+network checks, plus a public status page for the customer. Single Go binary,
 SQLite, embedded vanilla-JS SPA in the PK95 Core design (same as `~/code/pk95proxbackup`).
 Architecture, keys, metrics and the REST contract: `DESIGN.md`. Shared types: `internal/model`.
 
 - Run tests: `go test -race ./...` (Proxmox VE, SNMP, NUT, Veeam, PBS and Redfish are simulated by `internal/fake/fakepve`, `internal/fake/fakesnmp`, `internal/fake/fakenut`, `internal/fake/fakeveeam`, `internal/fake/fakepbs`, `internal/fake/fakeredfish`)
-- Format: `gofmt -w .`; check JS: `node --check web/app.js`; all of CI's static checks: `make check`
+- Format: `gofmt -w .`; check JS: `node --check web/app.js web/status.js`; all of CI's static checks: `make check`
 - Demo UI: `.claude/launch.json` → `demo`, or
   `PK95MON_DEMO=1 PK95MON_NO_TLS=1 PK95MON_LISTEN=127.0.0.1:18096 PK95MON_DATA_DIR=data/demo go run .`
 - Agent cross-build: `GOOS=windows GOARCH=amd64 go build ./cmd/pk95agent` (must stay CGO-free)

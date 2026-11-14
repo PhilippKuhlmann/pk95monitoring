@@ -201,6 +201,11 @@ type Core struct {
 	fcNext    time.Time   // next forecast run (Run goroutine only)
 	fcRunning atomic.Bool // a forecast run is in progress
 
+	spMu    sync.Mutex    // guards status, spCache and spAt; never held together with mu
+	status  StatusPage    // statuspage.go
+	spCache *PublicStatus // last public view, computed at spAt
+	spAt    time.Time
+
 	// pmu serializes the store writes of device data that happen outside mu (statuses,
 	// metrics, LastSeen) against DeleteDevice, so a deleted device leaves nothing behind.
 	// Never acquired while holding mu.

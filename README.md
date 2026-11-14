@@ -37,6 +37,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   Hysterese, Quittieren und Wartung – spontan oder als wiederkehrendes Wartungsfenster für Geräte und Ordner
   (z. B. monatlich zum Patchday). Benachrichtigungsregeln legen fest, wer was bekommt – mit Erinnerung,
   Eskalation und Ruhezeit samt Zusammenfassung am Morgen.
+- **Statusseite für Kunden:** öffentliche Seite hinter einem geheimen Link – Zustand der Dienste, Verlauf der
+  letzten 30 Tage, angekündigte Wartung und ein Hinweis bei Störungen, ohne Gerätenamen oder Details.
 - **Verlauf:** Diagramme bis zu einem Jahr (Rohwerte 2 Tage, 5-Minuten-Werte 35 Tage, Stundenwerte 400 Tage).
 - **Externe API** (nur lesend, API-Token) und optional Push der Zusammenfassung an eine **Zentrale**, die alle
   Kunden-Container zusammenführt.
@@ -498,6 +500,30 @@ ein Jahr erscheinen nicht. Die Karte zeigt „voll in N Tagen“, die Fakten „
 Seite **Ablaufdaten** listet allen Speicher, der in den nächsten 90 Tagen voll ist. Proxmox-Backup-Server-Datastores
 behalten ihre eigene Schätzung des Backup-Servers.
 
+## Statusseite
+
+Unter **Statusseite** entsteht eine öffentliche Seite für die Kunden: oben der Gesamtzustand („Alle Dienste
+betriebsbereit“, „Einzelne Dienste eingeschränkt“, „Störung …“, „Wartungsarbeiten laufen“), darunter die
+**Dienste** mit ihrem Zustand, einem Balken je Tag der letzten 30 Tage und der Verfügbarkeit, dann die anstehende
+**Wartung**. Die Seite aktualisiert sich jede Minute.
+
+- **Dienste** fasst du aus Geräten und Ordnern zusammen (z. B. „Dateiablage“ = fs01 + NAS). Auf der Seite stehen nur
+  Name und Beschreibung des Dienstes – nie Gerätenamen, Adressen, Checks oder Meldungen.
+- **Als gestört zeigen bei:** „Nur Ausfälle“ (Standard) – ein Gerät ist nicht erreichbar oder sein Agent schweigt (bei Netzwerk-Checks:
+  ein kritischer Check);
+  fehlen nur einige Geräte, heißt es „Teilweise gestört“. „Alle Probleme“ – jeder kritische Alarm ist eine
+  Störung, jede Warnung eine Einschränkung (auch ein gestoppter Dienst oder eine gestörte AD-Replikation).
+- **Wartung:** Ein Gerät in Wartung zeigt „Wartungsarbeiten“. Wartungsfenster mit „Auf der Statusseite ankündigen“
+  stehen dort ab 14 Tage vorher mit Name, Notiz, Zeit und den betroffenen Diensten.
+- **Hinweis:** ein freier Text (Hinweis, Einschränkung oder Störung) oben auf der Seite, z. B. „Der Internetanbieter
+  hat eine Störung, wir sind dran“ – bis du ihn wieder leerst.
+- **Link:** `https://<server>/status/<geheimer Teil>`; wer ihn kennt, sieht die Seite ohne Anmeldung. „Neuer Link“
+  macht den alten ungültig. Ausgeschaltet zeigt der Link nichts an. Suchmaschinen werden ausgeschlossen.
+
+Soll nur die Statusseite aus dem Internet erreichbar sein, gibt der Reverse Proxy `/status/`, `/api/status/` und die
+statischen Dateien (`/status.js`, `/style.css`, `/theme.js`, `/logo.svg`, `/fonts/`) frei und den Rest (Anmeldung,
+Agents) nur intern.
+
 ## Schwellwerte und Alarme
 
 Jeder Check hat einen Zustand: OK, Warnung, Kritisch oder Unbekannt. Gemessene Werte werden mit Schwellwerten
@@ -646,6 +672,8 @@ Die Datenbank wird beim Start automatisch migriert. Die Agents ziehen mit automa
 - Proxmox und Agents pinnen Zertifikate per **SHA-256-Fingerabdruck**; Agent-Downloads werden per SHA-256 geprüft.
 - Secrets (Proxmox-Token, SNMP-Community und -Passwörter, NUT-Passwort, Benachrichtigungs-Token) werden nie an den Browser
   zurückgegeben. API- und Agent-Tokens liegen nur als Hash in der Datenbank.
+- Die Statusseite ist nur über ihren geheimen Link (32 Zeichen) erreichbar, zeigt keine Gerätedaten und ist wie die
+  externe API auf 60 Abrufe je Minute und Adresse begrenzt.
 - Der Container läuft ohne Root-Rechte. Port 8443 nur dort freigeben, wo Agents und Benutzer ihn brauchen.
 
 ## Entwicklung
