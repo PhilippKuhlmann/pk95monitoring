@@ -129,12 +129,12 @@ func TestCPUUsageAndRate(t *testing.T) {
 	}
 }
 
-var validKey = map[string]bool{"system": true, "cpu": true, "mem": true, "swap": true, "systemd": true, "updates": true, "eventlog": true}
+var validKey = map[string]bool{"system": true, "cpu": true, "mem": true, "swap": true, "systemd": true, "updates": true}
 
 var metricUnits = map[string]string{
 	"cpu.usage": "%", "cpu.load1": "", "mem.usage": "%", "mem.used": "B", "mem.total": "B", "swap.usage": "%",
 	"disk.usage": "%", "disk.used": "B", "disk.total": "B", "net.rx": "B/s", "net.tx": "B/s", "uptime": "s",
-	"procs": "", "services.failed": "", "updates.pending": "", "updates.security": "", "eventlog.errors": "",
+	"procs": "", "services.failed": "", "updates.pending": "", "updates.security": "", "events.count": "",
 }
 
 func TestCollectCurrentOS(t *testing.T) {
@@ -226,6 +226,11 @@ func TestPeriodic(t *testing.T) {
 	fail.Store(false)
 	if v, _, _ := p.Get(ctx, true); v != 3 {
 		t.Fatalf("after retry: %v", v)
+	}
+	// Invalidate refreshes at once although the value is not due.
+	p.Invalidate()
+	if v, _, _ := p.Get(ctx, true); v != 4 {
+		t.Fatalf("after invalidate: %v", v)
 	}
 
 	// Background mode returns immediately without a value on the first call.

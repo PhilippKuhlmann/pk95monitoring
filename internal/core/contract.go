@@ -64,6 +64,10 @@ type AgentSettings struct {
 	// names or patterns ("veeam*"), each matching service that runs or starts automatically.
 	WindowsServices []string `json:"windows_services"`
 	LinuxServices   []string `json:"linux_services"`
+	// EventRules are the changed built-in and the own central Windows event rules (see
+	// winevent.Merge); EventIgnore the exceptions for all Windows agents.
+	EventRules  []model.EventRule   `json:"event_rules"`
+	EventIgnore []model.EventIgnore `json:"event_ignore"`
 }
 
 // centralServices returns the central service list for an agent OS.

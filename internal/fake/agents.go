@@ -54,7 +54,6 @@ type simAgent struct {
 	installedDays       int      // windows: days since the last update installation
 	failed              int      // windows: failed updates (30 days)
 	titles              []string // windows: pending update titles
-	eventErrors         int
 	boot                int64
 	seed                float64
 	rules               []model.CheckRule // demo check rules (quiet / off)
@@ -74,7 +73,7 @@ func demoAgents(now time.Time) []*simAgent {
 			known: map[string]simService{"NTDS": {"Active Directory-Domänendienste", true}, "DNS": {"DNS-Server", true},
 				"W32Time": {"Windows-Zeitgeber", true}, "Spooler": {"Druckwarteschlange", true},
 				"VeeamEndpointBackupSvc": {"Veeam Agent for Microsoft Windows", true}},
-			pending: 2, eventErrors: 3, boot: t - 23*day - 4*3600, seed: 1.3, installedDays: 9,
+			pending: 2, boot: t - 23*day - 4*3600, seed: 1.3, installedDays: 9,
 			titles: []string{"Security Intelligence-Update für Microsoft Defender Antivirus – KB2267602", "Microsoft .NET Framework 4.8.1 für Windows Server 2022 (KB5046540)"}},
 		{id: "demo-fs01", name: "fs01", group: groupServer, ip: "10.0.0.12", os: "windows",
 			platform: "Microsoft Windows Server 2019 Standard", ver: "10.0.17763 Build 17763", kernel: "10.0.17763 Build 17763",
@@ -86,7 +85,7 @@ func demoAgents(now time.Time) []*simAgent {
 			known: map[string]simService{"Spooler": {"Druckwarteschlange", false}, "LanmanServer": {"Server", true},
 				"W32Time": {"Windows-Zeitgeber", true}, "VeeamBackupSvc": {"Veeam Backup Service", true},
 				"VeeamTransportSvc": {"Veeam Data Mover Service", true}, "VeeamDeploySvc": {"Veeam Installer Service", false}},
-			pending: 1, security: 1, eventErrors: 11, boot: t - 41*day - 9*3600, seed: 2.7, installedDays: 47, failed: 1,
+			pending: 1, security: 1, boot: t - 41*day - 9*3600, seed: 2.7, installedDays: 47, failed: 1,
 			titles: []string{"2026-11 Kumulatives Update für Windows Server 2019 für x64-basierte Systeme (KB5046615)"}},
 		{id: "demo-web01", name: "web01", group: groupWeb, ip: "10.0.0.21", os: "linux",
 			platform: "debian", ver: "13.1", kernel: "6.12.48+deb13-amd64",
@@ -326,10 +325,7 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 	}
 	out = append(out, up)
 	if a.os == "windows" {
-		errs := a.eventErrors + int(3*noise(a.seed*9, t/3600*60))
-		out = append(out, model.Check{Key: "eventlog", Name: "Ereignisprotokoll", Group: agSystem, State: model.StateOK,
-			Message: fmt.Sprintf("%d Fehler in 24 Std. (System und Anwendung)", errs),
-			Metrics: []model.Metric{{Name: "eventlog.errors", Value: float64(errs)}}})
+		out = append(out, a.eventChecks(c, t)...)
 	}
 	return out
 }

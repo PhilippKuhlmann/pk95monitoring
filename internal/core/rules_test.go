@@ -149,10 +149,11 @@ func TestRuleQuiet(t *testing.T) {
 		t.Fatal("quiet metrics not stored")
 	}
 	rows := e.c.Rows()
-	if rows[0].State != model.StateOK || rows[0].Checks.OK != 5 || rows[0].Checks.Warn+rows[0].Checks.Crit != 0 {
+	// the updates check is separate (own page): not counted with the device's checks
+	if rows[0].State != model.StateOK || rows[0].Checks.OK != 4 || rows[0].Checks.Warn+rows[0].Checks.Crit != 0 {
 		t.Fatalf("row: %+v", rows[0])
 	}
-	if sum := e.c.Summary(); sum.State != model.StateOK || sum.Devices[0].Checks["ok"] != 5 {
+	if sum := e.c.Summary(); sum.State != model.StateOK || sum.Devices[0].Checks["ok"] != 4 {
 		t.Fatalf("summary: %+v", sum)
 	}
 

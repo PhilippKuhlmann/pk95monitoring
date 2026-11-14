@@ -108,6 +108,7 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 			svc, auto, ign := d.Agent.Services, d.Agent.WatchAutoServices, d.Agent.IgnoreServices
 			a := *cur.Agent
 			a.Services, a.WatchAutoServices, a.IgnoreServices = svc, auto, ign
+			a.EventOff, a.EventRules, a.EventIgnore = d.Agent.EventOff, d.Agent.EventRules, d.Agent.EventIgnore
 			d.Agent = &a
 		}
 	}
@@ -265,7 +266,18 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 			a.Services = cleanList(in.Services)
 			a.WatchAutoServices = in.WatchAutoServices
 			a.IgnoreServices = cleanList(in.IgnoreServices)
+			// event settings missing in the request (null) stay as they are
+			if in.EventOff != nil {
+				a.EventOff = slices.Clone(in.EventOff)
+			}
+			if in.EventRules != nil {
+				a.EventRules = model.CloneEventRules(in.EventRules)
+			}
+			if in.EventIgnore != nil {
+				a.EventIgnore = model.CloneEventIgnores(in.EventIgnore)
+			}
 		}
+		validateAgentEvents(&a, c.Now().Unix(), errs)
 		for i, s := range a.Services {
 			if len(s) > 256 || strings.ContainsAny(s, "\n\r") {
 				errs["agent.services"] = fmt.Sprintf("Dienst %d ist ungültig.", i+1)

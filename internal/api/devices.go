@@ -682,3 +682,64 @@ func (s *Server) updates(w http.ResponseWriter, r *http.Request) {
 func (s *Server) expiry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rows": s.C.Expiry()})
 }
+
+// eventLog is the overview of the Windows event log: rules, exceptions, checks and events.
+func (s *Server) eventLog(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.C.EventLog())
+}
+
+// saveEventRule creates (POST) or changes (PUT /{id}) a central Windows event rule.
+func (s *Server) saveEventRule(w http.ResponseWriter, r *http.Request) {
+	var rule model.EventRule
+	if !decode(w, r, &rule) {
+		return
+	}
+	rule.ID = r.PathValue("id")
+	v, errs, err := s.C.SaveEventRule(rule)
+	if fieldErrs(w, errs) {
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// deleteEventRule deletes an own central rule or resets a built-in one.
+func (s *Server) deleteEventRule(w http.ResponseWriter, r *http.Request) {
+	if err := s.C.DeleteEventRule(r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	ok(w)
+}
+
+// addEventIgnore adds an exception: {device_id (empty = all devices), source, ids, text, note}.
+func (s *Server) addEventIgnore(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		model.EventIgnore
+		DeviceID string `json:"device_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	v, errs, err := s.C.AddEventIgnore(req.DeviceID, req.EventIgnore)
+	if fieldErrs(w, errs) {
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// deleteEventIgnore removes an exception (?device_id= for one of a device).
+func (s *Server) deleteEventIgnore(w http.ResponseWriter, r *http.Request) {
+	if err := s.C.DeleteEventIgnore(r.URL.Query().Get("device_id"), r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	ok(w)
+}

@@ -98,7 +98,9 @@ func (c *Core) Report(ctx context.Context, from, to int64) (Report, error) {
 	}
 	byDev := map[string][]model.Alert{}
 	for _, a := range alerts {
-		byDev[a.DeviceID] = append(byDev[a.DeviceID], a)
+		if !model.SeparateCheck(a.CheckKey) { // updates and event rules have their own pages
+			byDev[a.DeviceID] = append(byDev[a.DeviceID], a)
+		}
 	}
 
 	c.mu.Lock()

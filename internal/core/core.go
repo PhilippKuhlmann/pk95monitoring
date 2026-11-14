@@ -272,6 +272,14 @@ func (c *Core) Settings() Settings {
 	}
 	s.Agent.WindowsServices = append([]string{}, s.Agent.WindowsServices...)
 	s.Agent.LinuxServices = append([]string{}, s.Agent.LinuxServices...)
+	s.Agent.EventRules = model.CloneEventRules(s.Agent.EventRules)
+	s.Agent.EventIgnore = model.CloneEventIgnores(s.Agent.EventIgnore)
+	if s.Agent.EventRules == nil {
+		s.Agent.EventRules = []model.EventRule{}
+	}
+	if s.Agent.EventIgnore == nil {
+		s.Agent.EventIgnore = []model.EventIgnore{}
+	}
 	return s
 }
 
@@ -402,6 +410,7 @@ func (c *Core) SaveSettings(s Settings) (map[string]string, error) {
 			}
 		}
 	}
+	validateEvents(&ag.EventRules, &ag.EventIgnore, c.Now().Unix(), "agent.", errs)
 	if len(errs) > 0 {
 		return errs, nil
 	}

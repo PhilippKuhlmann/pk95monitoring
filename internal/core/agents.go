@@ -99,7 +99,8 @@ func (c *Core) RegisterAgent(ctx context.Context, req model.AgentRegister, remot
 	if !found {
 		d = model.Device{ID: newID(8), Name: req.Hostname, Type: model.TypeAgent, Enabled: true,
 			Host: firstIP(req.IPs, remoteIP), Checks: []model.NetCheck{}, Thresholds: []model.Threshold{},
-			Created: now, Agent: &model.AgentConfig{AgentID: req.AgentID, Services: []string{}, IgnoreServices: []string{}}}
+			Created: now, Agent: &model.AgentConfig{AgentID: req.AgentID, Services: []string{}, IgnoreServices: []string{},
+				EventOff: []string{}, EventRules: []model.EventRule{}, EventIgnore: []model.EventIgnore{}}}
 	}
 	a := *d.Agent
 	a.Hostname, a.OS, a.Platform = req.Hostname, clip(req.OS, 32), clip(req.Platform, 100)
@@ -328,6 +329,7 @@ func (c *Core) agentReply(d model.Device, rep model.AgentReport) model.AgentRepl
 	if r.CentralServices == nil {
 		r.CentralServices = []string{}
 	}
+	r.EventRules, r.EventIgnore = c.AgentEvents(d)
 	ver := c.Agents.Version()
 	if !c.Settings().Agent.AutoUpdate || ver == "" || rep.Version == "" || rep.Version == ver {
 		return r

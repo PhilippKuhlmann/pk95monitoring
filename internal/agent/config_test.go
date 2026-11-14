@@ -90,6 +90,23 @@ func TestApplyReply(t *testing.T) {
 	if !c.applyReply(model.AgentReply{Interval: 30, WatchAutoServices: true, IgnoreServices: []string{"x"}}) || c.Services != nil || c.CentralServices != nil {
 		t.Error("removing all services not applied")
 	}
+	ev := model.AgentReply{Interval: 30, WatchAutoServices: true, IgnoreServices: []string{"x"},
+		EventRules:  []model.EventRule{{ID: "disk", Name: "Festplattenfehler", Enabled: true, Logs: []string{"System"}, IDs: []int{7}}},
+		EventIgnore: []model.EventIgnore{{ID: "i1", Source: "disk"}}}
+	if !c.applyReply(ev) || len(c.EventRules) != 1 || len(c.EventIgnore) != 1 {
+		t.Fatalf("event rules not applied: %+v", c)
+	}
+	if c.applyReply(ev) {
+		t.Error("identical event rules reported a change")
+	}
+	ev.EventRules[0].IDs[0] = 11
+	if !c.applyReply(ev) || c.EventRules[0].IDs[0] != 11 {
+		t.Error("changed rule not applied")
+	}
+	ev.EventRules[0].IDs[0] = 12 // the config holds a copy
+	if c.EventRules[0].IDs[0] != 11 {
+		t.Error("rule shares memory with the reply")
+	}
 }
 
 func TestMachineIDStable(t *testing.T) {

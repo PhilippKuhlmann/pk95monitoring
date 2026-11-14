@@ -89,23 +89,3 @@ func updatesMessage(c updateCount) string {
 	}
 	return fmt.Sprintf("%d Updates, davon %d Sicherheitsupdates", c.Pending, c.Security)
 }
-
-// eventlogCheck turns the Windows event log counts into the "eventlog" check: critical
-// events in the last hour are a warning, the 24 h error count is a metric for thresholds.
-func eventlogCheck(r eventlogResult, err error) model.Check {
-	ch := model.Check{Key: "eventlog", Name: "Ereignisprotokoll", Group: groupSystem, State: model.StateOK}
-	if err != nil {
-		ch.State, ch.Message = model.StateUnknown, truncate(err.Error(), 200)
-		return ch
-	}
-	ch.Metrics = []model.Metric{{Name: "eventlog.errors", Value: float64(r.Errors)}}
-	ch.Message = fmt.Sprintf("%d Fehler in 24 Std. (System und Anwendung)", r.Errors)
-	if r.Critical > 0 {
-		ch.State = model.StateWarn
-		ch.Message = fmt.Sprintf("%d kritische Ereignisse in der letzten Stunde", r.Critical)
-		if r.Last != "" {
-			ch.Message += ", zuletzt " + truncate(strings.TrimSpace(r.Last), 200)
-		}
-	}
-	return ch
-}

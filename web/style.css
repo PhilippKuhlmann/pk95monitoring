@@ -1190,3 +1190,21 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .upd-table td.upd-titles { min-width: 220px; max-width: 420px; white-space: normal; }
 .exp-table td { vertical-align: top; }
 .warn-ink { color: #d97706; }
+
+/* ---- Windows event log ---- */
+.ev-table td, .ev-rules td, .ev-ign td, .ev-bad td { vertical-align: top; }
+.ev-table td.ev-msg, .ev-bad td.ev-msg { min-width: 240px; max-width: 560px; white-space: normal; overflow-wrap: anywhere; }
+.ev-msg details summary { cursor: pointer; list-style: none; }
+.ev-msg details summary::-webkit-details-marker { display: none; }
+.ev-msg details summary::after { content: " …"; color: var(--c600); font-weight: 600; }
+.ev-msg details[open] summary::after { content: ""; }
+.ev-full { margin-top: 6px; padding: 8px 10px; border-radius: var(--r); background: var(--panel-2); font-size: 12.5px; white-space: pre-wrap; color: var(--ink-2); }
+.ev-src { font-weight: 600; overflow-wrap: anywhere; }
+.ev-rules tr.ev-off td:not(:first-child) { opacity: .55; }
+.ev-rules td:nth-child(3), .ev-rules td:nth-child(4) { min-width: 180px; max-width: 360px; white-space: normal; }
+.ev-pick { max-height: 300px; }
+.ev-own { display: grid; gap: 6px; margin-bottom: 8px; }
+.ev-own-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); }
+.ev-own-row .grow { min-width: 0; overflow-wrap: anywhere; }
+.callout.ev-preview { margin: 0; padding: 10px 12px; }
+.ev-none { margin: 0 0 8px; }

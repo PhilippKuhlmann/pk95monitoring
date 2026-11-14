@@ -7,6 +7,7 @@ import (
 
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/store"
+	"pk95monitoring/internal/winevent"
 )
 
 // Discovery (inventory): the first successful collection of a device records every check
@@ -24,9 +25,10 @@ const (
 )
 
 // inventoryKey reports whether a check takes part in the inventory: not reach, not the
-// discovery check, not network checks (those are configured on the device itself).
+// discovery check, not network checks and Windows event rules (both are configured), not the
+// event log check of agents before 0.16 (replaced by the rules).
 func inventoryKey(k string) bool {
-	return k != "" && k != reachKey && k != model.DiscoveryKey && !strings.HasPrefix(k, "net:")
+	return k != "" && k != reachKey && k != model.DiscoveryKey && k != "eventlog" && !strings.HasPrefix(k, "net:") && !strings.HasPrefix(k, winevent.KeyPrefix)
 }
 
 // reindex rebuilds the set of new keys and the vanished list from the inventory.
@@ -76,6 +78,9 @@ func discover(d model.Device, rt *devState, checks []model.Check, now int64) {
 	inv := make([]model.InventoryItem, 0, len(rt.st.Inventory)+len(seen))
 	have := map[string]bool{}
 	for _, it := range rt.st.Inventory {
+		if !inventoryKey(it.Key) {
+			continue // stored by an older version
+		}
 		if ch, ok := seen[it.Key]; ok {
 			it.Name, it.Group, it.Last, it.Missing = ch.Name, ch.Group, now, 0
 		} else if rt.acceptUnseen {

@@ -32,6 +32,7 @@ var metricLabels = map[string][2]string{
 	"updates.age":        {"Letzte Update-Installation (Tage)", "d"},
 	"updates.failed":     {"Fehlgeschlagene Updates", ""},
 	"eventlog.errors":    {"Fehler im Ereignisprotokoll (24 Std.)", ""},
+	"events.count":       {"Ereignisse", ""},
 	"guest.cpu":          {"Gast-CPU", "%"},
 	"guest.mem":          {"Gast-Arbeitsspeicher", "%"},
 	"guest.mem_used":     {"Gast-Arbeitsspeicher belegt", "B"},

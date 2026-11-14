@@ -10,7 +10,9 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
 - **Linux- und Windows-Server mit dem PK95-Agent:** CPU, Arbeitsspeicher, Auslagerung, Festplatten, Netzwerk,
   Dienste (systemd-Units bzw. Windows-Dienste, auf Wunsch alle automatisch startenden), fehlgeschlagene
   systemd-Units, Updates (apt, dnf, Windows Update; Neustart nötig = Warnung; unter Windows auch letzte
-  Installation und fehlgeschlagene Updates) und unter Windows das Ereignisprotokoll. Der Agent schickt seine Werte per HTTPS an den Server – auch hinter einer Firewall, ohne
+  Installation und fehlgeschlagene Updates) und unter Windows das Ereignisprotokoll – nach Regeln (Festplattenfehler,
+  Bluescreen, fehlgeschlagene Sicherung, abgestürzte Dienste, Anmeldeversuche …) statt jeder Fehlermeldung; harmlose
+  Meldungen blendet „Ignorieren“ für ein Gerät oder alle aus. Der Agent schickt seine Werte per HTTPS an den Server – auch hinter einer Firewall, ohne
   offene Ports beim Kunden-Server. Ist der Server kurz nicht erreichbar, puffert er und liefert nach.
 - **SNMP-Geräte (v1, v2c, v3):** Switches (Ports, Verkehr, Fehler, LLDP-Nachbarn, PoE; Diagramme je Port),
   UniFi-Switches mit eigenem Profil (CPU, Arbeitsspeicher, Temperaturen, Lüfter, Netzteile, PoE-Budget), USV
@@ -22,7 +24,7 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   einem Knoten des Proxmox-Clusters) – ein Gerät, alle Daten.
 - **Netzwerk-Checks** für jedes Gerät: Ping (Antwortzeit, Verlust), HTTP(S) (Statuscode, Antwortzeit,
   Schlüsselwort), TLS-Zertifikat (Resttage), TCP-Port, DNS (Antwort, erwarteter Wert) und Domain-Ablauf (RDAP).
-- **Übersichten:** Update-Stand aller Server, Ablaufdaten aller Zertifikate und Domains, Verfügbarkeitsberichte
+- **Übersichten:** Update-Stand aller Server, Windows-Ereignisse mit Regeln und Ausnahmen, Ablaufdaten aller Zertifikate und Domains, Verfügbarkeitsberichte
   (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,
   Hysterese, Quittieren und Wartung – spontan oder als wiederkehrendes Wartungsfenster für Geräte und Ordner

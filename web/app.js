@@ -57,6 +57,7 @@ const ICONS = {
 "disk": "M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z",
 "desktop": "M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0V12a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 12V5.25",
 "chart": "M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z",
+"eventlog": "M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m5.231 13.481L15 17.25m-4.5-15H5.625c-.621 0-1.125.504-1.125 1.125v16.5c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9zm3.75 11.625a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z",
 "wrench": "M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z",
 "bolt": "M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z",
 "printer": "M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z",
@@ -243,6 +244,7 @@ const METRIC_LABELS = {
   "updates.failed": ["Fehlgeschlagene Updates", ""],
   "updates.security": ["Sicherheitsupdates", ""],
   "eventlog.errors": ["Fehler im Ereignisprotokoll (24 Std.)", ""],
+  "events.count": ["Ereignisse", ""],
   "guest.cpu": ["Gast-CPU", "%"],
   "guest.mem": ["Gast-Arbeitsspeicher", "%"],
   "guest.mem_used": ["Gast-Arbeitsspeicher belegt", "B"],
@@ -492,6 +494,7 @@ const NAV = [
   { path: "/alerts", label: "Alarme", icon: "bell" },
   { path: "/events", label: "Ereignisse", icon: "list" },
   { path: "/updates", label: "Updates", icon: "shield" },
+  { path: "/eventlog", label: "Windows-Ereignisse", icon: "eventlog" },
   { path: "/expiry", label: "Ablaufdaten", icon: "calendar" },
   { path: "/reports", label: "Berichte", icon: "chart" },
   { head: "Einrichtung" },
@@ -1448,10 +1451,11 @@ PAGES["/devices/:id"] = async (el, token) => {
   const head = qs("[data-head]", el), body = qs("[data-body]", el);
   const reload = async () => { const r = await GET(`/api/devices/${enc(id)}`); if (token !== pageToken) return; data = r; state.ovAt = 0; drawHead(); if (tab === "overview") drawTab(); };
   const ovAlive = () => token === pageToken && tab === "overview";
-  // view: the status with the device's current rules applied (see projectStatus).
-  const view = () => projectStatus(data.status || {}, data.device.rules);
+  // view: the status with the device's current rules applied (see projectStatus), without the
+  // separate checks (updates, Windows events: own pages).
+  const view = () => deviceView(projectStatus(data.status || {}, data.device.rules));
   // attachedViews: the agents attached to this device, each with its own rules applied.
-  const attachedViews = () => (data.attached || []).filter((a) => a && a.device).map((a) => ({ device: a.device, status: projectStatus(a.status || {}, a.device.rules) }));
+  const attachedViews = () => (data.attached || []).filter((a) => a && a.device).map((a) => ({ device: a.device, status: deviceView(projectStatus(a.status || {}, a.device.rules)) }));
   // saveDevice changes the stored device: fresh GET, mutate, PUT (empty secrets keep the stored ones).
   // Saves run one after another, so quick clicks do not overwrite each other.
   let saveQ = Promise.resolve(), busy = 0, wantFocus = null;
@@ -1932,6 +1936,12 @@ function applyGroupMode(rules, plan, mode) {
 }
 // projectStatus applies the device's current rules to a status computed with older ones (the
 // server applies new rules with the next poll or report), so a change shows at once.
+// separateCheck: updates and Windows event rules have their own pages (Updates, Windows-Ereignisse);
+// they alert, but neither show on the device page nor colour the device (as model.SeparateCheck).
+const separateCheck = (k) => k === "updates" || k === "eventlog" || String(k).startsWith("pve:updates:") || String(k).startsWith("ev:");
+// deviceView drops the separate checks from a (projected) status for the device page.
+const deviceView = (st) => ({ ...st, checks: (st.checks || []).filter((c) => !separateCheck(c.key)), hidden: (st.hidden || []).filter((h) => !separateCheck(h.key)) });
+
 function projectStatus(st, rules) {
   if (!st) return {};
   const out = { ...st, checks: [], hidden: (st.hidden || []).map((h) => ({ ...h })) };
@@ -1954,7 +1964,7 @@ function projectStatus(st, rules) {
   }
   for (const h of out.hidden) h.pending = ruleMode(rules, h.key) !== "off"; // shown again with the next poll
   if (changed) {
-    const known = out.checks.filter((c) => c.state !== "unknown").map((c) => (c.acked ? { ...c, state: "ok" } : c));
+    const known = out.checks.filter((c) => c.state !== "unknown" && !separateCheck(c.key)).map((c) => (c.acked ? { ...c, state: "ok" } : c));
     out.state = known.length ? known.reduce((a, c) => (RANK[c.state] > RANK[a] ? c.state : a), "ok") : out.checks.length ? "unknown" : st.state;
   }
   return out;
@@ -2234,6 +2244,7 @@ function cardValue(c) {
     return { word: true, text: n ? `${n.toLocaleString("de-DE")} ${n === 1 ? "Update" : "Updates"}${s ? ` (${s.toLocaleString("de-DE")} Sicherheit)` : ""}` : "Aktuell" };
   }
   if (has("services.failed")) { const n = int(v("services.failed")); return { word: true, text: n ? `${n.toLocaleString("de-DE")} fehlgeschlagen` : "Keine Fehler" }; }
+  if (has("events.count")) { const n = int(v("events.count")); return { word: true, text: n ? `${n.toLocaleString("de-DE")} ${n === 1 ? "Ereignis" : "Ereignisse"}` : "Keine Ereignisse", sub: fa.Alarm || "" }; }
   if (has("eventlog.errors")) { const n = int(v("eventlog.errors")); return { word: true, text: `${n.toLocaleString("de-DE")} Fehler`, sub: "in 24 Std." }; }
   if (has("uptime")) {
     const sub = ["Laufzeit", fa.Betriebssystem || fa.Modell || "", has("procs") ? `${fmtNum(v("procs"), 0)} Prozesse` : ""].filter(Boolean).join(" · ");
@@ -2919,11 +2930,13 @@ function rulesEditor(box, rules, known) {
 // ---------- device settings tab ----------
 async function deviceSettingsTab(box, dv, alive, reload, st = {}) {
   box.innerHTML = loadingPanel();
-  const set = await GET("/api/settings");
-  if (!alive()) return;
-  const global = set.thresholds || [], defs = set.defaults || [];
   const ag = dv.agent || {};
   const win = ag.os === "windows";
+  const [set, evl] = await Promise.all([GET("/api/settings"), win ? GET("/api/eventlog").catch(() => null) : null]);
+  if (!alive()) return;
+  const global = set.thresholds || [], defs = set.defaults || [];
+  const evRules = (evl && evl.rules) || [], evOff = new Set(ag.event_off || []);
+  let evOwn = (ag.event_rules || []).map((r) => ({ ...r }));
   const central = ((set.agent || {})[win ? "windows_services" : "linux_services"]) || [];
   box.innerHTML = `<form class="panel form" data-dset novalidate>
       <div><div class="panel-title">Schwellwerte für dieses Gerät</div>
@@ -2942,6 +2955,15 @@ async function deviceSettingsTab(box, dv, alive, reload, st = {}) {
         ${win ? field({ name: "watch_auto_services", label: "Alle automatisch startenden Dienste überwachen", type: "checkbox", value: ag.watch_auto_services, wide: true, hint: "Jeder Dienst mit Starttyp „Automatisch“ muss laufen – Ausnahmen unten eintragen." }) : ""}
         ${field({ name: "ignore_services", label: "Diese Dienste ignorieren", type: "textarea", mono: true, rows: 3, value: (ag.ignore_services || []).join("\n"), wide: true, hintHTML: true, hint: "Namen oder Muster mit <code>*</code>. Werden nie gemeldet – weder über Muster noch über die zentrale Liste oder die automatische Überwachung. Ein hier oben eingetragener Name wird trotzdem überwacht." })}
       </div></div>` : ""}
+      ${win ? `<div class="section" id="eventlog"><div class="section-title">Windows-Ereignisse</div>
+        <p class="hint" style="margin:-8px 0 0">Regeln für alle Windows-Server stellst du unter <a href="/eventlog" data-go>Windows-Ereignisse</a> ein. Hier schaltest du einzelne für dieses Gerät ab, ergänzt eigene und siehst die Ausnahmen dieses Geräts.</p>
+        <div class="form-grid">
+          <div class="field wide"><span class="fl">Zentrale Regeln auf diesem Gerät</span>
+            ${evRules.length ? `<div class="pick-list ev-pick">${evRules.map((r) => `<label class="check"><input type="checkbox" data-ev-on="${esc(r.id)}" ${!evOff.has(r.id) ? "checked" : ""} ${r.enabled ? "" : "disabled"}><span><b>${esc(r.name)}</b> <span class="muted small">${r.enabled ? esc(r.trigger) : "zentral ausgeschaltet"}</span></span></label>`).join("")}</div>
+              <span class="hint">Abgewählte Regeln gelten auf diesem Gerät nicht.</span>` : `<span class="muted small">Die zentralen Regeln konnten nicht geladen werden.</span>`}</div>
+          <div class="field wide"><span class="fl">Eigene Regeln dieses Geräts</span><div data-ev-own></div></div>
+          <div class="field wide"><span class="fl">Ausnahmen dieses Geräts</span><div data-ev-ignl></div></div>
+        </div></div>` : ""}
       <div class="flex"><button class="btn" type="submit">Speichern</button><span class="muted small">Gilt ab der nächsten Abfrage${dv.type === "agent" ? " bzw. dem nächsten Bericht des Agents" : ""}.</span></div>
     </form>`;
   const form = qs("[data-dset]", box);
@@ -2949,6 +2971,34 @@ async function deviceSettingsTab(box, dv, alive, reload, st = {}) {
   const ed = thresholdEditor(qs("[data-th]", form), dv.thresholds, effective, "Sonst gilt");
   const known = [...new Map([...(st.checks || []), ...(st.hidden || [])].map((c) => [c.key, { key: c.key, name: c.name, group: c.group }])).values()];
   const ru = rulesEditor(qs("[data-rules]", form), dv.rules, known);
+  if (win) {
+    const ownBox = qs("[data-ev-own]", form), ignBox = qs("[data-ev-ignl]", form);
+    const drawOwn = () => {
+      ownBox.innerHTML = (evOwn.length ? `<div class="ev-own">${evOwn.map((r, i) => `<div class="ev-own-row"><div class="grow"><b>${esc(r.name)}</b>${r.enabled === false ? ` ${pill("Aus")}` : ""}<div class="muted small">${esc(evDescribe(r))} · ${esc(evTrigger(r))}</div></div>
+          <button class="ib" type="button" data-own-edit="${i}" title="Bearbeiten" aria-label="${esc(r.name)} bearbeiten">${icon("pencil")}</button><button class="ib" type="button" data-own-del="${i}" title="Entfernen" aria-label="${esc(r.name)} entfernen">${icon("trash")}</button></div>`).join("")}</div>` : `<p class="muted small ev-none">Keine eigenen Regeln.</p>`) +
+        `<div class="flex"><button class="btn gray sm" type="button" data-own-add>${icon("plus")} Regel hinzufügen</button><span class="muted small">Wird mit „Speichern“ übernommen.</span></div>`;
+      const edit = (i) => eventRuleDialog(i == null ? null : evOwn[i], async (body) => {
+        if (i == null) evOwn.push(body); else evOwn[i] = body;
+        drawOwn();
+      }, { scope: "Nur für dieses Gerät." });
+      qs("[data-own-add]", ownBox).onclick = () => edit(null);
+      qsa("[data-own-edit]", ownBox).forEach((b) => b.onclick = () => edit(+b.dataset.ownEdit));
+      qsa("[data-own-del]", ownBox).forEach((b) => b.onclick = () => { evOwn.splice(+b.dataset.ownDel, 1); drawOwn(); });
+    };
+    let ignList = ag.event_ignore || [];
+    const drawIgn = () => {
+      ignBox.innerHTML = (ignList.length ? `<div class="ev-own">${ignList.map((g, i) => `<div class="ev-own-row"><div class="grow">${esc(evIgnoreText(g))}${g.note ? `<div class="muted small">${esc(g.note)}</div>` : ""}</div>
+          <button class="ib" type="button" data-ign-del="${i}" title="Löschen" aria-label="Ausnahme löschen">${icon("trash")}</button></div>`).join("")}</div>` : `<p class="muted small ev-none">Keine Ausnahmen.</p>`) +
+        `<div class="flex"><button class="btn gray sm" type="button" data-ign-add>${icon("plus")} Ausnahme</button><span class="muted small">Am schnellsten über „Ignorieren“ an einem Ereignis. Gilt sofort.</span></div>`;
+      const refresh = async () => { const r = await GET(`/api/devices/${enc(dv.id)}`); ignList = (r.device.agent || {}).event_ignore || []; drawIgn(); };
+      qs("[data-ign-add]", ignBox).onclick = () => eventIgnoreDialog({}, { deviceId: dv.id, devices: [{ id: dv.id, name: dv.name }], done: refresh });
+      qsa("[data-ign-del]", ignBox).forEach((b) => b.onclick = () => {
+        const g = ignList[+b.dataset.ignDel];
+        run(b, async () => { await DEL(`/api/eventlog/ignore/${enc(g.id)}?device_id=${enc(dv.id)}`); await refresh(); }, "Ausnahme gelöscht.");
+      });
+    };
+    drawOwn(); drawIgn();
+  }
   form.onsubmit = async (e) => {
     e.preventDefault();
     const btn = qs('button[type="submit"]', form);
@@ -2961,6 +3011,12 @@ async function deviceSettingsTab(box, dv, alive, reload, st = {}) {
       if (dv.type === "agent") {
         const v = formValues(form), lines = (s) => String(s || "").split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
         cur.agent = { ...(cur.agent || {}), services: lines(v.services), watch_auto_services: !!v.watch_auto_services, ignore_services: lines(v.ignore_services) };
+        if (win) {
+          // rules switched off centrally keep their device setting; the exceptions are saved at once (not here)
+          const off = evRules.filter((r) => r.enabled ? !qs(`[data-ev-on="${CSS.escape(r.id)}"]`, form).checked : evOff.has(r.id)).map((r) => r.id);
+          if (evRules.length) cur.agent.event_off = off;
+          cur.agent.event_rules = evOwn;
+        }
       }
       await PUT(`/api/devices/${enc(dv.id)}`, cur);
       toast("Gespeichert.");
@@ -3176,7 +3232,7 @@ async function chartsTab(box, dv, st, alive, att = []) {
   const series = [], names = {};
   srcs.forEach((src, i) => {
     const nm = Object.fromEntries((src.st.checks || []).map((c) => [c.key, c.name]));
-    const list = (res[i].series || []).map((x) => ({ ...x, uid: `${src.dev}:${x.id}`, dev: src.dev, prefix: src.prefix, own: i === 0, gk: `${src.dev}|${x.check_key || ""}` }));
+    const list = (res[i].series || []).filter((x) => !separateCheck(x.check_key || "")).map((x) => ({ ...x, uid: `${src.dev}:${x.id}`, dev: src.dev, prefix: src.prefix, own: i === 0, gk: `${src.dev}|${x.check_key || ""}` }));
     list.forEach((x) => { names[x.gk] = (src.prefix ? src.prefix + " · " : "") + (nm[x.check_key] || x.check_key || "Weitere"); });
     list.sort((a, b) => String(names[a.gk]).localeCompare(String(names[b.gk]), "de", { numeric: true }) || metricLabel(a.name).localeCompare(metricLabel(b.name), "de") || String(a.instance).localeCompare(String(b.instance), "de", { numeric: true }));
     series.push(...list);
@@ -3361,6 +3417,7 @@ const EXPLAIN = {
   "updates.pending": { what: "Wie viele Updates ausstehen.", why: "Veraltete Systeme bekommen keine Fehlerbehebungen.", todo: ["Updates im nächsten Wartungsfenster einspielen."] },
   "services.failed": { what: "Wie viele systemd-Units fehlgeschlagen sind.", why: "Ein fehlgeschlagener Dienst erledigt seine Aufgabe nicht mehr.", todo: ["Auf dem Server `systemctl --failed` ausführen und `journalctl -u <unit>` ansehen."] },
   "eventlog.errors": { what: "Fehler und kritische Ereignisse im Windows-Ereignisprotokoll der letzten 24 Stunden.", why: "Viele Fehler deuten auf Treiber-, Hardware- oder Dienstprobleme hin.", todo: ["In der Ereignisanzeige (System und Anwendung) nach den häufigsten Quellen filtern."] },
+  "events.count": { what: "Wie viele Ereignisse im Zeitraum der Regel zu ihren Filtern passen – ohne die ignorierten.", why: "Die Regel steht für ein bekanntes Problem (Filter und Alarmgrenze stehen unter „Werte und Details“). Alles andere im Ereignisprotokoll wird nicht gemeldet.", todo: ["Harmlose Meldungen unten mit „Ignorieren“ ausblenden.", "Regeln ändern unter Windows-Ereignisse."] },
   "temp": { what: "Eine Temperatur des Geräts.", why: "Zu hohe Temperaturen verkürzen die Lebensdauer und können zur Notabschaltung führen.", todo: ["Lüftung und Raumtemperatur prüfen."] },
   "if.errors": { what: "Fehlerhafte Pakete auf dem Port.", why: "Meist ein Kabel-, Stecker- oder Duplex-Problem; die Verbindung wird langsam oder bricht ab.", todo: ["Kabel tauschen, Port-Geschwindigkeit und Duplex prüfen."] },
   "repl.age": { what: "Wie lange die letzte erfolgreiche Replikation her ist.", why: "Fällt der Quellknoten aus, fehlen auf dem Ziel alle Änderungen seit dieser Zeit.", todo: ["Replikationsprotokoll in Proxmox prüfen (Rechenzentrum → Replikation)."] },
@@ -3410,6 +3467,10 @@ const EXPLAIN_CHECKS = [
   { test: (c) => /^svc:/.test(c.key) || c.key === "services", title: "Dienst läuft nicht",
     what: "Ein überwachter Dienst ist beendet oder nicht vorhanden.", why: "Was der Dienst bereitstellt, ist nicht verfügbar (z. B. Sicherung, Datenbank, Webseite).",
     todo: ["Dienst starten und prüfen, warum er beendet wurde (Windows: Ereignisanzeige, Linux: `journalctl -u <dienst>`).", "Wird er absichtlich nicht gebraucht: unter Einstellungen des Geräts ignorieren."] },
+  { test: (c) => /^ev:/.test(c.key), title: "Ereignisse im Windows-Ereignisprotokoll",
+    dyn: (c) => ({ what: `Die Regel „${c.name}“ hat ${c.facts && c.facts.Alarm ? `ihre Grenze erreicht (${c.facts.Alarm})` : "Ereignisse gefunden"}.`,
+      why: "Die Regel steht für ein bekanntes Problem; gewöhnliche Fehler im Ereignisprotokoll werden nicht gemeldet.",
+      todo: [...(c.facts && c.facts["Was tun"] ? [c.facts["Was tun"]] : []), "Die Ereignisse unten lesen. Ist eine Meldung harmlos: „Ignorieren“ – sie zählt dann nicht mehr."] }) },
   { test: (c) => c.key === "systemd", title: "Fehlgeschlagene systemd-Units", what: "Mindestens eine systemd-Unit ist fehlgeschlagen.", why: "Ihre Aufgabe wird nicht erledigt.", todo: ["`systemctl --failed` und `journalctl -u <unit>` ansehen."] },
   { test: (c) => c.key === "discovery", title: "Dienste zu entscheiden",
     what: "Das Gerät meldet neue Dienste, oder bekannte Dienste fehlen.", why: "Neue Dienste werden noch nicht alarmiert; verschwundene können auf einen gelöschten Gast oder einen Ausfall hindeuten.",
@@ -3453,7 +3514,8 @@ function explainHTML(c, thr) {
     if (bad && lvl) hits.push({ m, e, t, lvl });
     else if (!seen.has(m.n)) { seen.add(m.n); others.push({ m, e }); }
   }
-  const checkExp = bad && !hits.length ? EXPLAIN_CHECKS.find((x) => x.test(c)) : null;
+  let checkExp = bad && !hits.length ? EXPLAIN_CHECKS.find((x) => x.test(c)) : null;
+  if (checkExp && checkExp.dyn) checkExp = { title: checkExp.title, ...checkExp.dyn(c) };
   const ctx = explainCtx(c);
   let out = "";
   if (hits.length || checkExp) {
@@ -3493,7 +3555,7 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     const h = (st.hidden || []).find((x) => x.key === key);
     return h ? { c: null, hidden: true, name: h.name, group: h.group, pending: h.pending } : { c: null, hidden: false };
   };
-  el.innerHTML = `<div data-head></div><div data-explain></div>
+  el.innerHTML = `<div data-head></div><div data-explain></div><div data-events></div>
     <div class="chart-bar ckd-bar"><h2 class="ckd-h">Verlauf</h2><div class="seg" role="group" aria-label="Zeitraum">${RANGES.map(([k, l]) => `<button type="button" data-range="${k}" aria-pressed="${k === range}">${l}</button>`).join("")}</div>
       <span class="muted small" data-ch-info></span><a class="ckd-all small" href="/devices/${enc(id)}#charts" data-go>Alle Diagramme des Geräts</a></div>
     <div class="charts" data-charts>${loadingPanel()}</div>
@@ -3602,6 +3664,23 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     ];
     factsBox.innerHTML = `<div class="panel-head"><div class="panel-title">Werte und Details</div></div>
       <table class="kv ckd-kv">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")}</table>`;
+    drawEvents();
+  };
+
+  // drawEvents: the latest events of a Windows event rule, each with "Ignorieren".
+  const drawEvents = () => {
+    const box = qs("[data-events]", el), { c } = check();
+    if (!/^ev:/.test(key) || !c) { box.innerHTML = ""; return; }
+    const evs = (c.events || []).map((e) => ({ ...e, device_id: id }));
+    const dv = data.device;
+    box.innerHTML = `<section class="panel flush" aria-label="Ereignisse"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Letzte Ereignisse</div>
+        <div class="actions"><a class="btn gray sm" href="/eventlog" data-go>${icon("eventlog")} Regeln und Ausnahmen</a></div></div>
+      ${evs.length ? eventTable(evs, { device: false, rule: false, ignore: true }) : `<p class="muted small" style="margin:0 16px 16px">Keine Ereignisse im Zeitraum der Regel${(dv.agent || {}).event_ignore && dv.agent.event_ignore.length ? " (ohne die ignorierten)" : ""}.</p>`}
+      ${evs.length ? `<p class="muted small" style="margin:8px 16px 16px">Die letzten ${evs.length} passenden Ereignisse (höchstens 10). Ignorierte Meldungen fallen mit der nächsten Meldung des Agents heraus.</p>` : ""}</section>`;
+    qsa("[data-ev-ign]", box).forEach((b) => b.onclick = () => {
+      const e = evs[+b.dataset.evIgn];
+      eventIgnoreDialog(e, { deviceId: id, devices: [{ id, name: dv.name }], events: evs, done: reload });
+    });
   };
 
   const drawThr = () => {
@@ -4043,6 +4122,202 @@ PAGES["/expiry"] = async (el, token) => {
       <p class="muted small" style="margin:0 12px">Zertifikate prüfen HTTP(S)- und TLS-Checks, Domains der Check „Domain-Ablauf“ (unter Gerät → Bearbeiten → Netzwerk-Checks). Warnung ab 21 bzw. 30 Tagen, kritisch ab 7 bzw. 14 Tagen – änderbar unter Einstellungen → Schwellwerte.</p>`
       : `<div class="panel">${empty("Noch keine Zertifikate oder Domains", "Lege an einem Gerät einen Netzwerk-Check an: „HTTP(S)“ oder „TLS-Zertifikat“ für Zertifikate, „Domain-Ablauf“ für Domains.", "", "calendar")}</div>`);
   bindRowLinks(el);
+};
+
+// ---------- Windows event log ----------
+const EV_LEVELS = [[1, "Kritisch"], [2, "Fehler"], [3, "Warnung"], [4, "Information"], [0, "Überwachung"]];
+const evLevelName = (l) => (EV_LEVELS.find(([v]) => v === l) || [0, "Information"])[1];
+const evLevelPill = (l) => pill(evLevelName(l), l === 1 || l === 2 ? "rose" : l === 3 ? "amber" : "");
+const evIDs = (s) => [...new Set(String(s || "").split(/[\s,;]+/).filter((x) => /^\d+$/.test(x)).map(Number))];
+const evList = (s) => String(s || "").split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+const evFirstLine = (s) => String(s || "").trim().split(/\r?\n/)[0];
+const evGlob = (p, s) => new RegExp("^" + String(p).toLowerCase().split("*").map((x) => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$").test(String(s).toLowerCase());
+// evIgnored: does an exception (the dialog's values) drop the event? (as winevent.Ignored)
+function evIgnored(ig, e) {
+  if (!ig.source && !(ig.ids || []).length && !ig.text) return false;
+  if (ig.source && !evGlob(ig.source, e.src)) return false;
+  if ((ig.ids || []).length && !ig.ids.includes(e.id)) return false;
+  return !ig.text || String(e.msg || "").toLowerCase().includes(ig.text.toLowerCase());
+}
+function evIgnoreText(ig) {
+  return [ig.source ? `Quelle ${ig.source}` : "", (ig.ids || []).length ? `ID ${ig.ids.join(", ")}` : "", ig.text ? `Text „${ig.text}“` : ""].filter(Boolean).join(" · ");
+}
+
+function evDescribe(r) {
+  const lv = (r.levels || []).map(evLevelName);
+  return [(r.logs || []).join(", "), (r.sources || []).length ? `${r.sources.length === 1 ? "Quelle" : "Quellen"} ${r.sources.join(", ")}` : "",
+    (r.ids || []).length ? `ID ${r.ids.join(", ")}` : "", lv.join(", "), r.text ? `Text „${r.text}“` : ""].filter(Boolean).join(" · ");
+}
+function evTrigger(r) {
+  const h = int(r.hours || 24), w = h === 1 ? "in der letzten Stunde" : h > 24 && h % 24 === 0 ? `in ${h / 24} Tagen` : `in ${h} Std.`;
+  const sev = r.severity === "crit" ? "kritisch" : "Warnung";
+  return int(r.count || 1) <= 1 ? `jedes Ereignis ${w}: ${sev}` : `ab ${int(r.count)} Ereignissen ${w}: ${sev}`;
+}
+
+// eventTable renders events; with ignore(e) every row gets an "Ignorieren" button.
+function eventTable(events, { device = true, rule = true, ignore = false } = {}) {
+  return `<div class="table-wrap"><table class="resp ev-table"><thead><tr><th>Zeit</th>${device ? "<th>Gerät</th>" : ""}${rule ? "<th>Regel</th>" : ""}<th>Quelle</th><th>Stufe</th><th>Meldung</th>${ignore ? '<th><span class="sr-only">Aktionen</span></th>' : ""}</tr></thead><tbody>
+    ${events.map((e, i) => {
+      const first = evFirstLine(e.msg), more = String(e.msg || "").trim() !== first;
+      return `<tr>
+      <td data-l="Zeit" class="nowrap">${esc(fmtTime(e.t))}<div class="t-sub">${esc(fmtAgo(e.t))}</div></td>
+      ${device ? `<td data-l="Gerät"><a href="/devices/${enc(e.device_id)}" data-go>${esc(e.device)}</a></td>` : ""}
+      ${rule ? `<td data-l="Regel"><a href="${checkPath(e.device_id, e.check_key)}" data-go>${esc(e.rule)}</a></td>` : ""}
+      <td data-l="Quelle"><span class="ev-src">${esc(e.src)}</span><div class="t-sub">ID ${int(e.id)} · ${esc(e.log)}</div></td>
+      <td data-l="Stufe">${evLevelPill(e.lvl)}</td>
+      <td data-l="Meldung" class="ev-msg">${!e.msg ? '<span class="muted">—</span>' : more ? `<details><summary>${esc(first)}</summary><div class="ev-full">${esc(e.msg)}</div></details>` : esc(first)}</td>
+      ${ignore ? `<td class="actions-cell"><button class="btn gray sm nowrap" type="button" data-ev-ign="${i}" title="Diese und gleichartige Meldungen künftig nicht mehr zählen">${icon("eye-off")} Ignorieren</button></td>` : ""}
+    </tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
+// eventRuleDialog edits a rule (r = null: new). save(body) stores it and may throw field errors.
+function eventRuleDialog(r, save, { scope = "" } = {}) {
+  const isNew = !r;
+  r = r || { enabled: true, logs: ["System"], sources: [], ids: [], levels: [2], count: 1, hours: 24, severity: "warn" };
+  const levels = r.levels || [];
+  const chips = `<span class="fl">Stufen</span><div class="wd-chips">${EV_LEVELS.map(([v, l]) =>
+    `<label class="wd-chip"><input type="checkbox" data-lvl value="${v}" ${levels.includes(v) ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
+    <span class="hint">Keine gewählt = jede Stufe. Ereignisse der Sicherheitsüberwachung (z. B. 4625) haben die Stufe „Überwachung“.</span><span class="err" hidden></span>`;
+  return formDialog({
+    title: isNew ? "Neue Ereignisregel" : `Regel „${r.name}“`, ic: "eventlog",
+    text: (scope ? esc(scope) + " " : "") + "Gezählt werden die Ereignisse im Zeitraum, die zu <b>allen</b> ausgefüllten Filtern passen. Ausnahmen werden vorher abgezogen.",
+    fields: [
+      { name: "name", label: "Name", value: r.name, required: true, wide: true, placeholder: "z. B. SQL-Server-Fehler" },
+      { name: "logs", label: "Protokolle", value: (r.logs || []).join(", "), required: true, mono: true, wide: true, hintHTML: true,
+        hint: "Mehrere mit Komma. <code>System</code>, <code>Application</code> (Anwendung), <code>Security</code> (Sicherheit) oder der Name eines Anwendungsprotokolls wie <code>Microsoft-Windows-Backup</code>." },
+      { name: "sources", label: "Quellen", value: (r.sources || []).join(", "), mono: true, wide: true, hintHTML: true,
+        hint: "Wie in der Ereignisanzeige unter „Quelle“, z. B. <code>disk</code>, <code>Service Control Manager</code>; <code>*</code> als Platzhalter. Leer = jede Quelle." },
+      { name: "ids", label: "Ereignis-IDs", value: (r.ids || []).join(", "), mono: true, placeholder: "z. B. 7, 11, 51", hint: "Leer = jede ID (höchstens 20)." },
+      { name: "text", label: "Meldung enthält", value: r.text, placeholder: "optional" },
+      { type: "html", name: "levels", wide: true, html: chips },
+      { name: "count", label: "Alarm ab Anzahl", type: "number", min: 1, max: 500, value: r.count || 1 },
+      { name: "hours", label: "Im Zeitraum (Std.)", type: "number", min: 1, max: 720, value: r.hours || 24, hint: "Ereignisse fallen danach wieder heraus." },
+      { name: "severity", label: "Zustand bei Alarm", type: "select", value: r.severity || "warn", options: [["warn", "Warnung"], ["crit", "Kritisch"]] },
+      { name: "enabled", label: "Aktiv", type: "checkbox", value: r.enabled !== false, wide: true },
+    ],
+    extra: r.hint ? `<div class="hint mt"><b>Was tun bei Alarm:</b> ${esc(r.hint)}</div>` : "",
+    submit: async (v, dl) => {
+      const body = { ...r, name: v.name.trim(), enabled: v.enabled, logs: evList(v.logs), sources: evList(v.sources), ids: evIDs(v.ids), text: v.text.trim(),
+        levels: qsa("[data-lvl]:checked", dl).map((x) => Number(x.value)), count: v.count || 1, hours: v.hours || 24, severity: v.severity };
+      await save(body);
+    },
+  });
+}
+
+// eventIgnoreDialog adds an exception, prefilled from an event. devices: [{id, name}] to pick
+// from (empty: only "all"); deviceId preselects one. events: shown events for the preview.
+function eventIgnoreDialog(pre, { deviceId = "", devices = [], events = [], done }) {
+  const scopes = [["", "Alle Windows-Geräte"], ...devices.map((d) => [d.id, `Nur ${d.name}`])];
+  return formDialog({
+    title: "Meldungen ignorieren", ic: "eye-off",
+    text: "Passende Ereignisse zählen künftig für keine Regel mehr. Alle ausgefüllten Felder müssen passen – je genauer, desto weniger wird versehentlich ausgeblendet.",
+    fields: [
+      { name: "device_id", label: "Gilt für", type: "select", value: deviceId, options: scopes, wide: true },
+      { name: "source", label: "Quelle", value: pre.src || "", mono: true, hintHTML: true, hint: "<code>*</code> als Platzhalter." },
+      { name: "ids", label: "Ereignis-IDs", value: pre.id != null ? String(pre.id) : "", mono: true, placeholder: "z. B. 10016" },
+      { name: "text", label: "Meldung enthält", value: pre.text || "", wide: true, placeholder: "optional, z. B. der Dienstname", hint: "Nur Ereignisse, deren Meldung diesen Text enthält." },
+      { name: "note", label: "Notiz", value: "", wide: true, placeholder: "z. B. bekannt, harmlos" },
+      { type: "html", name: "preview", wide: true, html: '<div class="callout ev-preview" data-ev-prev></div>' },
+    ],
+    button: "Ignorieren",
+    onMount: (dl) => {
+      const f = qs("form", dl);
+      const upd = () => {
+        const v = formValues(f), ig = { source: v.source.trim(), ids: evIDs(v.ids), text: v.text.trim() };
+        const n = events.filter((e) => (!v.device_id || e.device_id === v.device_id) && evIgnored(ig, e)).length;
+        qs("[data-ev-prev]", dl).innerHTML = `<div class="ct"><div class="cb">${evIgnoreText(ig) ? `Trifft <b>${n}</b> der ${events.length} angezeigten Ereignisse.` : "Quelle, ID oder Text angeben."}</div></div>`;
+      };
+      qsa("input, select", f).forEach((x) => x.addEventListener("input", upd));
+      upd();
+    },
+    submit: async (v) => {
+      await POST("/api/eventlog/ignore", { device_id: v.device_id, source: v.source.trim(), ids: evIDs(v.ids), text: v.text.trim(), note: v.note.trim() });
+      toast("Gespeichert – gilt ab der nächsten Meldung des Agents.");
+      await done();
+    },
+  });
+}
+
+PAGES["/eventlog"] = async (el, token) => {
+  let data = await GET("/api/eventlog");
+  if (token !== pageToken) return;
+  let find = "";
+  const reload = async () => { data = await GET("/api/eventlog"); if (token === pageToken) draw(); };
+  const stat = (label, v, sub, cls) => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${v}</div><div class="t-sub">${sub}</div></div>`;
+  const draw = () => {
+    const rows = data.rows || [], rules = data.rules || [], ign = data.ignore || [], events = data.events || [];
+    const bad = rows.filter((r) => (r.state === "warn" || r.state === "crit") && !r.mode);
+    const open = bad.filter((r) => !r.acked).length;
+    const devices = [...new Map(rows.map((r) => [r.device_id, { id: r.device_id, name: r.device }])).values()].sort(byName);
+    const shown = find ? events.filter((e) => [e.device, e.rule, e.src, String(e.id), e.msg].join(" ").toLowerCase().includes(find)) : events;
+    const ruleTag = (r) => r.builtin ? (r.changed ? pill("Standard, geändert", "blue") : pill("Standard")) : pill("Eigene", "green");
+    el.innerHTML = pageHead("Windows-Ereignisse", "Der Agent liest das Ereignisprotokoll jedes Windows-Servers alle 5 Minuten und meldet nur, was eine Regel trifft. Harmlose Meldungen blendest du mit „Ignorieren“ aus.") +
+      `<div class="rp-stats">
+        ${stat("Auffällig", open, `${bad.length - open ? `${bad.length - open} quittiert · ` : ""}Regeln mit Alarm`, open ? "rp-warn" : "rp-ok")}
+        ${stat("Gemeldete Ereignisse", events.length, "in den Zeiträumen der Regeln", "")}
+        ${stat("Aktive Regeln", rules.filter((r) => r.enabled).length, `von ${rules.length} · ${int(data.agents)} Windows-${data.agents === 1 ? "Server" : "Server"}`, "")}
+        ${stat("Ausnahmen", ign.length, "ignorierte Meldungen", "")}
+      </div>` +
+      (data.agents ? "" : callout("", "Noch kein Windows-Agent", "Sobald ein Windows-Server mit dem Agent verbunden ist, erscheinen hier seine Ereignisse.", `<a class="btn gray sm" href="/agents" data-go>Agent installieren</a>`)) +
+      (bad.length ? `<div class="panel flush"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Auffällig</div></div><div class="table-wrap"><table class="resp ev-bad"><thead><tr><th>Zustand</th><th>Regel</th><th>Gerät</th><th>Meldung</th></tr></thead><tbody>
+          ${bad.map((r) => `<tr class="dt-row" data-href="${checkPath(r.device_id, r.check_key)}"><td data-l="Zustand">${r.acked ? pill("Quittiert", "green", true) : statePill(r.state)}</td>
+            <td data-l="Regel"><a class="t-main" href="${checkPath(r.device_id, r.check_key)}" data-go>${esc(r.name)}</a></td>
+            <td data-l="Gerät">${esc(r.device)}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
+            <td data-l="Meldung" class="small ev-msg">${esc(r.message)}</td></tr>`).join("")}
+        </tbody></table></div></div>` : "") +
+      `<div class="panel flush"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Gemeldete Ereignisse</div><div class="actions"><input type="search" data-ev-find placeholder="Suchen …" aria-label="Ereignisse durchsuchen" value="${esc(find)}"></div></div>
+        ${shown.length ? eventTable(shown, { ignore: true }) : `<div style="padding:0 16px 16px">${empty(events.length ? "Nichts gefunden" : "Keine Ereignisse", events.length ? "" : "Keine Regel hat zurzeit Ereignisse gefunden – oder alle gefundenen sind ignoriert.", "", "eventlog")}</div>`}
+        <p class="muted small" style="margin:8px 16px 16px">Gezeigt werden die letzten Ereignisse je Regel (höchstens 10), die nicht ignoriert sind.</p></div>
+      <div class="panel flush"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Regeln</div><div class="actions"><button class="btn sm" type="button" data-rule-new>${icon("plus")} Eigene Regel</button></div></div>
+        <p class="panel-intro" style="padding:0 16px">Gelten für alle Windows-Server. Am einzelnen Gerät (Einstellungen → Windows-Ereignisse) lassen sich Regeln abschalten und eigene ergänzen. „Alle Fehler“ ist absichtlich aus – das Ereignisprotokoll ist nie fehlerfrei.</p>
+        <div class="table-wrap"><table class="resp ev-rules"><thead><tr><th>Aktiv</th><th>Regel</th><th>Filter</th><th>Alarm</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
+        ${rules.map((r) => `<tr class="${r.enabled ? "" : "ev-off"}">
+          <td data-l="Aktiv"><label class="check"><input type="checkbox" data-rule-on="${esc(r.id)}" ${r.enabled ? "checked" : ""} aria-label="${esc(r.name)} aktiv"><span></span></label></td>
+          <td data-l="Regel"><b>${esc(r.name)}</b> ${ruleTag(r)}${r.off ? `<div class="t-sub">auf ${int(r.off)} ${r.off === 1 ? "Gerät" : "Geräten"} abgeschaltet</div>` : ""}</td>
+          <td data-l="Filter" class="small">${esc(r.filter)}</td>
+          <td data-l="Alarm" class="small">${esc(r.trigger)}</td>
+          <td class="actions-cell"><div class="flex nowrap"><button class="ib" type="button" data-rule-edit="${esc(r.id)}" title="Bearbeiten" aria-label="${esc(r.name)} bearbeiten">${icon("pencil")}</button>
+            ${r.builtin ? (r.changed ? `<button class="ib" type="button" data-rule-del="${esc(r.id)}" title="Auf Standard zurücksetzen" aria-label="${esc(r.name)} zurücksetzen">${icon("restore")}</button>` : "")
+              : `<button class="ib" type="button" data-rule-del="${esc(r.id)}" title="Löschen" aria-label="${esc(r.name)} löschen">${icon("trash")}</button>`}</div></td></tr>`).join("")}
+        </tbody></table></div></div>
+      <div class="panel flush"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Ausnahmen</div><div class="actions"><button class="btn sm gray" type="button" data-ign-new>${icon("plus")} Ausnahme</button></div></div>
+        ${ign.length ? `<div class="table-wrap"><table class="resp ev-ign"><thead><tr><th>Gilt für</th><th>Ignoriert</th><th>Notiz</th><th>Angelegt</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
+          ${ign.map((g, i) => `<tr><td data-l="Gilt für">${g.device_id ? `<a href="/devices/${enc(g.device_id)}" data-go>${esc(g.device)}</a>` : "<b>Alle Windows-Geräte</b>"}</td>
+            <td data-l="Ignoriert" class="small">${esc(evIgnoreText(g))}</td>
+            <td data-l="Notiz" class="small">${esc(g.note || "—")}</td>
+            <td data-l="Angelegt" class="nowrap small">${g.created ? esc(fmtTime(g.created, true)) : "—"}</td>
+            <td class="actions-cell"><button class="ib" type="button" data-ign-del="${i}" title="Löschen" aria-label="Ausnahme löschen">${icon("trash")}</button></td></tr>`).join("")}
+          </tbody></table></div>` : `<div style="padding:0 16px 16px">${empty("Keine Ausnahmen", "Mit „Ignorieren“ an einem Ereignis blendest du harmlose Meldungen aus – z. B. die DCOM-Meldung 10016, die fast jeder Server schreibt.", "", "eye-off")}</div>`}</div>`;
+    bindRowLinks(el);
+    const fi = qs("[data-ev-find]", el);
+    fi.oninput = () => { find = fi.value.trim().toLowerCase(); const pos = fi.selectionStart; draw(); const n = qs("[data-ev-find]", el); n.focus(); n.setSelectionRange(pos, pos); };
+    qsa("[data-ev-ign]", el).forEach((b) => b.onclick = () => {
+      const e = shown[+b.dataset.evIgn];
+      eventIgnoreDialog(e, { deviceId: e.device_id, devices, events, done: reload });
+    });
+    qs("[data-ign-new]", el).onclick = () => eventIgnoreDialog({}, { devices, events, done: reload });
+    qsa("[data-ign-del]", el).forEach((b) => b.onclick = async () => {
+      const g = ign[+b.dataset.ignDel];
+      if (!await confirmDialog({ title: "Ausnahme löschen?", text: `${esc(evIgnoreText(g))} – passende Ereignisse zählen wieder.` })) return;
+      await run(b, async () => { await DEL(`/api/eventlog/ignore/${enc(g.id)}${g.device_id ? `?device_id=${enc(g.device_id)}` : ""}`); await reload(); }, "Ausnahme gelöscht.");
+    });
+    const saveRule = async (body) => { body.id ? await PUT(`/api/eventlog/rules/${enc(body.id)}`, body) : await POST("/api/eventlog/rules", body); toast("Regel gespeichert – gilt ab der nächsten Meldung der Agents."); await reload(); };
+    qs("[data-rule-new]", el).onclick = () => eventRuleDialog(null, saveRule);
+    qsa("[data-rule-edit]", el).forEach((b) => b.onclick = () => eventRuleDialog(rules.find((r) => r.id === b.dataset.ruleEdit), saveRule));
+    qsa("[data-rule-on]", el).forEach((cb) => cb.onchange = () => {
+      const r = rules.find((x) => x.id === cb.dataset.ruleOn);
+      run(null, async () => { await PUT(`/api/eventlog/rules/${enc(r.id)}`, { ...r, enabled: cb.checked }); await reload(); }, cb.checked ? `„${r.name}“ eingeschaltet.` : `„${r.name}“ ausgeschaltet.`);
+    });
+    qsa("[data-rule-del]", el).forEach((b) => b.onclick = async () => {
+      const r = rules.find((x) => x.id === b.dataset.ruleDel);
+      const ok = r.builtin ? await confirmDialog({ title: `„${r.name}“ zurücksetzen?`, text: "Die Regel bekommt wieder ihre Standardeinstellungen.", button: "Zurücksetzen", tone: "", ic: "restore" })
+        : await confirmDialog({ title: `„${r.name}“ löschen?`, text: "Der Check verschwindet auf allen Geräten mit der nächsten Meldung." });
+      if (!ok) return;
+      await run(b, async () => { await DEL(`/api/eventlog/rules/${enc(r.id)}`); await reload(); }, r.builtin ? "Zurückgesetzt." : "Regel gelöscht.");
+    });
+  };
+  draw();
 };
 
 // ---------- maintenance windows ----------

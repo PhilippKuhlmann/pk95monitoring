@@ -108,6 +108,7 @@ func (d Device) Clone() Device {
 	if d.Agent != nil {
 		a := *d.Agent
 		a.IPs, a.Services, a.IgnoreServices = slices.Clone(a.IPs), slices.Clone(a.Services), slices.Clone(a.IgnoreServices)
+		a.EventOff, a.EventRules, a.EventIgnore = slices.Clone(a.EventOff), CloneEventRules(a.EventRules), CloneEventIgnores(a.EventIgnore)
 		d.Agent = &a
 	}
 	if d.Maintenance != nil {
@@ -180,6 +181,40 @@ func (d Device) HasRule(key string) bool {
 		}
 	}
 	return false
+}
+
+// SeparateCheck reports whether a check has its own page instead of belonging to the device:
+// update checks ("updates", "pve:updates:<node>") and the Windows event log ("ev:<rule>"; "eventlog"
+// of agents before 0.16). They
+// raise alerts and notifications, but neither show on the device page nor colour the device,
+// its folder or the overview, and the availability report leaves them out.
+func SeparateCheck(key string) bool {
+	return key == "updates" || key == "eventlog" || strings.HasPrefix(key, "pve:updates:") || strings.HasPrefix(key, "ev:")
+}
+
+// CloneEventRules copies rules including their lists.
+func CloneEventRules(list []EventRule) []EventRule {
+	if list == nil {
+		return nil
+	}
+	out := make([]EventRule, len(list))
+	for i, r := range list {
+		r.Logs, r.Sources, r.IDs, r.Levels = slices.Clone(r.Logs), slices.Clone(r.Sources), slices.Clone(r.IDs), slices.Clone(r.Levels)
+		out[i] = r
+	}
+	return out
+}
+
+// CloneEventIgnores copies exceptions including their ID lists.
+func CloneEventIgnores(list []EventIgnore) []EventIgnore {
+	if list == nil {
+		return nil
+	}
+	out := slices.Clone(list)
+	for i := range out {
+		out[i].IDs = slices.Clone(out[i].IDs)
+	}
+	return out
 }
 
 // GlobMatch reports whether s matches pattern, where * matches any sequence (also ":" and "/").
@@ -298,6 +333,57 @@ type AgentConfig struct {
 	// IgnoreServices are never reported, even if WatchAutoServices is on or a pattern (device or
 	// central) matches; names or patterns.
 	IgnoreServices []string `json:"ignore_services"`
+	// Windows event log: EventOff lists the central rules switched off for this host,
+	// EventRules are rules of this host only, EventIgnore drops events of this host.
+	EventOff    []string      `json:"event_off"`
+	EventRules  []EventRule   `json:"event_rules"`
+	EventIgnore []EventIgnore `json:"event_ignore"`
+}
+
+// Event levels of the Windows event log (0 = LogAlways, e.g. security audit events).
+const (
+	EventCritical = 1
+	EventError    = 2
+	EventWarning  = 3
+	EventInfo     = 4
+)
+
+// EventRule watches the Windows event log of agents. The events of the last Hours that match
+// every filled filter are counted; with Count or more the check "ev:<ID>" gets Severity.
+type EventRule struct {
+	ID       string   `json:"id"` // built-in rules have word IDs ("disk"), own rules random ones
+	Name     string   `json:"name"`
+	Enabled  bool     `json:"enabled"`
+	Logs     []string `json:"logs"`           // e.g. System, Application, Security, Microsoft-Windows-Backup
+	Sources  []string `json:"sources"`        // provider names, "*" patterns; empty = any
+	IDs      []int    `json:"ids"`            // event IDs; empty = any
+	Levels   []int    `json:"levels"`         // EventCritical …; empty = any
+	Text     string   `json:"text,omitempty"` // the message must contain this (case-insensitive)
+	Count    int      `json:"count"`          // events needed for an alert, default 1
+	Hours    int      `json:"hours"`          // time window, default 24
+	Severity string   `json:"severity"`       // warn or crit
+	Hint     string   `json:"hint,omitempty"` // what to do (German, shown with the check)
+}
+
+// EventIgnore drops matching events before any rule counts them: every filled field must
+// match. Source is a provider name or "*" pattern, Text is contained in the message.
+type EventIgnore struct {
+	ID      string `json:"id"`
+	Source  string `json:"source,omitempty"`
+	IDs     []int  `json:"ids,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Created int64  `json:"created,omitempty"`
+}
+
+// EventEntry is one event of the Windows event log.
+type EventEntry struct {
+	Time    int64  `json:"t"` // unix seconds
+	Log     string `json:"log"`
+	Source  string `json:"src"`
+	ID      int    `json:"id"`
+	Level   int    `json:"lvl"`
+	Message string `json:"msg,omitempty"`
 }
 
 // Network check types.
@@ -360,6 +446,8 @@ type Check struct {
 	Message string            `json:"msg,omitempty"`
 	Metrics []Metric          `json:"metrics,omitempty"`
 	Facts   map[string]string `json:"facts,omitempty"` // static info (OS, model, serial …), German labels as keys
+	// Events are the latest matching events of a Windows event rule check ("ev:<id>").
+	Events []EventEntry `json:"events,omitempty"`
 }
 
 // CheckStatus is a check with its effective state after thresholds and hysteresis.
@@ -554,8 +642,12 @@ type AgentReply struct {
 	IgnoreServices    []string `json:"ignore_services"`
 	// CentralServices are the services of the central setting for the agent's OS (names or
 	// patterns like "veeam*"): monitored where present, when they run or start automatically.
-	CentralServices []string     `json:"central_services"`
-	Update          *AgentUpdate `json:"update,omitempty"`
+	CentralServices []string `json:"central_services"`
+	// EventRules are the effective Windows event rules of the host (central ones not switched
+	// off plus its own, enabled only); EventIgnore the central and the host's exceptions.
+	EventRules  []EventRule   `json:"event_rules"`
+	EventIgnore []EventIgnore `json:"event_ignore"`
+	Update      *AgentUpdate  `json:"update,omitempty"`
 }
 
 // AgentUpdate tells the agent to replace itself with another version.

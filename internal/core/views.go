@@ -30,6 +30,9 @@ func (c *Core) Status(id string) model.DeviceStatus {
 func countChecks(checks []model.CheckStatus) CheckCounts {
 	var n CheckCounts
 	for _, cs := range checks {
+		if model.SeparateCheck(cs.Key) {
+			continue // counted on their own pages
+		}
 		if cs.Acked {
 			n.Acked++
 		}

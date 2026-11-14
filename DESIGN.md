@@ -28,6 +28,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/nut` | NUT client + collector (upsd protocol, TCP 3493) |
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
+| `internal/winevent` | Windows event log rules: built-in rules, merge, validation, XPath queries, evaluation (pure Go; used by agent, core and demo) |
 | `internal/agentdist` | server side of agent distribution: install scripts (embedded templates), binary catalog with SHA-256 |
 | `internal/core` | scheduler, threshold evaluation, hysteresis, alerts, notifications, agent ingestion, rollup/retention, central push, summary |
 | `internal/api` | HTTP: session auth, JSON API for the UI, agent endpoints, external API v1 |
@@ -106,7 +107,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | agent | `services` | Dienste | Dienste (Windows: service list could not be read, unknown) |
 | agent | `systemd` | Systemd-Units | Dienste (Linux: failed units) |
 | agent | `updates` | Updates | Updates (Linux apt or dnf / Windows Update; reboot required = warn). Windows also reads the update history (at most 300 entries, definition updates – category `e0789628-…` or title KB2267602 / Security Intelligence – left out): metrics `updates.age` (days since the last successful installation) and `updates.failed` (updates whose latest attempt in the past 30 days failed), facts "Letzte Installation", "Fehlgeschlagen (30 Tage)", "Ausstehend" (first 5 titles) |
-| agent | `eventlog` | Ereignisprotokoll | System (Windows; critical events in the last hour = warn) |
+| agent | `ev:<rule>` | EventRule.Name | Ereignisse (Windows): one check per effective event rule (see "Windows event log"); metric `events.count`, facts Filter, Alarm, Was tun; `events` holds the latest ≤ 10 matching events. Not part of the inventory (never "new" or "vanished"). Agents before 0.16 reported `eventlog` (count of all errors) instead |
 | proxmox | `pve:cluster` | Cluster | Cluster (quorum, nodes online) |
 | proxmox | `pve:node:<node>` | Knoten <node> | Knoten |
 | proxmox | `pve:vm:<vmid>` / `pve:ct:<vmid>` | VM <vmid> <name> / CT … | VMs / Container |
@@ -156,7 +157,8 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `updates.pending`, `updates.security` | "" | (node for PVE) | agent, pve |
 | `updates.age` | d | | agent Windows (default threshold warn 35, crit 60) |
 | `updates.failed` | "" | | agent Windows (default threshold warn 1) |
-| `eventlog.errors` | "" | | agent Windows (System+Application Error/Critical in the last 24 h) |
+| `events.count` | "" | | agent Windows: events of an event rule in its window, exceptions dropped (no threshold – the rule decides) |
+| `eventlog.errors` | "" | | removed in 0.16 (agents up to 0.15: System+Application Error/Critical in the last 24 h) |
 | `guest.cpu` | % | `vm/<id>` / `ct/<id>` | pve (100 % = all assigned cores) |
 | `guest.mem` | % | ditto | pve |
 | `guest.mem_used` | B | ditto | pve |
@@ -211,6 +213,11 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 4. Effective check state = worst(native, thresholds). `CheckStatus.Reason` e.g.
    `"Festplatte / 91 % ≥ 85 %"`. Device state = worst of all checks that are not unknown (unknown only when every check is unknown, e.g. no data yet; a single check without permission must not colour the device) (`reach` crit when unreachable:
    poll error twice in a row; agent: no report for max(3×interval, 180 s)).
+   Separate checks (`model.SeparateCheck`: `updates`, `pve:updates:<node>`, `ev:<rule>`, and `eventlog` of agents
+   before 0.16) have their own pages (Updates, Windows-Ereignisse): they raise alerts and notifications like
+   every check, but are left out of the device state and message, the check counts (device list, overview,
+   summary, the problem text of a parent with attached agents), the inventory and the availability report. The
+   device page and its charts do not show them; their check pages stay (linked from the own pages and alerts).
 5. Alerts: when an effective check state becomes warn/crit (and the device is enabled, not
    `NoAlerts`, not in maintenance) an alert opens (store) and a notification is sent
    (`notify.Send`, severity warning/critical). Escalation warn→crit updates the alert and notifies
@@ -280,6 +287,39 @@ an agent belongs to a node (`Node` = PVE node name).
   exist and must not be an agent, a node must be a known node of a Proxmox parent (else German error, HTTP 400).
   The new or re-registered (same AgentID) agent device gets ParentID/Node; Node defaults for Proxmox parents to the
   PVE node whose name equals the short hostname. Re-registering without DeviceID keeps the attachment.
+
+## Windows event log
+
+Windows agents report events only through rules, never the raw error count – the event log is never free of
+errors. `winevent.Defaults()` are the built-in rules (ID, name, filter, alarm):
+
+| ID | Name | Filter | Alarm |
+|---|---|---|---|
+| `disk` | Festplattenfehler | System; disk, Ntfs, volmgr, stornvme, storahci, iaStor*, megasas …; IDs 7, 11, 15, 51, 52, 55, 98, 153; levels 1–3 | 1 in 24 h: crit |
+| `bugcheck` | Bluescreen | System; WER-SystemErrorReporting 1001 | 1 in 24 h: crit |
+| `unexpected_shutdown` | Unerwartetes Herunterfahren | System; Kernel-Power 41, EventLog 6008 | 1 in 24 h: warn |
+| `hardware` | Hardwarefehler (WHEA) | System; WHEA-Logger, levels 1–2 | 1 in 24 h: crit |
+| `backup` | Windows-Server-Sicherung | Microsoft-Windows-Backup, levels 1–2 | 1 in 24 h: crit |
+| `veeam` | Veeam-Sicherung | Veeam Backup, Veeam Agent; ID 190, level 2 | 1 in 24 h: crit |
+| `service_crash` | Dienst abgestürzt | System; Service Control Manager 7031, 7034 | 1 in 24 h: warn |
+| `failed_logons` | Fehlgeschlagene Anmeldungen | Security; 4625 | 20 in 1 h: warn |
+| `lockout` | Konto gesperrt | Security; 4740 | 1 in 24 h: warn |
+| `dfsr` | DFS-Replikation | DFS Replication; DFSR 2104, 2213, 4012 | 1 in 24 h: crit |
+| `system_errors`, `app_errors` | Alle Fehler (System / Anwendung) | levels 1–2 – **off by default** | 1 in 24 h: warn |
+
+- EventRule `{id, name, enabled, logs, sources (glob, case-insensitive), ids (≤ 20), levels (0 Überwachung … 5),
+  text (message contains), count (1–500), hours (1–720), severity warn|crit, hint}`; an event counts when it
+  matches every filled filter and lies in the window. EventIgnore `{id, source, ids, text, note, created}` drops
+  matching events (every filled field must match) before any rule counts them.
+- Central: `settings.agent.event_rules` stores changed built-in rules (same ID) and own rules (random ID);
+  `winevent.Merge` puts them over the defaults, so new built-in rules of later versions appear by themselves.
+  `settings.agent.event_ignore` applies to all Windows agents (≤ 200).
+- Per agent (`AgentConfig`): `event_off` (central rule IDs switched off), `event_rules` (own rules, ≤ 50; an own
+  rule with a central ID replaces it), `event_ignore` (≤ 200). A device PUT with `null` for one of them keeps it.
+  Effective rules = enabled central ones not switched off + enabled own ones (`winevent.Effective`).
+- Check `ev:<id>`: state = severity when count ≥ Count, else ok ("3 Ereignisse in der letzten Stunde (Alarm ab
+  20)"); "Mindestens …" when a log returned max events; unknown when the log could not be read. Events log
+  "Ereignisregel gespeichert/gelöscht/zurückgesetzt", "Ausnahme angelegt".
 
 ## SNMP profiles
 
@@ -393,6 +433,19 @@ Authenticated:
 - `GET /api/expiry` → `{rows:[ExpiryRow]}`: every check with `cert.days` or `domain.days` (and domain checks
   without a date), soonest first – `{device_id, device, group, check_key, name, kind: cert|domain, days (null =
   unknown), until, detail (issuer / registrar), state, acked, message}`.
+- `GET /api/eventlog` → `{agents (enabled Windows agents), rules:[EventRuleView], ignore:[EventIgnoreView], rows:[EventCheckRow],
+  events:[EventItem], defaults:[EventRule]}`: `EventRuleView` = EventRule + `{builtin, changed, filter, trigger (German
+  texts), off (agents that switched it off)}`; `EventIgnoreView` = EventIgnore + `{device_id, device}` (empty = all
+  Windows agents); `EventCheckRow` = `{device_id, device, group, check_key, name, state, acked, mode, message, count,
+  last}` (worst first); `EventItem` = EventEntry + `{device_id, device, check_key, rule}` (newest first, ≤ 200, an
+  event matching several rules once).
+- `POST /api/eventlog/rules` (new own central rule) and `PUT /api/eventlog/rules/{id}` (own or built-in) with an
+  EventRule → EventRuleView (422 on name, logs, sources, ids, levels, text, count, hours, severity); a built-in rule
+  saved with its default settings is reset. `DELETE /api/eventlog/rules/{id}` deletes an own rule or resets a
+  built-in one → `{ok}`.
+- `POST /api/eventlog/ignore {device_id (empty = all Windows agents), source, ids, text, note}` → EventIgnoreView
+  (422 on source, ids, text, note; at least one of source, ids, text); `DELETE /api/eventlog/ignore/{id}[?device_id=]`
+  → `{ok}`.
 - `POST /api/devices/{id}/discovery {accept:[key], remove:[key]}` → `{accepted, removed, status}` (unknown keys
   ignored; only new keys are accepted, only vanished keys removed). `status.checks[].mode` "new" marks new
   checks, `status.vanished: [{key, name, group, last}]` the vanished ones; Device has `auto_accept`.
@@ -420,7 +473,7 @@ Authenticated:
 - `GET /api/events?severity=&before=&limit=` (limit default 50, max 500) → `{events, more}` (Event as in ProxBackup: `{id, ts, severity, source, title, body, details}`)
 - `GET /api/agents[?device=<id>&node=<node>]` → `{enroll_key, server_url, fingerprint, version, auto_update, linux_cmd, windows_cmd, binaries:[{os, arch, file, size, sha256, available}], agents:[DeviceRow]}` (`linux_cmd`/`windows_cmd` empty when the binary is missing; see Agent → one-liners; with `device` the commands include `--device <id> [--node <node>]`, 404 for an unknown device, 400 for an agent; `agents` = all agent devices incl. attached ones)
 - `POST /api/agents/key` → `{enroll_key}` (rotate)
-- `GET /api/settings` → `{general:{instance, public_url, retention_raw_days, retention_5m_days, retention_1h_days, renotify_hours}, notify: notify.Settings (redacted), thresholds:[Threshold], defaults:[Threshold], central:{enabled, url, has_token, interval}, agent:{auto_update, windows_services:[string], linux_services:[string]}}` (service lists: names or patterns, ≤ 200 entries of ≤ 256 characters, never `null`)
+- `GET /api/settings` → `{general:{instance, public_url, retention_raw_days, retention_5m_days, retention_1h_days, renotify_hours}, notify: notify.Settings (redacted), thresholds:[Threshold], defaults:[Threshold], central:{enabled, url, has_token, interval}, agent:{auto_update, windows_services:[string], linux_services:[string], event_rules:[EventRule], event_ignore:[EventIgnore]}}` (service lists: names or patterns, ≤ 200 entries of ≤ 256 characters, never `null`; `event_rules` holds only changed built-in and own central rules – the UI edits them through `/api/eventlog`)
 - `PUT /api/settings` (same shape; missing sections unchanged) → same as GET
 - `POST /api/settings/test {notify?}` → `{ok}` (unsaved form values; missing secrets from the store); `POST /api/settings/telegram/chats {token?}` → `{chats}`
 - `GET /api/tokens` → `{tokens:[{id, name, prefix, created, last_used}]}`; `POST /api/tokens {name}` → `{token, …}` (plain token only once); `DELETE /api/tokens/{id}`
@@ -449,7 +502,7 @@ Central push (settings.central): every `interval` minutes `POST <url>` with Summ
 - Binary `pk95agent` (linux/amd64, linux/arm64, windows/amd64; CGO-free). Config JSON: Linux
   `/etc/pk95agent/agent.json`, Windows `C:\ProgramData\PK95Agent\agent.json` (`server`, `token`,
   `device_id`, `fingerprint`, `insecure`, `interval`, `services`, `watch_auto_services`,
-  `ignore_services`, `central_services`); every command takes `--config PATH`.
+  `ignore_services`, `central_services`, `event_rules`, `event_ignore`); every command takes `--config PATH`.
 - Services (`agent/filter.go` `pickServices`, the same on Windows and Linux): entries of the device's
   `services` without `*` are required names (must exist and run; keyed `svc:<configured spelling>`, crit "Dienst
   nicht gefunden" when missing, never ignored). Entries with `*` and every entry of `central_services` (the
@@ -460,6 +513,15 @@ Central push (settings.central): every `interval` minutes `POST <url>` with Summ
   without `.service`). Within the first 10 minutes after boot a picked optional service that does not run yet is
   unknown ("startet nach dem Systemstart noch"). Linux reads `systemctl list-units --type=service --all` and
   `list-unit-files --type=service` only when there is a pattern or central entry.
+- Windows event log (`internal/winevent`, `agent/eventlog_windows.go`): every reply carries the effective
+  `event_rules` and the `event_ignore` exceptions (Windows agents only; empty lists otherwise). The agent queries
+  every 5 minutes in the background (retry 2 min, timeout 3 min, at once when the rules change): one
+  `Get-WinEvent -LogName <log> -FilterXPath <xpath> -MaxEvents <max>` per rule and log (the queries go through a
+  temporary JSON file; logs missing on the host are skipped, "no events" is no error). The XPath narrows by
+  provider (left out with patterns, quotes of both kinds or more than 22 terms), EventID, Level and
+  `timediff(@SystemTime)`; max = 3 × count, 100…500. Messages are read for the newest 10 events per log, for all
+  when the rule or an exception filters by text. Each report evaluates the cached results with the current rules
+  and exceptions (`winevent.Evaluate`), so a new exception counts with the next report.
 - Install: `pk95agent install --server URL --key KEY [--fingerprint SHA256] [--insecure] [--device ID [--node NODE]]`
   (root/Administrator) registers (with `--device`: attached to that device, see "Attached agents"), writes the config, copies itself to `/usr/local/bin/pk95agent` or
   `C:\Program Files\PK95Agent\pk95agent.exe`, installs and starts the service (systemd / Windows
@@ -497,7 +559,8 @@ a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port 
 5 simulated agents (2 Debian, 2 Windows, plus `demo-pve1` attached to the cluster as node pve1; one with high disk
 usage, one with a stopped service; rules: `updates` quiet on db01, `disk:/boot*` off on web01) reporting through
 `core.IngestReport` every 30 s (the Windows ones with update history: fs01 last installed 47 days ago with a
-failed update), and a net device "Webseite" with HTTP, TCP, ping and two domain checks against local httptest
+failed update; and with event logs evaluated by the real rules (`fake/events.go`): dc01 failed logons below the
+limit and a locked account, fs01 a crashed "Windows Search" service plus DCOM 10016 and Schannel noise), and a net device "Webseite" with HTTP, TCP, ping and two domain checks against local httptest
 servers (the demo page also serves an RDAP registry via `netcheck.SetRDAPBootstrap`: muster-gmbh.com expires in
 26 days, muster-gmbh.de has no date). On the first start two maintenance windows are created ("Patchday Server",
 "Neustart Netzwerk"). Existing demo databases get new demo devices (keep/import logic keeps user changes). Values
@@ -555,6 +618,12 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
 - Page `/updates` (nav "Updates"): stat tiles (security updates, reboot required, not patched for 35 days, failed
   updates) and the `GET /api/updates` table, filter "Handlungsbedarf" (not ok, reboot, security or failed; stored
   in `pk95mon-upd-filter`) / "Alle"; rows open the check page.
+- Page `/eventlog` (nav "Windows-Ereignisse"): stat tiles, the rules with an alert ("Auffällig"), the reported
+  events (search field, "Ignorieren" opens the exception dialog prefilled with source and ID, scope the device or
+  all Windows agents, with a live count of the listed events it would drop), the central rules (active checkbox,
+  edit, reset/delete, "Eigene Regel") and all exceptions. The check page of an `ev:` check lists its events with
+  "Ignorieren"; the device settings of a Windows agent have a section "Windows-Ereignisse" (central rules to switch
+  off, own rules, the device's exceptions).
 - Page `/expiry` (nav "Ablaufdaten"): stat tiles and the `GET /api/expiry` table (certificates of HTTP(S)/TLS
   checks and Proxmox nodes, domains), soonest first.
 - Device list `/devices`: one compact row per device – state, name (+ attached agents) with address, type and

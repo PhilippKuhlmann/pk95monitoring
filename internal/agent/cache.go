@@ -21,6 +21,7 @@ type periodic[T any] struct {
 	good    bool // val came from a successful run
 	next    time.Time
 	running bool
+	again   bool          // Invalidate was called during a refresh: run again right after it
 	done    chan struct{} // closed when the running refresh finishes
 }
 
@@ -52,6 +53,17 @@ func (p *periodic[T]) Get(ctx context.Context, wait bool) (T, error, bool) {
 	return p.val, p.err, p.have
 }
 
+// Invalidate makes the next Get refresh (the inputs of the probe changed).
+func (p *periodic[T]) Invalidate() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.running {
+		p.again = true
+	} else {
+		p.next = time.Time{}
+	}
+}
+
 func (p *periodic[T]) refresh() {
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
@@ -67,6 +79,9 @@ func (p *periodic[T]) refresh() {
 		p.next = p.now().Add(p.retry)
 	default:
 		p.val, p.err, p.next = v, err, p.now().Add(p.retry)
+	}
+	if p.again {
+		p.next, p.again = time.Time{}, false
 	}
 	p.have = true
 	p.running = false

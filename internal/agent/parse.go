@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode/utf16"
+
+	"pk95monitoring/internal/model"
+	"pk95monitoring/internal/winevent"
 )
 
 // Pure parsers for the output of system tools. They live in an untagged file so their tests
@@ -172,11 +175,46 @@ func unitStateText(s string) string {
 	return s
 }
 
-// eventlogResult is printed by the Windows event log script.
-type eventlogResult struct {
-	Errors   int    `json:"errors"`   // Error and Critical in System+Application, last 24 h
-	Critical int    `json:"critical"` // Critical in the last hour
-	Last     string `json:"last"`     // newest critical event: "Provider: first line"
+// psList decodes a JSON array that PowerShell may print as a single object (or null).
+type psList[T any] []T
+
+func (l *psList[T]) UnmarshalJSON(b []byte) error {
+	switch s := strings.TrimSpace(string(b)); {
+	case s == "null":
+		*l = nil
+		return nil
+	case strings.HasPrefix(s, "{"):
+		var v T
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*l = []T{v}
+		return nil
+	}
+	var list []T
+	err := json.Unmarshal(b, &list)
+	*l = list
+	return err
+}
+
+// parseEventlog decodes the output of the Windows event log script: one result per rule.
+func parseEventlog(out string) (map[string]winevent.Result, error) {
+	var doc struct {
+		Rules psList[struct {
+			ID     string                   `json:"id"`
+			Events psList[model.EventEntry] `json:"events"`
+			Full   bool                     `json:"full"`
+			Err    string                   `json:"err"`
+		}] `json:"rules"`
+	}
+	if err := parsePSJSON(out, &doc); err != nil {
+		return nil, err
+	}
+	res := make(map[string]winevent.Result, len(doc.Rules))
+	for _, r := range doc.Rules {
+		res[r.ID] = winevent.Result{Events: r.Events, Full: r.Full, Err: r.Err}
+	}
+	return res, nil
 }
 
 // parsePSJSON decodes the JSON object a PowerShell script printed (ignoring noise around it).

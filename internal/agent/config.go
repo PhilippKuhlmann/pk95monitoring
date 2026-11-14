@@ -52,6 +52,10 @@ type Config struct {
 	// CentralServices come from the server's central setting: names or patterns, monitored
 	// where present (like patterns).
 	CentralServices []string `json:"central_services,omitempty"`
+	// EventRules and EventIgnore (Windows) come from the server: the event log rules of this
+	// host and the exceptions that drop events before the rules count them.
+	EventRules  []model.EventRule   `json:"event_rules,omitempty"`
+	EventIgnore []model.EventIgnore `json:"event_ignore,omitempty"`
 }
 
 // IntervalSeconds returns the report interval clamped to sane bounds.
@@ -158,7 +162,23 @@ func (c *Config) applyReply(r model.AgentReply) bool {
 	}
 	list(&c.IgnoreServices, r.IgnoreServices)
 	list(&c.CentralServices, r.CentralServices)
+	if !sameJSON(c.EventRules, r.EventRules) {
+		c.EventRules, changed = model.CloneEventRules(r.EventRules), true
+	}
+	if !sameJSON(c.EventIgnore, r.EventIgnore) {
+		c.EventIgnore, changed = slices.Clone(r.EventIgnore), true
+	}
 	return changed
+}
+
+// sameJSON compares two lists by their JSON form; nil and empty are the same.
+func sameJSON[T any](a, b []T) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b)
+	return string(ja) == string(jb)
 }
 
 // MachineID returns a stable ID of this host: /etc/machine-id on Linux, MachineGuid on

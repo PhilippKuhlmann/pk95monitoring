@@ -454,7 +454,7 @@ func (c *Core) combine(d model.Device, kids []model.Device, now int64) combined 
 			continue
 		}
 		for _, cs := range p.st.Checks {
-			if cs.State == model.StateWarn || cs.State == model.StateCrit {
+			if (cs.State == model.StateWarn || cs.State == model.StateCrit) && !model.SeparateCheck(cs.Key) {
 				bad = append(bad, problem{p.label, cs})
 			}
 		}

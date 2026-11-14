@@ -111,10 +111,15 @@ func devStateOf(cs model.CheckStatus) string {
 	return cs.State
 }
 
-func deviceState(checks []model.CheckStatus) (string, string) {
-	checks = slices.Clone(checks)
-	for i := range checks {
-		checks[i].State = devStateOf(checks[i])
+// deviceState is the worst state of the device's checks (separate checks left out) and a
+// short text about the problems.
+func deviceState(all []model.CheckStatus) (string, string) {
+	checks := make([]model.CheckStatus, 0, len(all))
+	for _, cs := range all {
+		if !model.SeparateCheck(cs.Key) {
+			cs.State = devStateOf(cs)
+			checks = append(checks, cs)
+		}
 	}
 	worst := ""
 	for _, cs := range checks {

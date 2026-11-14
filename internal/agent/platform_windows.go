@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 
@@ -12,13 +13,18 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"pk95monitoring/internal/model"
+	"pk95monitoring/internal/winevent"
 )
 
 // platformState holds the Windows caches. Update search and event log query run in the
 // background so a slow search never delays a report.
 type platformState struct {
-	updates  *periodic[updateCount]
-	eventlog *periodic[eventlogResult]
+	updates *periodic[updateCount]
+	events  *periodic[map[string]winevent.Result]
+
+	evMu      sync.Mutex
+	evQueries []winevent.Query
+	evKey     string // JSON of evQueries
 }
 
 func platformMachineID() string {
@@ -37,7 +43,7 @@ func platformMachineID() string {
 func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) []model.Check {
 	if c.plat.updates == nil {
 		c.plat.updates = newPeriodic(6*time.Hour, 30*time.Minute, 10*time.Minute, windowsUpdates)
-		c.plat.eventlog = newPeriodic(15*time.Minute, 5*time.Minute, 2*time.Minute, eventlogErrors)
+		c.plat.events = newPeriodic(5*time.Minute, 2*time.Minute, 3*time.Minute, c.plat.queryEvents)
 	}
 	out := serviceChecks(cfg, h.Uptime)
 	u, err, have := c.plat.updates.Get(ctx, c.WaitSlow)
@@ -51,8 +57,17 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 		out = append(out, model.Check{Key: "updates", Name: "Updates", Group: groupUpdates, State: model.StateUnknown,
 			Message: "Updatesuche läuft"})
 	}
-	if ev, err, have := c.plat.eventlog.Get(ctx, c.WaitSlow); have {
-		out = append(out, eventlogCheck(ev, err))
+	if len(cfg.EventRules) > 0 {
+		c.plat.setQueries(winevent.Queries(cfg.EventRules, cfg.EventIgnore))
+		if res, err, have := c.plat.events.Get(ctx, c.WaitSlow); have {
+			if err != nil {
+				res = map[string]winevent.Result{}
+				for _, r := range cfg.EventRules {
+					res[r.ID] = winevent.Result{Err: err.Error()}
+				}
+			}
+			out = append(out, winevent.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
+		}
 	}
 	return out
 }
@@ -123,33 +138,6 @@ func windowsUpdates(ctx context.Context) (updateCount, error) {
 		return updateCount{}, fmt.Errorf("Windows Update: unerwartete Ausgabe %q", truncate(out, 100))
 	}
 	return c, nil
-}
-
-// psEventlog counts Error/Critical events of the last 24 h and Critical ones of the last hour.
-const psEventlog = `$ErrorActionPreference = 'SilentlyContinue'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-$day = (Get-Date).AddHours(-24)
-$hour = (Get-Date).AddHours(-1)
-$events = @(Get-WinEvent -FilterHashtable @{ LogName = 'System','Application'; Level = 1,2; StartTime = $day })
-$crit = @($events | Where-Object { $_.Level -eq 1 -and $_.TimeCreated -ge $hour } | Sort-Object TimeCreated -Descending)
-$last = ''
-if ($crit.Count -gt 0) {
-  $msg = "$($crit[0].Message)" -split "\r?\n" | Select-Object -First 1
-  $last = "$($crit[0].ProviderName) ($($crit[0].Id)): $msg"
-}
-Write-Output (@{ errors = $events.Count; critical = $crit.Count; last = $last } | ConvertTo-Json -Compress)
-`
-
-func eventlogErrors(ctx context.Context) (eventlogResult, error) {
-	out, err := powershell(ctx, psEventlog)
-	if err != nil {
-		return eventlogResult{}, fmt.Errorf("Ereignisprotokoll: %w", err)
-	}
-	var r eventlogResult
-	if err := parsePSJSON(out, &r); err != nil {
-		return eventlogResult{}, fmt.Errorf("Ereignisprotokoll: unerwartete Ausgabe %q", truncate(out, 100))
-	}
-	return r, nil
 }
 
 // rebootPending checks the flags Windows Update and component servicing leave behind.

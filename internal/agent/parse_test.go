@@ -105,10 +105,6 @@ func TestParsePSJSON(t *testing.T) {
 		c.Pending != 5 || c.Security != 2 || len(c.Titles) != 1 || c.LastInstall != 1760000000 || c.Failed != 1 {
 		t.Fatalf("got %+v, %v", c, err)
 	}
-	var e eventlogResult
-	if err := parsePSJSON(`{"errors":12,"critical":1,"last":"Kernel-Power (41): Das System wurde neu gestartet"}`, &e); err != nil || e.Errors != 12 || e.Critical != 1 {
-		t.Fatalf("eventlog %+v, %v", e, err)
-	}
 	if err := parsePSJSON("Zugriff verweigert", &c); err == nil {
 		t.Error("garbage accepted")
 	}
@@ -170,17 +166,27 @@ func TestUpdateHistory(t *testing.T) {
 	}
 }
 
-func TestEventlogCheck(t *testing.T) {
-	ch := eventlogCheck(eventlogResult{Errors: 7}, nil)
-	if ch.State != model.StateOK || ch.Metrics[0].Name != "eventlog.errors" || ch.Metrics[0].Value != 7 {
-		t.Errorf("ok: %+v", ch)
+func TestParseEventlog(t *testing.T) {
+	// PowerShell prints a list of one element as an object and an empty list as null.
+	out := "\ufeff{\"rules\":[{\"id\":\"disk\",\"full\":false,\"err\":\"\",\"events\":{\"t\":1763100000,\"log\":\"System\",\"src\":\"disk\",\"id\":7,\"lvl\":2,\"msg\":\"Fehlerhafter Block\"}}," +
+		"{\"id\":\"lockout\",\"full\":true,\"err\":\"\",\"events\":[{\"t\":1,\"log\":\"Security\",\"src\":\"x\",\"id\":4740,\"lvl\":0,\"msg\":\"\"},{\"t\":2,\"log\":\"Security\",\"src\":\"x\",\"id\":4740,\"lvl\":0,\"msg\":\"\"}]}," +
+		"{\"id\":\"veeam\",\"full\":false,\"err\":\"Veeam Backup: Zugriff verweigert\",\"events\":null}]}\r\n"
+	res, err := parseEventlog(out)
+	if err != nil || len(res) != 3 {
+		t.Fatalf("%v %+v", err, res)
 	}
-	ch = eventlogCheck(eventlogResult{Errors: 9, Critical: 1, Last: "Kernel-Power (41): neu gestartet"}, nil)
-	if ch.State != model.StateWarn || !strings.Contains(ch.Message, "Kernel-Power") {
-		t.Errorf("critical: %+v", ch)
+	if d := res["disk"]; len(d.Events) != 1 || d.Events[0].ID != 7 || d.Events[0].Time != 1763100000 || d.Events[0].Message != "Fehlerhafter Block" {
+		t.Errorf("disk %+v", d)
 	}
-	if ch := eventlogCheck(eventlogResult{}, errors.New("x")); ch.State != model.StateUnknown {
-		t.Errorf("error: %+v", ch)
+	if l := res["lockout"]; len(l.Events) != 2 || !l.Full {
+		t.Errorf("lockout %+v", l)
+	}
+	if v := res["veeam"]; v.Events != nil || v.Err == "" {
+		t.Errorf("veeam %+v", v)
+	}
+	// a single rule printed as object
+	if res, err := parseEventlog(`{"rules":{"id":"x","events":[],"full":false,"err":""}}`); err != nil || len(res) != 1 {
+		t.Errorf("single rule: %v %+v", err, res)
 	}
 }
 
