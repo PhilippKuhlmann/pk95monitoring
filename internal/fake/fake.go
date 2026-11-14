@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"pk95monitoring/internal/collect/netcheck"
 	"pk95monitoring/internal/collect/snmp"
 	"pk95monitoring/internal/core"
 	"pk95monitoring/internal/fake/fakenut"
@@ -91,6 +93,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 		ups.Close()
 	}
 
+	netcheck.SetRDAPBootstrap(plain.URL + "/rdap/dns.json")
 	now := time.Now()
 	agents := demoAgents(now)
 	if err := createDevices(c, pve, ups, web, plain, agents, now); err != nil {
@@ -100,6 +103,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 	if err := backfill(c, agents, now); err != nil {
 		log.Printf("demo: back-fill: %v", err)
 	}
+	createWindows(c)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
@@ -143,11 +147,51 @@ func Setup(c *core.Core) (stop func(), err error) {
 	}, nil
 }
 
+// createWindows adds two maintenance windows on the first demo start.
+func createWindows(c *core.Core) {
+	if len(c.Windows()) > 0 {
+		return
+	}
+	for _, w := range []core.MaintWindow{
+		{Name: "Patchday Server", Enabled: true, Repeat: core.RepeatMonthly, Week: 2, Weekdays: []int{2}, Offset: 2,
+			Start: "22:00", Minutes: 240, Folders: []string{groupServer}, Note: "Windows-Updates, Neustarts erlaubt"},
+		{Name: "Neustart Netzwerk", Enabled: true, Repeat: core.RepeatWeekly, Weekdays: []int{0}, Start: "04:00", Minutes: 30,
+			Folders: []string{groupNet}},
+	} {
+		if _, errs, err := c.SaveWindow(w); err != nil || len(errs) > 0 {
+			log.Printf("demo: window %s: %v %v", w.Name, errs, err)
+		}
+	}
+}
+
 // demoPage is the web site of the network checks.
 func demoPage(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/rdap/") {
+		demoRDAP(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, `<!doctype html><html lang="de"><head><title>Muster GmbH</title></head>
 <body><h1>Willkommen bei der Muster GmbH</h1><p>Demo-Seite von PK95 Monitoring.</p></body></html>`)
+}
+
+// demoRDAP is the domain registry of the demo (RDAP): muster-gmbh.com expires in 26 days,
+// muster-gmbh.de is registered without a published date (as at DENIC).
+func demoRDAP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/rdap+json")
+	base := "http://" + r.Host + "/rdap/"
+	switch r.URL.Path {
+	case "/rdap/dns.json":
+		fmt.Fprintf(w, `{"services":[[["com"],[%q]],[["de"],[%q]]]}`, base+"com/", base+"de/")
+	case "/rdap/com/domain/muster-gmbh.com":
+		exp := time.Now().AddDate(0, 0, 26).Add(2 * time.Hour).UTC().Format(time.RFC3339)
+		fmt.Fprintf(w, `{"status":["client transfer prohibited"],"events":[{"eventAction":"registration","eventDate":"2012-03-01T09:00:00Z"},
+			{"eventAction":"expiration","eventDate":%q}],"entities":[{"roles":["registrar"],"vcardArray":["vcard",[["fn",{},"text","Demo Registrar AG"]]]}]}`, exp)
+	case "/rdap/de/domain/muster-gmbh.de":
+		fmt.Fprint(w, `{"status":["active"],"events":[{"eventAction":"last changed","eventDate":"2025-06-01T10:00:00Z"}]}`)
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 // demoUPSName is the UPS name on the simulated NUT server.
@@ -226,11 +270,13 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, web, 
 	// (cert.days) and the issuer, which is what the demo should show.
 	wd := model.Device{ID: "demo-web", Name: "Webseite", Type: model.TypeNet, Host: "127.0.0.1", Group: groupWeb,
 		Enabled: true, Interval: 30, Created: ts, Updated: ts,
-		Notes: "Prüft einen lokalen Test-Webserver (Demo): Startseite mit Suchbegriff, Zertifikatslaufzeit, HTTP-Port und Ping.",
+		Notes: "Prüft einen lokalen Test-Webserver (Demo): Startseite mit Suchbegriff, Zertifikatslaufzeit, HTTP-Port, Ping und Domain-Ablauf.",
 		Checks: []model.NetCheck{
 			{ID: "http01", Type: model.NetHTTP, Name: "Startseite", Target: web.URL + "/", Keyword: "Willkommen", IgnoreTLS: true},
 			{ID: "tcp001", Type: model.NetTCP, Name: "HTTP-Port", Target: plainAddr.String()},
 			{ID: "ping01", Type: model.NetPing, Name: "Ping", Target: "127.0.0.1"},
+			{ID: "dom001", Type: model.NetDomain, Target: "www.muster-gmbh.com"},
+			{ID: "dom002", Type: model.NetDomain, Target: "muster-gmbh.de"},
 		}}
 	if err := c.ImportDevice(keep(wd.ID, wd)); err != nil {
 		return err

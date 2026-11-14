@@ -51,6 +51,9 @@ type simAgent struct {
 	services            []string
 	known               map[string]simService
 	pending, security   int
+	installedDays       int      // windows: days since the last update installation
+	failed              int      // windows: failed updates (30 days)
+	titles              []string // windows: pending update titles
 	eventErrors         int
 	boot                int64
 	seed                float64
@@ -71,7 +74,8 @@ func demoAgents(now time.Time) []*simAgent {
 			known: map[string]simService{"NTDS": {"Active Directory-Domänendienste", true}, "DNS": {"DNS-Server", true},
 				"W32Time": {"Windows-Zeitgeber", true}, "Spooler": {"Druckwarteschlange", true},
 				"VeeamEndpointBackupSvc": {"Veeam Agent for Microsoft Windows", true}},
-			pending: 2, eventErrors: 3, boot: t - 23*day - 4*3600, seed: 1.3},
+			pending: 2, eventErrors: 3, boot: t - 23*day - 4*3600, seed: 1.3, installedDays: 9,
+			titles: []string{"Security Intelligence-Update für Microsoft Defender Antivirus – KB2267602", "Microsoft .NET Framework 4.8.1 für Windows Server 2022 (KB5046540)"}},
 		{id: "demo-fs01", name: "fs01", group: groupServer, ip: "10.0.0.12", os: "windows",
 			platform: "Microsoft Windows Server 2019 Standard", ver: "10.0.17763 Build 17763", kernel: "10.0.17763 Build 17763",
 			cpuModel: "Intel(R) Xeon(R) Silver 4314 CPU @ 2.40GHz", cores: 4, threads: 4, memGB: 8,
@@ -82,7 +86,8 @@ func demoAgents(now time.Time) []*simAgent {
 			known: map[string]simService{"Spooler": {"Druckwarteschlange", false}, "LanmanServer": {"Server", true},
 				"W32Time": {"Windows-Zeitgeber", true}, "VeeamBackupSvc": {"Veeam Backup Service", true},
 				"VeeamTransportSvc": {"Veeam Data Mover Service", true}, "VeeamDeploySvc": {"Veeam Installer Service", false}},
-			eventErrors: 11, boot: t - 41*day - 9*3600, seed: 2.7},
+			pending: 1, security: 1, eventErrors: 11, boot: t - 41*day - 9*3600, seed: 2.7, installedDays: 47, failed: 1,
+			titles: []string{"2026-11 Kumulatives Update für Windows Server 2019 für x64-basierte Systeme (KB5046615)"}},
 		{id: "demo-web01", name: "web01", group: groupWeb, ip: "10.0.0.21", os: "linux",
 			platform: "debian", ver: "13.1", kernel: "6.12.48+deb13-amd64",
 			cpuModel: "AMD EPYC 7313P 16-Core Processor", cores: 2, threads: 2, memGB: 4,
@@ -301,10 +306,25 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 		out = append(out, ch)
 	}
 
-	out = append(out, model.Check{Key: "updates", Name: "Updates", Group: agUpdates, State: model.StateOK,
+	up := model.Check{Key: "updates", Name: "Updates", Group: agUpdates, State: model.StateOK,
 		Message: updatesMessage(a.pending, a.security),
 		Metrics: []model.Metric{{Name: "updates.pending", Value: float64(a.pending)},
-			{Name: "updates.security", Value: float64(a.security)}}})
+			{Name: "updates.security", Value: float64(a.security)}}}
+	if a.os == "windows" {
+		last := t - int64(a.installedDays)*86400 - 3*3600
+		up.Metrics = append(up.Metrics, model.Metric{Name: "updates.age", Value: float64(a.installedDays), Unit: "d"},
+			model.Metric{Name: "updates.failed", Value: float64(a.failed)})
+		up.Facts = map[string]string{"Letzte Installation": time.Unix(last, 0).Format("02.01.2006 15:04")}
+		up.Message += fmt.Sprintf(" · letzte Installation vor %d Tagen", a.installedDays)
+		if a.failed > 0 {
+			up.Facts["Fehlgeschlagen (30 Tage)"] = strconv.Itoa(a.failed)
+			up.Message += fmt.Sprintf(" · %d fehlgeschlagen", a.failed)
+		}
+		if len(a.titles) > 0 {
+			up.Facts["Ausstehend"] = strings.Join(a.titles, " · ")
+		}
+	}
+	out = append(out, up)
 	if a.os == "windows" {
 		errs := a.eventErrors + int(3*noise(a.seed*9, t/3600*60))
 		out = append(out, model.Check{Key: "eventlog", Name: "Ereignisprotokoll", Group: agSystem, State: model.StateOK,

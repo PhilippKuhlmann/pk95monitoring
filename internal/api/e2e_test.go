@@ -255,6 +255,53 @@ func TestEndToEnd(t *testing.T) {
 	}
 	ui.must("POST", "/api/devices/"+netDev.ID+"/maintenance", map[string]any{"until": 0}, nil)
 
+	// Maintenance windows: create, list, field errors, device page, update, delete.
+	if code := ui.do("POST", "/api/maintenance", map[string]any{"name": "", "repeat": "weekly"}, nil); code != 422 {
+		t.Errorf("invalid window: %d", code)
+	}
+	var win core.WindowView
+	ui.must("POST", "/api/maintenance", map[string]any{"name": "Patchday", "enabled": true, "repeat": "monthly", "week": 2,
+		"weekdays": []int{2}, "offset": 2, "start": "22:00", "minutes": 240, "devices": []string{netDev.ID}}, &win)
+	if win.ID == "" || win.Next == 0 || win.Matches != 1 || !strings.Contains(win.Schedule, "2. Dienstag") {
+		t.Errorf("window %+v", win)
+	}
+	var wins struct {
+		Windows []core.WindowView `json:"windows"`
+	}
+	ui.must("GET", "/api/maintenance", nil, &wins)
+	if len(wins.Windows) != 1 {
+		t.Errorf("windows %+v", wins)
+	}
+	var devWins struct {
+		Windows []core.WindowView `json:"windows"`
+	}
+	ui.must("GET", "/api/devices/"+netDev.ID, nil, &devWins)
+	if len(devWins.Windows) != 1 || devWins.Windows[0].ID != win.ID {
+		t.Errorf("device windows %+v", devWins.Windows)
+	}
+	ui.must("PUT", "/api/maintenance/"+win.ID, map[string]any{"name": "Patchday", "enabled": false, "repeat": "daily", "start": "03:00",
+		"minutes": 30, "devices": []string{netDev.ID}}, &win)
+	if win.Enabled || win.Next != 0 || win.Repeat != "daily" {
+		t.Errorf("updated window %+v", win)
+	}
+	if code := ui.do("PUT", "/api/maintenance/nope", map[string]any{"name": "x"}, nil); code != 404 {
+		t.Errorf("PUT unknown window: %d", code)
+	}
+	ui.must("DELETE", "/api/maintenance/"+win.ID, nil, nil)
+	if code := ui.do("DELETE", "/api/maintenance/"+win.ID, nil, nil); code != 404 {
+		t.Errorf("DELETE deleted window: %d", code)
+	}
+	// Update and expiry overviews answer with lists (never null).
+	for _, p := range []string{"/api/updates", "/api/expiry"} {
+		var ov struct {
+			Rows []json.RawMessage `json:"rows"`
+		}
+		ui.must("GET", p, nil, &ov)
+		if ov.Rows == nil {
+			t.Errorf("%s: rows null", p)
+		}
+	}
+
 	// Discovery: unknown keys are ignored, unknown devices are 404, the inventory stays internal.
 	var disc struct {
 		Accepted int             `json:"accepted"`

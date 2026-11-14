@@ -1172,3 +1172,21 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 }
 .dev-table td.dt-checks { white-space: normal; min-width: 150px; max-width: 230px; }
 .dev-table td.dt-name { max-width: 340px; }
+
+/* ---- maintenance windows ---- */
+.wd-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wd-chip { position: relative; cursor: pointer; }
+.wd-chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.wd-chip span { display: inline-block; min-width: 44px; padding: 6px 10px; text-align: center; border: 1px solid var(--control); border-radius: var(--r-lg); background: var(--panel); font: 500 13px var(--font); color: var(--ink-2); }
+.wd-chip input:checked + span { background: var(--c600); border-color: var(--c600); color: #fff; }
+.wd-chip input:focus-visible + span { outline: 2px solid var(--c400); outline-offset: 2px; }
+.mw-pick { margin-top: 6px; max-height: 220px; }
+.mw-pick .check[hidden] { display: none; }
+.ic-inline { width: 15px; height: 15px; vertical-align: -3px; margin-right: 4px; color: var(--muted); }
+.mw-table td { vertical-align: top; }
+
+/* ---- update overview ---- */
+.upd-table td { vertical-align: top; }
+.upd-table td.upd-titles { min-width: 220px; max-width: 420px; white-space: normal; }
+.exp-table td { vertical-align: top; }
+.warn-ink { color: #d97706; }

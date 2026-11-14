@@ -1,5 +1,5 @@
 // Package netcheck runs the network checks of a device: ping, HTTP(S), TLS certificate,
-// TCP port and DNS. Every check returns a model.Check; failures never surface as Go errors
+// TCP port, DNS and domain expiry (RDAP). Every check returns a model.Check; failures never surface as Go errors
 // but as crit (the target misbehaves) or unknown (the check could not run) with a German
 // message.
 package netcheck
@@ -57,6 +57,8 @@ func Run(ctx context.Context, c model.NetCheck, host string) model.Check {
 		runTLS(ctx, &res, addr, timeout)
 	case model.NetDNS:
 		runDNS(ctx, &res, c, timeout)
+	case model.NetDomain:
+		runDomain(ctx, &res, c, host)
 	}
 	if res.State == model.StateCrit && errors.Is(ctx.Err(), context.Canceled) {
 		// The caller gave up (shutdown, device deleted): not a fault of the target. ctx.Err
@@ -79,6 +81,11 @@ func DefaultName(c model.NetCheck, host string) string {
 		return "Zertifikat " + endpointName(c.Target, host, "443")
 	case model.NetDNS:
 		return fmt.Sprintf("DNS %s (%s)", strings.TrimSpace(c.Target), recordType(c))
+	case model.NetDomain:
+		if d, err := domainName(c.Target, host); err == nil {
+			return "Domain " + d
+		}
+		return "Domain " + strings.TrimSpace(c.Target)
 	}
 	return "Netzwerk-Check"
 }
@@ -133,10 +140,14 @@ func Validate(c model.NetCheck, host string) map[string]string {
 				errs["server"] = "Ungültiger DNS-Server (Host oder Host:Port)"
 			}
 		}
+	case model.NetDomain:
+		if _, err := domainName(c.Target, host); err != nil {
+			errs["target"] = err.Error()
+		}
 	case "":
 		errs["type"] = "Typ fehlt"
 	default:
-		errs["type"] = "Unbekannter Typ (ping, http, tcp, tls, dns)"
+		errs["type"] = "Unbekannter Typ (ping, http, tcp, tls, dns, domain)"
 	}
 	if c.Timeout < 0 || c.Timeout > maxTimeout {
 		errs["timeout"] = fmt.Sprintf("Zeitlimit muss zwischen 1 und %d Sekunden liegen", maxTimeout)

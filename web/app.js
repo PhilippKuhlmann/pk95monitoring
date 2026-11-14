@@ -238,6 +238,9 @@ const METRIC_LABELS = {
   "procs": ["Prozesse", ""],
   "services.failed": ["Ausgefallene Dienste", ""],
   "updates.pending": ["Ausstehende Updates", ""],
+  "domain.days": ["Domain registriert (Tage)", "d"],
+  "updates.age": ["Letzte Update-Installation", "d"],
+  "updates.failed": ["Fehlgeschlagene Updates", ""],
   "updates.security": ["Sicherheitsupdates", ""],
   "eventlog.errors": ["Fehler im Ereignisprotokoll (24 Std.)", ""],
   "guest.cpu": ["Gast-CPU", "%"],
@@ -488,8 +491,11 @@ const NAV = [
   { path: "/devices", label: "Geräte", icon: "server" },
   { path: "/alerts", label: "Alarme", icon: "bell" },
   { path: "/events", label: "Ereignisse", icon: "list" },
+  { path: "/updates", label: "Updates", icon: "shield" },
+  { path: "/expiry", label: "Ablaufdaten", icon: "calendar" },
   { path: "/reports", label: "Berichte", icon: "chart" },
   { head: "Einrichtung" },
+  { path: "/maintenance", label: "Wartungsfenster", icon: "wrench" },
   { path: "/agents", label: "Agents", icon: "download" },
   { path: "/settings", label: "Einstellungen", icon: "cog" },
 ];
@@ -1085,10 +1091,10 @@ function addDevice(done) {
   });
 }
 
-const NC_TYPES = [["ping", "Ping"], ["http", "HTTP(S)"], ["tcp", "TCP-Port"], ["dns", "DNS"], ["tls", "TLS-Zertifikat"]];
+const NC_TYPES = [["ping", "Ping"], ["http", "HTTP(S)"], ["tcp", "TCP-Port"], ["dns", "DNS"], ["tls", "TLS-Zertifikat"], ["domain", "Domain-Ablauf"]];
 const NC_TARGET = {
   ping: ["Ziel", "leer = Host des Geräts"], http: ["URL", "https://example.org/"], tcp: ["Ziel (Host:Port)", "10.0.0.5:3389"],
-  dns: ["Name", "example.org"], tls: ["Ziel (Host:Port)", "mail.example.org:993"],
+  dns: ["Name", "example.org"], tls: ["Ziel (Host:Port)", "mail.example.org:993"], domain: ["Domain", "example.org (leer = Host des Geräts)"],
 };
 
 // netChecksEditor: rows of network checks with type-specific fields and a "Testen" button per row.
@@ -1486,6 +1492,7 @@ PAGES["/devices/:id"] = async (el, token) => {
       dv.type === "agent" && ag.platform ? esc([ag.platform, ag.platform_version].filter(Boolean).join(" ")) : "",
       `letzter Kontakt <span title="${esc(fmtTime(st.last_poll, true))}">${esc(fmtAgo(st.last_poll))}</span>`,
       att.length ? `${att.length} ${att.length === 1 ? "Agent" : "Agents"}` : "",
+      (data.windows || []).length ? `<a href="/maintenance" data-go title="${esc(data.windows.map((w) => w.name + ": " + w.schedule).join("\n"))}">${icon("wrench", "ic-inline")}${data.windows.length === 1 ? esc(data.windows[0].name) : `${data.windows.length} Wartungsfenster`}${data.windows[0].next ? `, nächstes ${esc(fmtTime(data.windows[0].next))}` : ""}</a>` : "",
     ].filter(Boolean).join(" · ");
     const mt = dv.maintenance && dv.maintenance.until > nowSec();
     let notes = "";
@@ -3348,6 +3355,9 @@ const EXPLAIN = {
   "printer.toner": { what: "Der Füllstand des Toners.", why: "Ist er leer, druckt der Drucker nicht mehr.", todo: ["Neuen Toner bestellen."] },
   "poe.usage": { what: "Wie viel des PoE-Budgets der Switch verbraucht.", why: "Ist das Budget erschöpft, versorgt der Switch neue Geräte (Kameras, Access Points, Telefone) nicht mehr mit Strom.", todo: ["Prüfen, welche Ports viel ziehen.", "Geräte auf einen weiteren PoE-Switch verteilen."] },
   "updates.security": { what: "Wie viele Sicherheitsupdates ausstehen.", why: "Offene Sicherheitslücken können angegriffen werden.", todo: ["Updates einspielen und, falls nötig, neu starten."] },
+  "domain.days": { what: "Wie viele Tage die Domain noch registriert ist (laut Registry, abgefragt per RDAP).", why: "Läuft eine Domain ab, sind Webseite und E-Mail nicht mehr erreichbar – und nach der Schonfrist kann jemand anderes die Domain registrieren.", todo: ["Beim Provider oder Registrar prüfen, ob die automatische Verlängerung aktiv und die Zahlung hinterlegt ist.", "Die Domain rechtzeitig verlängern."] },
+  "updates.age": { what: "Vor wie vielen Tagen Windows zuletzt ein Update installiert hat (Defender-Signaturen nicht mitgezählt).", why: "Microsoft veröffentlicht jeden Monat Sicherheitsupdates. Wer länger als einen Monat nicht patcht, hat bekannte Lücken offen – oft hängt Windows Update, ist per Richtlinie abgeschaltet oder der Server wurde nie neu gestartet.", todo: ["In „Einstellungen → Windows Update“ nach Updates suchen und Fehlermeldungen prüfen.", "Prüfen, ob WSUS oder eine Gruppenrichtlinie die Updates blockiert.", "Ein Wartungsfenster für den Patchday anlegen, damit Neustarts keine Alarme auslösen."] },
+  "updates.failed": { what: "Wie viele Updates in den letzten 30 Tagen beim letzten Versuch nicht installiert werden konnten.", why: "Ein fehlgeschlagenes Update wiederholt Windows oft ohne Erfolg – die Lücke bleibt offen, und spätere kumulative Updates scheitern häufig ebenfalls.", todo: ["Im Updateverlauf den Fehlercode des Updates nachsehen.", "Freien Speicher auf C: prüfen und den Server neu starten.", "Bei wiederholtem Fehler „DISM /Online /Cleanup-Image /RestoreHealth“ und „sfc /scannow“ ausführen."] },
   "updates.pending": { what: "Wie viele Updates ausstehen.", why: "Veraltete Systeme bekommen keine Fehlerbehebungen.", todo: ["Updates im nächsten Wartungsfenster einspielen."] },
   "services.failed": { what: "Wie viele systemd-Units fehlgeschlagen sind.", why: "Ein fehlgeschlagener Dienst erledigt seine Aufgabe nicht mehr.", todo: ["Auf dem Server `systemctl --failed` ausführen und `journalctl -u <unit>` ansehen."] },
   "eventlog.errors": { what: "Fehler und kritische Ereignisse im Windows-Ereignisprotokoll der letzten 24 Stunden.", why: "Viele Fehler deuten auf Treiber-, Hardware- oder Dienstprobleme hin.", todo: ["In der Ereignisanzeige (System und Anwendung) nach den häufigsten Quellen filtern."] },
@@ -3952,6 +3962,233 @@ PAGES["/agents"] = async (el, token) => {
 
 // ---------- settings ----------
 // formSubmit binds a section form: values → PUT/POST, errors at the fields (section prefix stripped).
+// ---------- update overview ----------
+PAGES["/updates"] = async (el, token) => {
+  const UF_KEY = "pk95mon-upd-filter";
+  let filter = lsGet(UF_KEY) === "all" ? "all" : "todo";
+  const data = await GET("/api/updates");
+  if (token !== pageToken) return;
+  const rows = data.rows || [];
+  const n = (v) => (v == null ? null : Math.round(v));
+  const todo = (r) => r.state !== "ok" || r.reboot || (n(r.security) || 0) > 0 || (n(r.failed) || 0) > 0;
+  const count = (f) => rows.filter(f).length;
+  const sec = count((r) => (n(r.security) || 0) > 0), reboot = count((r) => r.reboot), old = count((r) => (n(r.age) ?? 0) >= 35), failed = count((r) => (n(r.failed) || 0) > 0);
+  const stat = (label, v, sub, cls) => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${v}</div><div class="t-sub">${sub}</div></div>`;
+  const draw = () => {
+    const list = filter === "todo" ? rows.filter(todo) : rows;
+    const body = list.map((r) => {
+      const pend = n(r.pending), secN = n(r.security), age = n(r.age), fail = n(r.failed);
+      const st = r.acked ? pill("Quittiert", "green", true) : statePill(r.state);
+      return `<tr class="dt-row" data-href="${checkPath(r.device_id, r.check_key)}">
+        <td data-l="Zustand">${st}</td>
+        <td data-l="System"><a class="t-main" href="${checkPath(r.device_id, r.check_key)}" data-go>${esc(r.check_key === "updates" ? r.device : r.device + " · " + r.name.replace(/^Updates /, ""))}</a><div class="t-sub">${esc([r.platform || TYPE_LABELS[r.type] || r.type, r.group].filter(Boolean).join(" · "))}</div></td>
+        <td data-l="Ausstehend" class="num">${pend == null ? "—" : pend ? `${pend}${secN ? ` <span class="pill amber">${secN} Sicherheit</span>` : ""}` : '<span class="muted">0</span>'}</td>
+        <td data-l="Letzte Installation">${r.last_install ? `${esc(r.last_install.slice(0, 10))}<div class="t-sub ${age >= 35 ? "bad" : ""}">vor ${age} ${age === 1 ? "Tag" : "Tagen"}</div>` : '<span class="muted">—</span>'}</td>
+        <td data-l="Fehlgeschlagen" class="num">${fail == null ? "—" : fail ? `<span class="bad">${fail}</span>` : '<span class="muted">0</span>'}</td>
+        <td data-l="Neustart">${r.reboot ? pill("erforderlich", "amber") : '<span class="muted">—</span>'}</td>
+        <td data-l="Ausstehende Updates" class="small upd-titles">${r.titles ? esc(r.titles) : `<span class="muted">${esc(r.message)}</span>`}</td></tr>`;
+    }).join("");
+    qs("[data-ulist]", el).innerHTML = list.length
+      ? `<div class="panel flush"><div class="table-wrap"><table class="resp upd-table"><thead><tr><th>Zustand</th><th>System</th><th class="num">Ausstehend</th><th>Letzte Installation</th><th class="num">Fehlgeschlagen</th><th>Neustart</th><th>Ausstehende Updates</th></tr></thead><tbody>${body}</tbody></table></div></div>
+        <p class="muted small" style="margin:0 12px">${list.length} von ${rows.length} Systemen · Windows meldet die letzte Installation (ohne Defender-Signaturen) und fehlgeschlagene Updates; Linux und Proxmox nur die ausstehenden.</p>`
+      : `<div class="panel">${empty(rows.length ? "Kein Handlungsbedarf" : "Noch keine Daten", rows.length ? "Alle Systeme sind aktuell: keine Sicherheitsupdates, keine Fehler, kein Neustart offen." : "Agents und Proxmox-Knoten melden ihre Updates, sobald sie verbunden sind (Windows sucht alle 6 Stunden).", "", "shield")}</div>`;
+    bindRowLinks(qs("[data-ulist]", el));
+    qsa("[data-uf]", el).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.uf === filter)));
+  };
+  el.innerHTML = pageHead("Updates", "Update-Stand aller Windows- und Linux-Server und Proxmox-Knoten.") +
+    `<div class="rp-stats">
+      ${stat("Sicherheitsupdates offen", sec, `von ${rows.length} Systemen`, sec ? "rp-warn" : "rp-ok")}
+      ${stat("Neustart erforderlich", reboot, "nach installierten Updates", reboot ? "rp-warn" : "rp-ok")}
+      ${stat("Länger als 35 Tage nicht gepatcht", old, "seit der letzten Installation", old ? "rp-bad" : "rp-ok")}
+      ${stat("Fehlgeschlagene Updates", failed, "in den letzten 30 Tagen", failed ? "rp-bad" : "rp-ok")}
+    </div>
+    <div class="rp-bar"><div class="seg" role="group" aria-label="Filter"><button type="button" data-uf="todo">Handlungsbedarf <span class="seg-n">${count(todo)}</span></button><button type="button" data-uf="all">Alle <span class="seg-n">${rows.length}</span></button></div></div>
+    <div data-ulist></div>`;
+  qsa("[data-uf]", el).forEach((b) => b.onclick = () => { filter = b.dataset.uf; lsSet(UF_KEY, filter); draw(); });
+  draw();
+};
+
+// ---------- certificate and domain expiry ----------
+PAGES["/expiry"] = async (el, token) => {
+  const data = await GET("/api/expiry");
+  if (token !== pageToken) return;
+  const rows = data.rows || [];
+  const days = (r) => (r.days == null ? null : Math.round(r.days));
+  const soon = (r, lim) => days(r) != null && days(r) < lim;
+  const stat = (label, v, sub, cls) => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${v}</div><div class="t-sub">${sub}</div></div>`;
+  const expired = rows.filter((r) => soon(r, 0)).length, in30 = rows.filter((r) => soon(r, 30) && !soon(r, 0)).length;
+  const certs = rows.filter((r) => r.kind === "cert").length, doms = rows.filter((r) => r.kind === "domain").length;
+  const left = (r) => {
+    const d = days(r);
+    if (d == null) return '<span class="muted">kein Datum</span>';
+    const txt = d < 0 ? `seit ${-d} ${d === -1 ? "Tag" : "Tagen"} abgelaufen` : d === 0 ? "läuft heute ab" : `noch ${d} ${d === 1 ? "Tag" : "Tage"}`;
+    return `<span class="${d < 14 ? "bad" : d < 30 ? "warn-ink" : ""}">${txt}</span>`;
+  };
+  el.innerHTML = pageHead("Ablaufdaten", "Zertifikate und Domains aller Geräte – was als Nächstes abläuft, steht oben.") +
+    `<div class="rp-stats">
+      ${stat("Abgelaufen", expired, "Zertifikate und Domains", expired ? "rp-bad" : "rp-ok")}
+      ${stat("In den nächsten 30 Tagen", in30, "rechtzeitig verlängern", in30 ? "rp-warn" : "rp-ok")}
+      ${stat("Zertifikate", certs, "aus HTTPS- und TLS-Checks", "")}
+      ${stat("Domains", doms, "aus Domain-Checks", "")}
+    </div>` +
+    (rows.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp exp-table"><thead><tr><th>Zustand</th><th>Was</th><th>Gerät</th><th>Gültig bis</th><th>Restlaufzeit</th><th>Aussteller / Registrar</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr class="dt-row" data-href="${checkPath(r.device_id, r.check_key)}">
+        <td data-l="Zustand">${r.acked ? pill("Quittiert", "green", true) : statePill(r.state)}</td>
+        <td data-l="Was"><a class="t-main" href="${checkPath(r.device_id, r.check_key)}" data-go>${icon(r.kind === "domain" ? "globe" : "lock", "ic-inline")}${esc(r.name)}</a>${r.state !== "ok" ? `<div class="t-sub">${esc(r.message)}</div>` : ""}</td>
+        <td data-l="Gerät">${esc(r.device)}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
+        <td data-l="Gültig bis" class="nowrap">${r.until ? esc(r.until.slice(0, 10)) : "—"}</td>
+        <td data-l="Restlaufzeit" class="nowrap">${left(r)}</td>
+        <td data-l="Aussteller / Registrar" class="small">${esc(r.detail || "—")}</td></tr>`).join("")}
+      </tbody></table></div></div>
+      <p class="muted small" style="margin:0 12px">Zertifikate prüfen HTTP(S)- und TLS-Checks, Domains der Check „Domain-Ablauf“ (unter Gerät → Bearbeiten → Netzwerk-Checks). Warnung ab 21 bzw. 30 Tagen, kritisch ab 7 bzw. 14 Tagen – änderbar unter Einstellungen → Schwellwerte.</p>`
+      : `<div class="panel">${empty("Noch keine Zertifikate oder Domains", "Lege an einem Gerät einen Netzwerk-Check an: „HTTP(S)“ oder „TLS-Zertifikat“ für Zertifikate, „Domain-Ablauf“ für Domains.", "", "calendar")}</div>`);
+  bindRowLinks(el);
+};
+
+// ---------- maintenance windows ----------
+const WDAYS = [[1, "Mo", "Montag"], [2, "Di", "Dienstag"], [3, "Mi", "Mittwoch"], [4, "Do", "Donnerstag"], [5, "Fr", "Freitag"], [6, "Sa", "Samstag"], [0, "So", "Sonntag"]];
+
+// allFolders lists every folder path of the groups, parents included ("Server", "Server/Nord").
+function allFolders(groups) {
+  const out = new Set();
+  for (const g of groups || []) {
+    const parts = String(g || "").split("/").filter(Boolean);
+    parts.forEach((_, i) => out.add(parts.slice(0, i + 1).join("/")));
+  }
+  return [...out].sort((a, b) => a.localeCompare(b, "de", { numeric: true }));
+}
+
+function windowState(w) {
+  if (!w.enabled) return pill("Aus");
+  if (w.active_until > nowSec()) return pill(`Läuft bis ${fmtTime(w.active_until)}`, "blue", true, true);
+  return w.next ? pill("Geplant", "green", true) : pill("Abgelaufen");
+}
+
+function windowTargets(w, names) {
+  const parts = [];
+  for (const f of w.folders || []) parts.push(`<span class="nowrap">${icon("folder", "ic-inline")}${esc(f)}</span>`);
+  for (const id of w.devices || []) parts.push(esc(names[id] || id));
+  return parts.join(", ");
+}
+
+// windowDialog creates (w = null) or edits a maintenance window.
+function windowDialog(w, devices, groups, done) {
+  w = w || { enabled: true, repeat: "monthly", week: 2, weekdays: [2], offset: 0, day: 1, start: "22:00", minutes: 240, devices: [], folders: [], note: "" };
+  const folders = allFolders(groups);
+  const sel = new Set([...(w.folders || []).map((f) => "f:" + f), ...(w.devices || []).map((id) => "d:" + id)]);
+  const mmode = w.repeat === "monthly" && !w.week ? "day" : "week";
+  const wd1 = (w.weekdays || [])[0] ?? 2;
+  const chips = `<span class="fl">Wochentage</span><div class="wd-chips">${WDAYS.map(([d, sh, l]) =>
+    `<label class="wd-chip" title="${l}"><input type="checkbox" data-wd value="${d}" ${(w.weekdays || []).includes(d) ? "checked" : ""}><span>${sh}</span></label>`).join("")}</div><span class="err" hidden></span>`;
+  const items = [...folders.map((f) => ["f:" + f, f, "Ordner", true]), ...devices.map((d) => ["d:" + d.id, d.name, d.group || "", false])];
+  const targets = `<span class="fl">Gilt für<span class="req" aria-hidden="true">*</span> <span class="muted small" data-tcount></span></span>
+    <input type="search" data-tfind placeholder="Ordner oder Gerät suchen …" aria-label="Ordner oder Gerät suchen">
+    <div class="pick-list mw-pick">${items.length ? items.map(([k, l, sub, isF]) => `<label class="check" data-tl="${esc((l + " " + sub).toLowerCase())}"><input type="checkbox" data-t="${esc(k)}" ${sel.has(k) ? "checked" : ""}><span>${isF ? icon("folder", "ic-inline") : ""}<b>${esc(l)}</b>${sub && !isF ? ` <span class="muted small">${esc(sub)}</span>` : ""}${isF ? ` <span class="muted small">mit Unterordnern</span>` : ""}</span></label>`).join("") : `<span class="muted">Noch keine Geräte.</span>`}</div>
+    <span class="hint">Ein Ordner gilt auch für Geräte, die später hineinkommen. Angehängte Agents sind immer dabei.</span><span class="err" hidden></span>`;
+  const d = formDialog({
+    title: w.id ? "Wartungsfenster bearbeiten" : "Neues Wartungsfenster", ic: "wrench", button: "Speichern",
+    text: "Während des Fensters gibt es für die Geräte keine Alarme und Benachrichtigungen, und die Zeit zählt im Bericht als verfügbar. Die Werte werden weiter aufgezeichnet.",
+    fields: [
+      { name: "name", label: "Name", value: w.name, required: true, placeholder: "z. B. Windows-Updates Server", wide: true },
+      { name: "repeat", label: "Wiederholung", type: "select", value: w.repeat, options: [["once", "Einmalig"], ["daily", "Täglich"], ["weekly", "Wöchentlich"], ["monthly", "Monatlich"]] },
+      { name: "date", label: "Datum", type: "date", value: w.date || new Date().toISOString().slice(0, 10) },
+      { name: "mmode", label: "Monatlich am", type: "select", value: mmode, options: [["week", "Wochentag (z. B. 2. Dienstag)"], ["day", "Tag des Monats"]] },
+      { name: "day", label: "Tag", type: "number", min: 1, max: 31, value: w.day || 1, hint: "Bei kürzeren Monaten der letzte Tag." },
+      { name: "week", label: "Woche", type: "select", value: w.week || 2, options: [[1, "1."], [2, "2."], [3, "3."], [4, "4."], [5, "letzter"]] },
+      { name: "wday", label: "Wochentag", type: "select", value: wd1, options: WDAYS.map(([v, , l]) => [v, l]) },
+      { name: "offset", label: "Versatz (Tage)", type: "number", min: -7, max: 14, value: w.offset || 0, hint: "z. B. 2 = Donnerstag nach dem Microsoft-Patchday (2. Dienstag)." },
+      { type: "html", name: "weekdays", wide: true, html: chips },
+      { name: "start", label: "Beginn", type: "time", value: w.start || "22:00" },
+      { name: "hours", label: "Dauer (Std.)", type: "number", min: 0.25, max: 168, step: 0.25, value: (w.minutes || 240) / 60 },
+      { type: "html", name: "targets", wide: true, html: targets },
+      { name: "note", label: "Notiz", value: w.note, placeholder: "z. B. Patchday, Neustarts erlaubt", wide: true },
+      { name: "enabled", label: "Aktiv", type: "checkbox", value: w.enabled, wide: true, hint: "Ausgeschaltete Fenster bleiben gespeichert, starten aber keine Wartung." },
+    ],
+    onMount: (dl) => {
+      const f = qs("form", dl);
+      const show = () => {
+        const v = formValues(f);
+        const vis = { date: v.repeat === "once", mmode: v.repeat === "monthly", day: v.repeat === "monthly" && v.mmode === "day",
+          week: v.repeat === "monthly" && v.mmode === "week", wday: v.repeat === "monthly" && v.mmode === "week",
+          offset: v.repeat === "monthly" && v.mmode === "week", weekdays: v.repeat === "weekly" };
+        for (const [k, on] of Object.entries(vis)) qs(`[data-field="${k}"]`, dl).hidden = !on;
+      };
+      qsa('[name="repeat"], [name="mmode"]', dl).forEach((x) => x.addEventListener("change", show));
+      show();
+      const count = () => {
+        const n = qsa("[data-t]:checked", dl).length;
+        qs("[data-tcount]", dl).textContent = n ? `(${n} gewählt)` : "";
+      };
+      qsa("[data-t]", dl).forEach((x) => x.addEventListener("change", count));
+      count();
+      qs("[data-tfind]", dl).addEventListener("input", (e) => {
+        const q = e.target.value.trim().toLowerCase();
+        qsa("[data-tl]", dl).forEach((l) => { l.hidden = q && !l.dataset.tl.includes(q); });
+      });
+    },
+    submit: async (v, dl) => {
+      const picked = qsa("[data-t]:checked", dl).map((x) => x.dataset.t);
+      const body = {
+        name: v.name, enabled: v.enabled, repeat: v.repeat, start: v.start, minutes: Math.round((v.hours || 0) * 60), note: v.note,
+        folders: picked.filter((k) => k.startsWith("f:")).map((k) => k.slice(2)),
+        devices: picked.filter((k) => k.startsWith("d:")).map((k) => k.slice(2)), weekdays: [],
+      };
+      if (v.repeat === "once") body.date = v.date;
+      if (v.repeat === "weekly") body.weekdays = qsa("[data-wd]:checked", dl).map((x) => Number(x.value));
+      if (v.repeat === "monthly") {
+        if (v.mmode === "day") body.day = v.day;
+        else Object.assign(body, { week: Number(v.week), weekdays: [Number(v.wday)], offset: v.offset });
+      }
+      try {
+        const r = w.id ? await PUT(`/api/maintenance/${enc(w.id)}`, body) : await POST("/api/maintenance", body);
+        toast(r.active_until ? `Gespeichert – läuft jetzt bis ${fmtTime(r.active_until)}.` : r.next ? `Gespeichert – nächstes Mal ${fmtTime(r.next, true)}.` : "Gespeichert.");
+      } catch (err) {
+        if (err.fields) {
+          if (err.fields.minutes) err.fields.hours = err.fields.minutes;
+          for (const k of ["week", "offset"]) if (err.fields[k] && v.mmode !== "week") delete err.fields[k];
+          if (err.fields.weekdays && v.repeat === "monthly") err.fields.wday = err.fields.weekdays;
+        }
+        throw err;
+      }
+      await done();
+    },
+  });
+  return d;
+}
+
+PAGES["/maintenance"] = async (el, token) => {
+  const load = () => Promise.all([GET("/api/maintenance"), GET("/api/devices")]);
+  let [mw, dv] = await load();
+  if (token !== pageToken) return;
+  const draw = () => {
+    const devices = (dv.devices || []).slice().sort(byName);
+    const names = Object.fromEntries(devices.map((d) => [d.id, d.name]));
+    const list = mw.windows || [];
+    el.innerHTML = pageHead("Wartungsfenster", "Geplante Wartung für Geräte und Ordner – einmalig oder wiederkehrend, z. B. für Updates und Neustarts.",
+      `<button class="btn" type="button" data-new>${icon("plus")} Wartungsfenster</button>`) +
+      (list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp mw-table"><thead><tr><th>Name</th><th>Zeitplan</th><th>Gilt für</th><th>Status</th><th>Nächstes Mal</th><th><span class="sr-only">Aktionen</span></th></tr></thead><tbody>
+        ${list.map((w) => `<tr>
+          <td data-l="Name"><b>${esc(w.name)}</b>${w.note ? `<div class="muted small">${esc(w.note)}</div>` : ""}</td>
+          <td data-l="Zeitplan">${esc(w.schedule)}</td>
+          <td data-l="Gilt für">${windowTargets(w, names) || "—"}<div class="muted small">${w.matches} ${w.matches === 1 ? "Gerät" : "Geräte"}</div></td>
+          <td data-l="Status">${windowState(w)}</td>
+          <td data-l="Nächstes Mal" class="nowrap">${w.enabled && w.next ? esc(fmtTime(w.next, true)) : "—"}</td>
+          <td class="actions-cell"><div class="flex nowrap"><button class="ib" type="button" data-edit="${esc(w.id)}" title="Bearbeiten" aria-label="${esc(w.name)} bearbeiten">${icon("pencil")}</button><button class="ib" type="button" data-del="${esc(w.id)}" title="Löschen" aria-label="${esc(w.name)} löschen">${icon("trash")}</button></div></td>
+        </tr>`).join("")}
+        </tbody></table></div></div>`
+        : `<div class="panel">${empty("Noch keine Wartungsfenster", "Lege z. B. ein Fenster für den Microsoft-Patchday an: monatlich am 2. Dienstag, 2 Tage Versatz, 22:00 Uhr, 4 Stunden – für den Ordner deiner Windows-Server.", `<button class="btn" type="button" data-new2>${icon("plus")} Wartungsfenster anlegen</button>`, "wrench")}</div>`);
+    const reload = async () => { [mw, dv] = await load(); if (token === pageToken) draw(); };
+    qsa("[data-new], [data-new2]", el).forEach((b) => b.onclick = () => windowDialog(null, devices, dv.groups, reload));
+    qsa("[data-edit]", el).forEach((b) => b.onclick = () => windowDialog(list.find((w) => w.id === b.dataset.edit), devices, dv.groups, reload));
+    qsa("[data-del]", el).forEach((b) => b.onclick = async () => {
+      const w = list.find((x) => x.id === b.dataset.del);
+      if (!await confirmDialog({ title: `„${w.name}“ löschen?`, text: w.active_until > nowSec() ? "Das Fenster läuft gerade – die Wartung der Geräte endet damit sofort." : "" })) return;
+      await run(b, async () => { await DEL(`/api/maintenance/${enc(w.id)}`); await reload(); }, "Wartungsfenster gelöscht.");
+    });
+  };
+  draw();
+};
+
 function formSubmit(form, fn, prefix) {
   form.onsubmit = async (e) => {
     e.preventDefault();

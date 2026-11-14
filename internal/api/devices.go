@@ -55,7 +55,8 @@ func (s *Server) getDevice(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	out := map[string]any{"device": redactDevice(d), "status": s.C.Status(id), "alerts": alertList(alerts)}
+	out := map[string]any{"device": redactDevice(d), "status": s.C.Status(id), "alerts": alertList(alerts),
+		"windows": s.C.DeviceWindows(id)}
 	if d.Type != model.TypeAgent {
 		list := []attachedOut{}
 		for _, a := range s.C.Attached(id) {
@@ -437,7 +438,7 @@ func (s *Server) testNUT(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "server": res.Server, "ups": ups, "message": ""})
 }
 
-var netTypes = map[string]bool{model.NetPing: true, model.NetHTTP: true, model.NetTCP: true, model.NetDNS: true, model.NetTLS: true}
+var netTypes = map[string]bool{model.NetPing: true, model.NetHTTP: true, model.NetTCP: true, model.NetDNS: true, model.NetTLS: true, model.NetDomain: true}
 
 func (s *Server) testNetCheck(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -451,7 +452,7 @@ func (s *Server) testNetCheck(w http.ResponseWriter, r *http.Request) {
 		fieldErrs(w, map[string]string{"type": "Art des Checks wählen."})
 		return
 	}
-	if req.Check.Target == "" && (req.Check.Type != model.NetPing || strings.TrimSpace(req.Host) == "") {
+	if req.Check.Target == "" && ((req.Check.Type != model.NetPing && req.Check.Type != model.NetDomain) || strings.TrimSpace(req.Host) == "") {
 		fieldErrs(w, map[string]string{"target": "Ziel angeben."})
 		return
 	}
@@ -634,4 +635,50 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		evs = []store.Event{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": evs, "more": more})
+}
+
+// listWindows lists the maintenance windows.
+func (s *Server) listWindows(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"windows": s.C.Windows()})
+}
+
+// saveWindow creates (POST) or updates (PUT /{id}) a maintenance window.
+func (s *Server) saveWindow(w http.ResponseWriter, r *http.Request) {
+	var mw core.MaintWindow
+	if !decode(w, r, &mw) {
+		return
+	}
+	mw.ID = r.PathValue("id")
+	if len(mw.Devices) > 10000 || len(mw.Folders) > 1000 {
+		writeErr(w, http.StatusBadRequest, "Zu viele Geräte oder Ordner.")
+		return
+	}
+	v, errs, err := s.C.SaveWindow(mw)
+	if fieldErrs(w, errs) {
+		return
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// deleteWindow removes a maintenance window.
+func (s *Server) deleteWindow(w http.ResponseWriter, r *http.Request) {
+	if err := s.C.DeleteWindow(r.PathValue("id")); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// updates lists the update state of all systems (agents and Proxmox nodes).
+func (s *Server) updates(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"rows": s.C.Updates()})
+}
+
+// expiry lists the certificates and domains with their expiry dates.
+func (s *Server) expiry(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"rows": s.C.Expiry()})
 }

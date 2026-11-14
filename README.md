@@ -9,8 +9,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   Leserechten auf einem Knoten genügt, auch für einen ganzen Cluster.
 - **Linux- und Windows-Server mit dem PK95-Agent:** CPU, Arbeitsspeicher, Auslagerung, Festplatten, Netzwerk,
   Dienste (systemd-Units bzw. Windows-Dienste, auf Wunsch alle automatisch startenden), fehlgeschlagene
-  systemd-Units, Updates (apt, dnf, Windows Update; Neustart nötig = Warnung) und unter Windows das
-  Ereignisprotokoll. Der Agent schickt seine Werte per HTTPS an den Server – auch hinter einer Firewall, ohne
+  systemd-Units, Updates (apt, dnf, Windows Update; Neustart nötig = Warnung; unter Windows auch letzte
+  Installation und fehlgeschlagene Updates) und unter Windows das Ereignisprotokoll. Der Agent schickt seine Werte per HTTPS an den Server – auch hinter einer Firewall, ohne
   offene Ports beim Kunden-Server. Ist der Server kurz nicht erreichbar, puffert er und liefert nach.
 - **SNMP-Geräte (v1, v2c, v3):** Switches (Ports, Verkehr, Fehler, LLDP-Nachbarn, PoE; Diagramme je Port),
   UniFi-Switches mit eigenem Profil (CPU, Arbeitsspeicher, Temperaturen, Lüfter, Netzteile, PoE-Budget), USV
@@ -21,9 +21,12 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
 - **Agent und API kombiniert:** Ein Agent lässt sich einem per API oder SNMP abgefragten Gerät zuordnen (z. B.
   einem Knoten des Proxmox-Clusters) – ein Gerät, alle Daten.
 - **Netzwerk-Checks** für jedes Gerät: Ping (Antwortzeit, Verlust), HTTP(S) (Statuscode, Antwortzeit,
-  Schlüsselwort), TLS-Zertifikat (Resttage), TCP-Port und DNS (Antwort, erwarteter Wert).
+  Schlüsselwort), TLS-Zertifikat (Resttage), TCP-Port, DNS (Antwort, erwarteter Wert) und Domain-Ablauf (RDAP).
+- **Übersichten:** Update-Stand aller Server, Ablaufdaten aller Zertifikate und Domains, Verfügbarkeitsberichte
+  (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,
-  Hysterese, Wartungsfenstern und Quittieren.
+  Hysterese, Quittieren und Wartung – spontan oder als wiederkehrendes Wartungsfenster für Geräte und Ordner
+  (z. B. monatlich zum Patchday).
 - **Verlauf:** Diagramme bis zu einem Jahr (Rohwerte 2 Tage, 5-Minuten-Werte 35 Tage, Stundenwerte 400 Tage).
 - **Externe API** (nur lesend, API-Token) und optional Push der Zusammenfassung an eine **Zentrale**, die alle
   Kunden-Container zusammenführt.

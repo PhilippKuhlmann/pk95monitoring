@@ -176,10 +176,13 @@ type Core struct {
 	settings Settings
 	enroll   string
 
-	mu      sync.Mutex // guards devices, rt and open
+	mu      sync.Mutex // guards devices, rt, open, windows and winActive
 	devices map[string]model.Device
 	rt      map[string]*devState
 	open    map[string]*openAlert // by alertKey(device, check)
+	windows map[string]MaintWindow
+	// winActive is the start of the running occurrence per window (for the begin/end events).
+	winActive map[string]int64
 
 	// pmu serializes the store writes of device data that happen outside mu (statuses,
 	// metrics, LastSeen) against DeleteDevice, so a deleted device leaves nothing behind.

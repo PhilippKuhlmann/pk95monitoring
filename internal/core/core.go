@@ -70,6 +70,7 @@ func New(st *store.Store, opt Options) (*Core, error) {
 		Proxmox: proxmox.New(), SNMP: snmp.New(), NUT: nut.New(),
 		Notify: notify.Send, Mail: notify.SendMail, Now: time.Now,
 		devices: map[string]model.Device{}, rt: map[string]*devState{}, open: map[string]*openAlert{},
+		windows: map[string]MaintWindow{}, winActive: map[string]int64{},
 		wake: make(chan struct{}, 1), tm: defaultTimings(),
 	}
 	c.settings = DefaultSettings()
@@ -85,6 +86,13 @@ func New(st *store.Store, opt Options) (*Core, error) {
 	devs, err := store.List[model.Device](st, KindDevice)
 	if err != nil {
 		return nil, fmt.Errorf("devices: %w", err)
+	}
+	wins, err := store.List[MaintWindow](st, KindWindow)
+	if err != nil {
+		return nil, fmt.Errorf("maintenance windows: %w", err)
+	}
+	for _, w := range wins {
+		c.windows[w.ID] = w
 	}
 	statuses, err := st.LoadStatuses()
 	if err != nil {
@@ -177,6 +185,7 @@ func (c *Core) Run(ctx context.Context) {
 			return
 		case <-silence.C:
 			c.checkSilence()
+			c.applyWindows()
 			c.syncAllAlerts()
 			c.renotify()
 			if c.centralReset.Swap(false) {

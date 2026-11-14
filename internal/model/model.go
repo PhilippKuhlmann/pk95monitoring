@@ -219,6 +219,10 @@ func (d Device) InMaintenance(now int64) bool {
 type Maintenance struct {
 	Until int64  `json:"until"`
 	Note  string `json:"note"`
+	// Window is the maintenance window that set it and Start the start of its occurrence
+	// (empty/0 for a maintenance set by hand).
+	Window string `json:"window,omitempty"`
+	Start  int64  `json:"start,omitempty"`
 }
 
 // ProxmoxConfig connects to the Proxmox VE API with an API token.
@@ -303,14 +307,16 @@ const (
 	NetTCP  = "tcp"
 	NetDNS  = "dns"
 	NetTLS  = "tls"
+	// NetDomain asks the registry (RDAP) when the domain of the target expires.
+	NetDomain = "domain"
 )
 
 // NetCheck is one network check of a device.
 type NetCheck struct {
 	ID     string `json:"id"`   // stable within the device (6 random chars); check key is "net:"+ID
-	Type   string `json:"type"` // ping, http, tcp, dns, tls
+	Type   string `json:"type"` // ping, http, tcp, dns, tls, domain
 	Name   string `json:"name"`
-	Target string `json:"target"` // ping: host (empty = device host); http: URL; tcp/tls: host:port; dns: name to resolve
+	Target string `json:"target"` // ping: host (empty = device host); http: URL; tcp/tls: host:port; dns: name to resolve; domain: domain (empty = device host)
 	// http
 	Method       string `json:"method,omitempty"`        // GET (default) or HEAD
 	ExpectStatus int    `json:"expect_status,omitempty"` // 0 = any 2xx/3xx
@@ -456,11 +462,14 @@ func DefaultThresholds() []Threshold {
 		{Metric: "ping.loss", Warn: f(20), Crit: f(100), Count: 2},
 		{Metric: "http.time", Warn: f(5000), Crit: f(15000), Count: 2},
 		{Metric: "cert.days", Warn: f(21), Crit: f(7), Below: true},
+		{Metric: "domain.days", Warn: f(30), Crit: f(14), Below: true},
 		{Metric: "ups.battery", Warn: f(50), Crit: f(20), Below: true},
 		{Metric: "ups.runtime", Warn: f(10), Crit: f(5), Below: true},
 		{Metric: "printer.toner", Warn: f(10), Crit: f(2), Below: true},
 		{Metric: "poe.usage", Warn: f(85), Crit: f(95)},
 		{Metric: "updates.security", Warn: f(1)},
+		{Metric: "updates.age", Warn: f(35), Crit: f(60)},
+		{Metric: "updates.failed", Warn: f(1)},
 		// Proxmox hardware and storage health
 		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
 		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"pk95monitoring/internal/model"
@@ -37,12 +38,12 @@ func TestParseAptUpgrade(t *testing.T) {
 		out  string
 		want updateCount
 	}{
-		{"debian", aptSample, updateCount{3, 2}},
-		{"ubuntu", aptUbuntu, updateCount{2, 1}},
+		{"debian", aptSample, updateCount{Pending: 3, Security: 2}},
+		{"ubuntu", aptUbuntu, updateCount{Pending: 2, Security: 1}},
 		{"none", "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n", updateCount{}},
 		{"empty", "", updateCount{}},
 	} {
-		if got := parseAptUpgrade(tc.out); got != tc.want {
+		if got := parseAptUpgrade(tc.out); got.Pending != tc.want.Pending || got.Security != tc.want.Security {
 			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
 		}
 	}
@@ -100,7 +101,8 @@ func TestParseSystemctl(t *testing.T) {
 
 func TestParsePSJSON(t *testing.T) {
 	var c updateCount
-	if err := parsePSJSON("WARNUNG: irgendwas\r\n{\"pending\":5,\"security\":2}\r\n", &c); err != nil || c != (updateCount{5, 2}) {
+	if err := parsePSJSON("WARNUNG: irgendwas\r\n{\"pending\":5,\"security\":2,\"titles\":[\"KB1\"],\"last_install\":1760000000,\"failed\":1}\r\n", &c); err != nil ||
+		c.Pending != 5 || c.Security != 2 || len(c.Titles) != 1 || c.LastInstall != 1760000000 || c.Failed != 1 {
 		t.Fatalf("got %+v, %v", c, err)
 	}
 	var e eventlogResult
@@ -128,7 +130,7 @@ func TestEncodePS(t *testing.T) {
 }
 
 func TestBuildUpdatesCheck(t *testing.T) {
-	ch := buildUpdatesCheck(updateCount{5, 2}, nil, false)
+	ch := buildUpdatesCheck(updateCount{Pending: 5, Security: 2}, nil, false)
 	if ch.Key != "updates" || ch.State != model.StateOK || ch.Message != "5 Updates, davon 2 Sicherheitsupdates" || len(ch.Metrics) != 2 ||
 		ch.Metrics[0].Name != "updates.pending" || ch.Metrics[1].Name != "updates.security" || ch.Metrics[1].Value != 2 {
 		t.Errorf("check %+v", ch)
@@ -141,8 +143,30 @@ func TestBuildUpdatesCheck(t *testing.T) {
 	if ch.State != model.StateUnknown || len(ch.Metrics) != 0 {
 		t.Errorf("error: %+v", ch)
 	}
-	if updatesMessage(updateCount{}) != "System ist aktuell" || updatesMessage(updateCount{1, 0}) != "1 Update verfügbar" {
+	if updatesMessage(updateCount{}) != "System ist aktuell" || updatesMessage(updateCount{Pending: 1}) != "1 Update verfügbar" {
 		t.Error("updatesMessage")
+	}
+}
+
+func TestUpdateHistory(t *testing.T) {
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.Local)
+	ch := model.Check{Message: "2 Updates verfügbar"}
+	addUpdateHistory(&ch, updateCount{Pending: 7, Titles: []string{"a", "b", "c", "d", "e", "f", "g"}, Failed: 2,
+		LastInstall: now.Add(-40*24*time.Hour - time.Hour).Unix()}, now)
+	if len(ch.Metrics) != 2 || ch.Metrics[0].Name != "updates.age" || ch.Metrics[0].Value != 40 || ch.Metrics[1].Value != 2 {
+		t.Fatalf("metrics %+v", ch.Metrics)
+	}
+	if ch.Message != "2 Updates verfügbar · letzte Installation vor 40 Tagen · 2 fehlgeschlagen" {
+		t.Fatalf("message %q", ch.Message)
+	}
+	if ch.Facts["Ausstehend"] != "a · b · c · d · e · und 2 weitere" || ch.Facts["Fehlgeschlagen (30 Tage)"] != "2" || ch.Facts["Letzte Installation"] == "" {
+		t.Fatalf("facts %+v", ch.Facts)
+	}
+	// Linux: no history, no extra metrics
+	ch = model.Check{}
+	addUpdateHistory(&ch, updateCount{Pending: 1}, now)
+	if len(ch.Metrics) != 0 || ch.Facts != nil {
+		t.Fatalf("linux %+v", ch)
 	}
 }
 

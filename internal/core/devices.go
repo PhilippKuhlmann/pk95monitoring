@@ -602,9 +602,13 @@ func (c *Core) SetMaintenance(id string, until int64, note string) (model.Device
 		return model.Device{}, store.ErrNotFound
 	}
 	now := c.Now().Unix()
-	if until > now {
+	switch m := d.Maintenance; {
+	case until > now:
 		d.Maintenance = &model.Maintenance{Until: until, Note: strings.TrimSpace(note)}
-	} else {
+	case m != nil && m.Window != "" && m.Until > now:
+		// ended by hand: keep the occurrence, so the window does not start it again
+		d.Maintenance = &model.Maintenance{Until: now, Note: m.Note, Window: m.Window, Start: m.Start}
+	default:
 		d.Maintenance = nil
 	}
 	d.Updated = now
@@ -615,7 +619,7 @@ func (c *Core) SetMaintenance(id string, until int64, note string) (model.Device
 	if rt := c.rt[id]; rt != nil {
 		c.syncAlerts(d, rt, now)
 	}
-	if d.Maintenance != nil {
+	if until > now {
 		body := "bis " + c.fmtTime(until)
 		if d.Maintenance.Note != "" {
 			body += " – " + d.Maintenance.Note

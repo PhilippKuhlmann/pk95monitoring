@@ -73,17 +73,44 @@ func powershell(ctx context.Context, script string) (string, error) {
 	return string(out), nil
 }
 
-// psUpdateSearch queries Windows Update over COM (the same API the settings app uses).
+// psUpdateSearch queries Windows Update over COM (the same API the settings app uses): the
+// pending updates and, from the update history, the last successful installation and the
+// updates whose last attempt in the past 30 days failed. Definition updates (Defender)
+// install several times a day and are left out of the history.
 const psUpdateSearch = `$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 $session = New-Object -ComObject Microsoft.Update.Session
 $searcher = $session.CreateUpdateSearcher()
 $result = $searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'")
-$pending = 0; $security = 0
+$pending = 0; $security = 0; $titles = @()
 foreach ($u in $result.Updates) {
   $pending++
   if ($u.MsrcSeverity -eq 'Critical' -or $u.MsrcSeverity -eq 'Important') { $security++ }
+  if ($titles.Count -lt 10) { $titles += [string]$u.Title }
 }
-Write-Output (@{ pending = $pending; security = $security } | ConvertTo-Json -Compress)
+$lastInstall = 0; $failed = 0
+try {
+  $epoch = [datetime]'1970-01-01'
+  $since = (Get-Date).ToUniversalTime().AddDays(-30)
+  $defs = 'e0789628-ce08-4437-be74-2495b842f43b'
+  $seen = @{}
+  $n = $searcher.GetTotalHistoryCount()
+  if ($n -gt 0) {
+    foreach ($e in $searcher.QueryHistory(0, [Math]::Min($n, 300))) {
+      if ($e.Operation -ne 1) { continue }
+      $isDef = "$($e.Title)" -match 'KB2267602|Security Intelligence|Definition'
+      try { foreach ($c in $e.Categories) { if ($c.CategoryID -eq $defs) { $isDef = $true } } } catch {}
+      if ($isDef) { continue }
+      if (($e.ResultCode -eq 2 -or $e.ResultCode -eq 3) -and $lastInstall -eq 0) { $lastInstall = [int64]($e.Date - $epoch).TotalSeconds }
+      $id = "$($e.UpdateIdentity.UpdateID)"
+      if (-not $seen.ContainsKey($id)) {
+        $seen[$id] = $true
+        if ($e.ResultCode -eq 4 -and $e.Date -ge $since) { $failed++ }
+      }
+    }
+  }
+} catch {}
+Write-Output (@{ pending = $pending; security = $security; titles = $titles; last_install = $lastInstall; failed = $failed } | ConvertTo-Json -Compress)
 `
 
 func windowsUpdates(ctx context.Context) (updateCount, error) {

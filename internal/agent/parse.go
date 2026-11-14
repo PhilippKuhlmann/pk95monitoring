@@ -15,6 +15,12 @@ import (
 type updateCount struct {
 	Pending  int `json:"pending"`
 	Security int `json:"security"`
+	// Windows only: titles of pending updates (at most 10), the time of the last successful
+	// installation (unix seconds, definition updates excluded; 0 = unknown) and the updates
+	// whose last installation attempt in the past 30 days failed.
+	Titles      []string `json:"titles"`
+	LastInstall int64    `json:"last_install"`
+	Failed      int      `json:"failed"`
 }
 
 // parseAptUpgrade counts the "Inst " lines of "apt-get -s upgrade"; security updates come

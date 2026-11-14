@@ -105,7 +105,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | agent | `svc:<name>` | Dienst <display name> | Dienste |
 | agent | `services` | Dienste | Dienste (Windows: service list could not be read, unknown) |
 | agent | `systemd` | Systemd-Units | Dienste (Linux: failed units) |
-| agent | `updates` | Updates | Updates (Linux apt or dnf / Windows Update; reboot required = warn) |
+| agent | `updates` | Updates | Updates (Linux apt or dnf / Windows Update; reboot required = warn). Windows also reads the update history (at most 300 entries, definition updates – category `e0789628-…` or title KB2267602 / Security Intelligence – left out): metrics `updates.age` (days since the last successful installation) and `updates.failed` (updates whose latest attempt in the past 30 days failed), facts "Letzte Installation", "Fehlgeschlagen (30 Tage)", "Ausstehend" (first 5 titles) |
 | agent | `eventlog` | Ereignisprotokoll | System (Windows; critical events in the last hour = warn) |
 | proxmox | `pve:cluster` | Cluster | Cluster (quorum, nodes online) |
 | proxmox | `pve:node:<node>` | Knoten <node> | Knoten |
@@ -133,7 +133,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | snmp | `snmp:raid:<name>` | RAID <name> | Speicher (Synology) |
 | snmp | `snmp:custom:<name>` | <name> | Eigene Werte |
 | nut | `nut:<ups>` | the UPS description from LIST UPS, else "USV <ups>" | USV (state from `ups.status`, see "NUT"; facts Hersteller, Modell, Seriennummer, Firmware, Akku-Datum, Treiber, Status (raw flags), USV-Name (when a description is shown)) |
-| net | `net:<id>` | NetCheck.Name or e.g. "Ping 10.0.0.1" | Netzwerk-Checks |
+| net | `net:<id>` | NetCheck.Name or e.g. "Ping 10.0.0.1", "Domain example.org" | Netzwerk-Checks. Type `domain`: the registrable domain of the target (name, host or URL; empty = device host; `publicsuffix`) is looked up over RDAP – server from the IANA bootstrap (`data.iana.org/rdap/dns.json`, cached 24 h) or a built-in fallback (.de DENIC, .ch/.li SWITCH); results cached 12 h (errors 1 h). Metric `domain.days`, facts Domain, Läuft ab, Registrar, Registriert seit, Status, RDAP-Server; 404 = crit "nicht registriert"; client/server hold, redemption period, pending delete = crit; no expiry event (DENIC) = ok with a note; TLD without RDAP = unknown |
 
 ## Metrics
 
@@ -154,6 +154,8 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `procs` | "" | | agent |
 | `services.failed` | "" | | agent |
 | `updates.pending`, `updates.security` | "" | (node for PVE) | agent, pve |
+| `updates.age` | d | | agent Windows (default threshold warn 35, crit 60) |
+| `updates.failed` | "" | | agent Windows (default threshold warn 1) |
 | `eventlog.errors` | "" | | agent Windows (System+Application Error/Critical in the last 24 h) |
 | `guest.cpu` | % | `vm/<id>` / `ct/<id>` | pve (100 % = all assigned cores) |
 | `guest.mem` | % | ditto | pve |
@@ -176,6 +178,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `http.time` | ms | | netcheck |
 | `http.status` | "" | | netcheck |
 | `cert.days` | d | (pve: `<node>`) | netcheck http(s)/tls, pve |
+| `domain.days` | d | | netcheck domain (default threshold warn 30, crit 14, below) |
 | `tcp.time`, `dns.time` | ms | | netcheck |
 | `if.rx`, `if.tx` | B/s | ifName | snmp (ports that are up) |
 | `if.errors` | 1/s | ifName | snmp (in+out errors, ports that are up) |
@@ -374,7 +377,22 @@ Authenticated:
   (`status.checks[].mode` "quiet" and `.muted` warn/crit for quiet checks, `status.hidden: [{key, name, group}]`
   for checks switched off by a rule, omitted when empty)
 - `POST /api/devices/{id}/poll` → `{status}`
-- `POST /api/devices/{id}/maintenance {until, note}` (until 0 = end) → Device
+- `POST /api/devices/{id}/maintenance {until, note}` (until 0 = end) → Device. Ending a maintenance a window set
+  keeps `{until: now, window, start}`, so the window does not start it again in that occurrence.
+- `GET /api/maintenance` → `{windows:[WindowView]}` (by name); `POST /api/maintenance` (MaintWindow) and
+  `PUT /api/maintenance/{id}` → WindowView (422 with German errors on name, repeat, date, weekdays, week, day,
+  offset, start, minutes, targets, note); `DELETE /api/maintenance/{id}` → `{ok}`. `MaintWindow` = `{id, name,
+  enabled, repeat: once|daily|weekly|monthly, date ("2026-11-20", once), weekdays (0 = Sunday; weekly: days,
+  monthly with week: one day), week (monthly: 1–4, 5 = last; 0 = on day), day (1–31, the last day in shorter
+  months), offset (days, −7…14, monthly with week), start ("22:00", local time), minutes (5…10080), devices:[id],
+  folders:[path], note, created, updated}`; `WindowView` adds `schedule` (German text), `active_until`, `next`,
+  `matches`. `GET /api/devices/{id}` has `windows:[WindowView]` (enabled windows of the device, by next start).
+- `GET /api/updates` → `{rows:[UpdateRow]}`: every `updates` / `pve:updates:<node>` check of the enabled devices,
+  worst first – `{device_id, device, name, check_key, group, type, os, platform, state, acked, message, pending,
+  security, age, failed (null when not reported), reboot, last_install, titles, updated}`.
+- `GET /api/expiry` → `{rows:[ExpiryRow]}`: every check with `cert.days` or `domain.days` (and domain checks
+  without a date), soonest first – `{device_id, device, group, check_key, name, kind: cert|domain, days (null =
+  unknown), until, detail (issuer / registrar), state, acked, message}`.
 - `POST /api/devices/{id}/discovery {accept:[key], remove:[key]}` → `{accepted, removed, status}` (unknown keys
   ignored; only new keys are accepted, only vanished keys removed). `status.checks[].mode` "new" marks new
   checks, `status.vanished: [{key, name, group, last}]` the vanished ones; Device has `auto_accept`.
@@ -478,8 +496,11 @@ unifi; PoE on 12 ports, LLDP neighbors, fans, temperatures; "Alarm bei Link-Ausf
 a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port updated on every start),
 5 simulated agents (2 Debian, 2 Windows, plus `demo-pve1` attached to the cluster as node pve1; one with high disk
 usage, one with a stopped service; rules: `updates` quiet on db01, `disk:/boot*` off on web01) reporting through
-`core.IngestReport` every 30 s, and a net device "Webseite" with HTTP, TLS, TCP and ping checks against local
-httptest servers. Existing demo databases get new demo devices (keep/import logic keeps user changes). Values
+`core.IngestReport` every 30 s (the Windows ones with update history: fs01 last installed 47 days ago with a
+failed update), and a net device "Webseite" with HTTP, TCP, ping and two domain checks against local httptest
+servers (the demo page also serves an RDAP registry via `netcheck.SetRDAPBootstrap`: muster-gmbh.com expires in
+26 days, muster-gmbh.de has no date). On the first start two maintenance windows are created ("Patchday Server",
+"Neustart Netzwerk"). Existing demo databases get new demo devices (keep/import logic keeps user changes). Values
 move realistically (sine + noise). Every demo device without history (all on the first start, new ones on later
 starts) is back-filled for 7 days so charts show data. `fake.DiscoveryAfter` (3 min) after the start the cluster
 gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections have something to show.
@@ -522,6 +543,20 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   page (default last month), `POST /api/report/send {month?}` sends it now (502 with the SMTP error). Events
   "Monatsbericht verschickt" / "Monatsbericht nicht verschickt". Saving `enabled` needs SMTP host, sender and a
   recipient.
+- Maintenance windows (`internal/core/maintwin.go`, store kind `window`): checked every silence period
+  (`applyWindows`, 30 s). While an occurrence runs, every device it applies to – listed devices, devices in the
+  folders and subfolders, and agents attached to either – gets `Maintenance{until: end, note: "Wartungsfenster
+  „<name>“ – <note>", window, start}` (persisted), unless a maintenance until at least that end runs already.
+  Lists, alerts and reports treat it as any maintenance. Saving a window drops the maintenance it set and applies
+  the new schedule at once; deleting ends it. Events "Wartungsfenster angelegt/geändert/gelöscht/begonnen
+  (n Geräte bis …)/beendet". Page `/maintenance` (nav "Wartungsfenster"): table with schedule, targets, state
+  (Läuft bis / Geplant / Aus / Abgelaufen) and next start; dialog with repeat-specific fields, weekday chips and a
+  searchable folder/device pick list. The device page head shows the windows of the device.
+- Page `/updates` (nav "Updates"): stat tiles (security updates, reboot required, not patched for 35 days, failed
+  updates) and the `GET /api/updates` table, filter "Handlungsbedarf" (not ok, reboot, security or failed; stored
+  in `pk95mon-upd-filter`) / "Alle"; rows open the check page.
+- Page `/expiry` (nav "Ablaufdaten"): stat tiles and the `GET /api/expiry` table (certificates of HTTP(S)/TLS
+  checks and Proxmox nodes, domains), soonest first.
 - Device list `/devices`: one compact row per device – state, name (+ attached agents) with address, type and
   group below and the first problem in one line (full text as tooltip), check counts with the last contact,
   CPU/RAM/disk bars, "Jetzt prüfen"; the whole row opens the device (edit and delete are on the device page).
