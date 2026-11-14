@@ -27,6 +27,7 @@ import (
 	"pk95monitoring/internal/fake/fakepve"
 	"pk95monitoring/internal/fake/fakeredfish"
 	"pk95monitoring/internal/fake/fakesnmp"
+	"pk95monitoring/internal/fake/fakeunifi"
 	"pk95monitoring/internal/fake/fakeveeam"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/store"
@@ -93,6 +94,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 	pbsSrv := fakepbs.New()
 	bmc := fakeredfish.New()
 	graph := fakegraph.New()
+	udm := fakeunifi.New()
 	c.Scanner = demoScan // the demo's networks are simulated
 	// The demo's Microsoft 365 tenant is simulated; real tenants added in the demo would be
 	// asked there too.
@@ -108,12 +110,13 @@ func Setup(c *core.Core) (stop func(), err error) {
 		pbsSrv.Close()
 		bmc.Close()
 		graph.Close()
+		udm.Close()
 	}
 
 	netcheck.SetRDAPBootstrap(plain.URL + "/rdap/dns.json")
 	now := time.Now()
 	agents := demoAgents(now)
-	if err := createDevices(c, pve, ups, vbr, pbsSrv, bmc, web, plain, agents, now); err != nil {
+	if err := createDevices(c, pve, ups, vbr, pbsSrv, bmc, udm, web, plain, agents, now); err != nil {
 		closeAll()
 		return nil, err
 	}
@@ -270,7 +273,7 @@ const demoUPSName = "ups"
 
 // createDevices adds missing demo devices. The Proxmox cluster, the NUT UPS and the web site
 // are updated on every start because the simulated servers get new ports and certificates.
-func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, bmc *fakeredfish.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
+func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, bmc *fakeredfish.Server, demoUniFi *fakeunifi.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
 	ts := now.Unix()
 	// New demo devices date back to the start of the back-filled history, so reports and the
 	// status page history cover it.
@@ -299,6 +302,9 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 			}
 			if d.M365 != nil {
 				old.M365 = d.M365
+			}
+			if d.UniFi != nil {
+				old.UniFi = d.UniFi // new port and certificate on every start
 			}
 			if d.Type == model.TypeNet {
 				old.Checks = d.Checks
@@ -371,6 +377,14 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 		Enabled: true, Interval: 60, Created: created, Updated: ts, Redfish: &rcfg,
 		Notes: "Simulierter Dell iDRAC 9 eines PowerEdge R650 (Demo): Netzteil 2 ohne Eingangsstrom, eine SSD mit vorhergesagtem Ausfall."}
 	if err := c.ImportDevice(keep(rd.ID, rd)); err != nil {
+		return err
+	}
+
+	ucfg := demoUniFi.Config()
+	ud := model.Device{ID: "demo-udm", Name: "UDM Pro Serverraum", Type: model.TypeUniFi, Host: demoUniFi.Host(), Group: groupNet,
+		Enabled: true, Interval: 60, Created: created, Updated: ts, UniFi: &ucfg,
+		Notes: "Simulierte UniFi Dream Machine Pro (Demo) mit UniFi Network und Protect: ein Access Point und eine Kamera offline, eine Kamera nimmt nicht auf."}
+	if err := c.ImportDevice(keep(ud.ID, ud)); err != nil {
 		return err
 	}
 

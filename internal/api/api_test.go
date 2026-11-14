@@ -66,6 +66,14 @@ func TestRedactDevice(t *testing.T) {
 		t.Errorf("redfish %v", rm)
 	}
 
+	uf := model.Device{ID: "u", Type: model.TypeUniFi, UniFi: &model.UniFiConfig{Port: 443, Username: "monitoring", Password: "udm-s3cret"}}
+	if b, _ := json.Marshal(redactDevice(uf)); strings.Contains(string(b), "udm-s3cret") {
+		t.Errorf("UniFi password in %s", b)
+	}
+	if um := toMap(t, redactDevice(uf))["unifi"].(map[string]any); um["has_password"] != true || um["username"] != "monitoring" {
+		t.Errorf("unifi %v", um)
+	}
+
 	ms := model.Device{ID: "m", Type: model.TypeM365, M365: &model.M365Config{TenantID: "t", ClientID: "c", Secret: "graph-s3cret"}}
 	if b, _ := json.Marshal(redactDevice(ms)); strings.Contains(string(b), "graph-s3cret") {
 		t.Errorf("Microsoft 365 secret in %s", b)

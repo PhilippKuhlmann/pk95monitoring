@@ -817,6 +817,31 @@ func (s *Server) testRedfish(w http.ResponseWriter, r *http.Request) {
 		"power": res.Power, "firmware": res.Firmware, "message": ""})
 }
 
+// testUniFi logs in to a UniFi OS console and reads Network and Protect: {id, host, unifi}.
+func (s *Server) testUniFi(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    string            `json:"id"`
+		Host  string            `json:"host"`
+		UniFi model.UniFiConfig `json:"unifi"`
+	}
+	if !decode(w, r, &req) || fieldErrs(w, needHost(req.Host)) {
+		return
+	}
+	if req.UniFi.Port < 0 || req.UniFi.Port > 65535 {
+		fieldErrs(w, map[string]string{"unifi.port": "Port zwischen 1 und 65535."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	res, err := s.C.TestUniFi(ctx, req.ID, strings.TrimSpace(req.Host), req.UniFi)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "console": res.Console, "network": res.Network, "protect": res.Protect,
+		"devices": res.Devices, "cameras": res.Cameras, "message": ""})
+}
+
 // testM365 signs in to a Microsoft 365 tenant and tries every area: {id, m365}.
 func (s *Server) testM365(w http.ResponseWriter, r *http.Request) {
 	var req struct {

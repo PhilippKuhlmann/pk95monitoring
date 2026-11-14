@@ -59,6 +59,7 @@ func TestClassify(t *testing.T) {
 		{Host{Ping: true, Ports: []int{}}, KindPingOnly, model.TypeNet},
 		{Host{Ports: []int{PortSSH, PortHTTPS, PortSynology}}, KindNAS, model.TypeSNMP},
 		{Host{Ports: []int{PortSSH, PortUniFi}, Title: "UniFi Network"}, KindWeb, model.TypeNet},
+		{Host{Ports: []int{PortSSH, PortHTTPS}, Title: "UniFi OS"}, KindUniFiOS, model.TypeUniFi},
 	} {
 		h := tc.h
 		Classify(&h)

@@ -50,6 +50,7 @@ const (
 	TypePBS     = "pbs"     // Proxmox Backup Server, polled over its REST API
 	TypeRedfish = "redfish" // server hardware over its management controller (iDRAC, iLO, XCC …) via Redfish
 	TypeM365    = "m365"    // Microsoft 365 / Entra ID tenant, polled over Microsoft Graph
+	TypeUniFi   = "unifi"   // UniFi OS console (Dream Machine, Cloud Key, UNVR …): UniFi Network and Protect
 )
 
 // Device is one monitored thing. Stored as JSON (store kind "device").
@@ -82,6 +83,7 @@ type Device struct {
 	PBS     *PBSConfig     `json:"pbs,omitempty"`
 	Redfish *RedfishConfig `json:"redfish,omitempty"`
 	M365    *M365Config    `json:"m365,omitempty"`
+	UniFi   *UniFiConfig   `json:"unifi,omitempty"`
 	Agent   *AgentConfig   `json:"agent,omitempty"`
 
 	// Checks are additional network checks; they work for every device type.
@@ -119,6 +121,10 @@ func (d Device) Clone() Device {
 	if d.M365 != nil {
 		m := *d.M365
 		d.M365 = &m
+	}
+	if d.UniFi != nil {
+		u := *d.UniFi
+		d.UniFi = &u
 	}
 	if d.PBS != nil {
 		p := *d.PBS
@@ -364,6 +370,16 @@ type M365Config struct {
 	TenantID string `json:"tenant_id"` // directory (tenant) ID or a verified domain
 	ClientID string `json:"client_id"` // application (client) ID
 	Secret   string `json:"secret,omitempty"`
+}
+
+// UniFiConfig polls a UniFi OS console with a local user (view-only rights for Network and
+// Protect, no two-factor login) over HTTPS.
+type UniFiConfig struct {
+	Port        int    `json:"port"` // default 443
+	Username    string `json:"username"`
+	Password    string `json:"password,omitempty"`
+	Fingerprint string `json:"fingerprint"` // SHA-256 of the console certificate (pinning); empty = system CAs
+	Site        string `json:"site"`        // UniFi Network site (name or description); "" = every site
 }
 
 // BackupServer reports whether a device type is a backup server (managed on the page

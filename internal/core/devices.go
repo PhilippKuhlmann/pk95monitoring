@@ -16,6 +16,7 @@ import (
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/collect/redfish"
 	"pk95monitoring/internal/collect/snmp"
+	"pk95monitoring/internal/collect/unifi"
 	"pk95monitoring/internal/collect/veeam"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/store"
@@ -172,7 +173,7 @@ func (c *Core) SaveDevice(d model.Device) (model.Device, map[string]string, erro
 // Values are compared as printed, so a nil and an empty list are the same.
 func collectChanged(a, b model.Device) bool {
 	show := func(d model.Device) string {
-		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam), deref(d.PBS), deref(d.Redfish), deref(d.M365))
+		s := fmt.Sprintf("%s|%+v|%+v|%+v|%+v|%+v|%+v|%+v|%+v", d.Host, deref(d.Proxmox), deref(d.SNMP), deref(d.NUT), deref(d.Veeam), deref(d.PBS), deref(d.Redfish), deref(d.M365), deref(d.UniFi))
 		if d.Agent != nil {
 			s += fmt.Sprintf("|%v|%v|%v", d.Agent.Services, d.Agent.WatchAutoServices, d.Agent.IgnoreServices)
 		}
@@ -208,6 +209,8 @@ func typeLabel(t string) string {
 		return "Hardware (Redfish)"
 	case model.TypeM365:
 		return "Microsoft 365"
+	case model.TypeUniFi:
+		return "UniFi-Konsole"
 	}
 	return t
 }
@@ -231,7 +234,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		errs["notes"] = "Höchstens 4000 Zeichen."
 	}
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish, model.TypeM365:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish, model.TypeM365, model.TypeUniFi:
 	case model.TypeAgent:
 		if old == nil {
 			errs["type"] = "Agents werden bei der Installation des Agents automatisch angelegt."
@@ -244,7 +247,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 	}
 	if d.Host != "" && (len(d.Host) > 253 || !hostRe.MatchString(d.Host)) {
 		errs["host"] = "Hostname oder IP-Adresse ohne Protokoll und Pfad angeben."
-	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || d.Type == model.TypeRedfish || model.BackupServer(d.Type)) {
+	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || d.Type == model.TypeRedfish || d.Type == model.TypeUniFi || model.BackupServer(d.Type)) {
 		errs["host"] = "Hostname oder IP-Adresse angeben."
 	} else if d.Host == "" && d.Type == model.TypeNet && len(d.Checks) == 0 {
 		errs["host"] = "Host oder mindestens einen Check angeben."
@@ -287,6 +290,11 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		validateM365(d, old, errs)
 	} else {
 		d.M365 = nil
+	}
+	if d.Type == model.TypeUniFi {
+		validateUniFi(d, old, errs)
+	} else {
+		d.UniFi = nil
 	}
 	if d.Type == model.TypeAgent && old != nil {
 		in := d.Agent
@@ -573,6 +581,8 @@ func (c *Core) forgetCollector(d model.Device) {
 		c.Redfish.Forget(d.ID)
 	case model.TypeM365:
 		c.M365.Forget(d.ID)
+	case model.TypeUniFi:
+		c.UniFi.Forget(d.ID)
 	}
 }
 
@@ -684,6 +694,53 @@ func validateRedfish(d *model.Device, old *model.Device, errs map[string]string)
 	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(r.Fingerprint)); f != "" && !fpRe.MatchString(f) {
 		errs["redfish.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
 	}
+}
+
+func validateUniFi(d *model.Device, old *model.Device, errs map[string]string) {
+	if d.UniFi == nil {
+		d.UniFi = &model.UniFiConfig{}
+	}
+	u := d.UniFi
+	if u.Password == "" && old != nil && old.UniFi != nil {
+		u.Password = old.UniFi.Password
+	}
+	u.Username, u.Fingerprint, u.Site = strings.TrimSpace(u.Username), strings.TrimSpace(u.Fingerprint), strings.TrimSpace(u.Site)
+	if u.Port == 0 {
+		u.Port = unifi.DefaultPort
+	}
+	if u.Port < 1 || u.Port > 65535 {
+		errs["unifi.port"] = "Port zwischen 1 und 65535."
+	}
+	switch {
+	case u.Username == "":
+		errs["unifi.username"] = "Lokalen Benutzer der Konsole angeben (Rolle „Nur anzeigen“)."
+	case len(u.Username) > 128 || strings.ContainsAny(u.Username, "\r\n\x00\t"):
+		errs["unifi.username"] = "Ungültiger Benutzername."
+	}
+	switch {
+	case u.Password == "":
+		errs["unifi.password"] = "Kennwort angeben."
+	case len(u.Password) > 256:
+		errs["unifi.password"] = "Höchstens 256 Zeichen."
+	}
+	if len(u.Site) > 100 {
+		errs["unifi.site"] = "Höchstens 100 Zeichen."
+	}
+	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(u.Fingerprint)); f != "" && !fpRe.MatchString(f) {
+		errs["unifi.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
+	}
+}
+
+// TestUniFi logs in to a UniFi OS console and reads Network and Protect. When cfg.Password is
+// empty and id names an existing UniFi device, the stored password is used.
+func (c *Core) TestUniFi(ctx context.Context, id, host string, cfg model.UniFiConfig) (unifi.TestResult, error) {
+	if cfg.Password == "" && id != "" {
+		if d, err := c.Device(id); err == nil && d.UniFi != nil {
+			cfg.Password = d.UniFi.Password
+		}
+	}
+	cfg.Username = strings.TrimSpace(cfg.Username)
+	return unifi.Test(ctx, strings.TrimSpace(host), cfg)
 }
 
 // tenantRe matches a tenant given as a domain (contoso.onmicrosoft.com).

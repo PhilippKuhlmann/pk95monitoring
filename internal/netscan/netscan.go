@@ -103,6 +103,7 @@ const (
 	KindNAS      = "nas"
 	KindSwitch   = "switch"
 	KindUniFi    = "unifi"
+	KindUniFiOS  = "unifios" // UniFi OS console (Dream Machine, Cloud Key, UNVR)
 	KindSNMP     = "snmp"
 	KindWindows  = "windows"
 	KindLinux    = "linux"
@@ -576,6 +577,9 @@ func Classify(h *Host) {
 	case has(h, PortSynology) || containsAny(web, "synology", "diskstation"):
 		set(KindNAS, "Synology NAS", model.TypeSNMP, "SNMP am NAS einschalten (Systemsteuerung → Terminal & SNMP), dann als SNMP-Gerät hinzufügen")
 		h.Profile = snmp.ProfileAuto
+	case has(h, PortHTTPS) && containsAny(web, "unifi os", "unifi network", "unifi protect", "dream machine", "ubiquiti"):
+		set(KindUniFiOS, "UniFi-Konsole", model.TypeUniFi, "Als UniFi-Konsole hinzufügen (lokaler Benutzer mit Leserechten): Geräte, Internet, Kameras")
+		h.Port = PortHTTPS
 	case has(h, PortUniFi) || containsAny(web, "unifi"):
 		set(KindWeb, "UniFi Controller", model.TypeNet, "Mit Netzwerk-Checks überwachen (Ping und Weboberfläche)")
 		h.Port = PortUniFi

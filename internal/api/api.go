@@ -167,6 +167,7 @@ func (s *Server) routes() {
 	a("POST /api/test/pbs", s.testPBS)
 	a("POST /api/test/redfish", s.testRedfish)
 	a("POST /api/test/m365", s.testM365)
+	a("POST /api/test/unifi", s.testUniFi)
 	a("POST /api/test/netcheck", s.testNetCheck)
 	a("GET /api/alerts", s.alerts)
 	a("POST /api/alerts/{id}/ack", s.ackAlert)

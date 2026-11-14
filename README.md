@@ -24,6 +24,9 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
 - **Server-Hardware über den Management-Controller** (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro per Redfish):
   Netzteile und Redundanz, Lüfter, Temperaturen, Arbeitsspeicher, Prozessoren, RAID-Controller, Volumes und Platten –
   ohne Software auf dem Server, auch wenn das Betriebssystem steht.
+- **UniFi-Konsolen** (Dream Machine, Cloud Gateway, Cloud Key, UNVR): Access Points, Switches und Gateways
+  (offline, Firmware-Updates), Internetverbindung und WAN-Ausfallleitung, UniFi-Protect-Kameras (getrennt, nimmt
+  nicht auf), Aufnahmespeicher und Festplatten.
 - **Microsoft 365 / Entra ID** über Microsoft Graph: Entra-Connect-Synchronisierung, Lizenzen (frei, überbelegt,
   Kulanzzeit, Testversionen), ablaufende Geheimnisse und Zertifikate von App-Registrierungen, Domains und der
   Microsoft-Dienststatus.
@@ -462,6 +465,28 @@ Der Management-Port muss vom Monitoring aus per HTTPS erreichbar sein.
 - **RAID:** je Controller ein Check, je Volume (degradiert, Wiederaufbau mit Fortschritt) und je Platte (ausgefallen
   = kritisch, Ausfall vorhergesagt = Warnung, Verschleiß bei SSDs als `disk.wearout`). Die Plattenliste wird alle
   fünf Minuten gelesen. Ältere HPE-Firmware ohne die Standard-Ressource „Storage“ liefert keine RAID-Checks.
+
+## UniFi-Konsole (Network und Protect)
+
+Eine UniFi-OS-Konsole (Dream Machine, Dream Router, Cloud Gateway, Cloud Key, UNVR) liest das Monitoring über dieselbe
+Schnittstelle wie die UniFi-Oberfläche – mit einem **lokalen Benutzer**: in der Konsole unter *Admins & Benutzer* einen
+Admin mit „Nur lokaler Zugriff“ (ohne UI-Konto, ohne Zwei-Faktor-Anmeldung) und den Rollen **UniFi Network – Nur
+anzeigen** und **UniFi Protect – Nur anzeigen** anlegen. Unter **Geräte → Hinzufügen → UniFi-Konsole** Adresse, Benutzer
+und Kennwort eintragen, Fingerabdruck mit „Abrufen“ holen (selbst signiertes Zertifikat) und „Verbindung testen“.
+Optional lässt sich ein einzelner Network-Standort wählen.
+
+- **Konsole:** Modell, Firmware (verfügbares Update), Versionen von Network und Protect, CPU, Arbeitsspeicher, Temperatur.
+- **Internet:** WAN und Internet laut Konsole (getrennt = kritisch, eingeschränkt = Warnung), Latenz, WAN-IP, Anbieter;
+  eine getrennte zweite WAN-Leitung (Ausfallleitung) = Warnung.
+- **UniFi-Geräte:** jeder übernommene Access Point, Switch und jedes Gateway – getrennt = kritisch, Heartbeat
+  fehlt/isoliert = Warnung, während Updates und Bereitstellung kein Alarm; Clients, CPU, Speicher, Temperatur,
+  verfügbare Firmware.
+- **Protect:** jede Kamera (getrennt = kritisch, verbunden aber nimmt nicht auf, obwohl sie soll = Warnung,
+  Aufzeichnung aus = OK), Aufnahmespeicher (voll ist normal – älteste Aufnahmen werden überschrieben) und jede
+  Festplatte (fehlerhaft = kritisch).
+
+Diese Schnittstelle dokumentiert Ubiquiti nicht; nach größeren Updates kann sich etwas ändern. Die Statusseite hat
+dafür die Vorlage **Videoüberwachung** (Kameras und Aufzeichnung), und der Netzwerk-Scan erkennt UniFi-Konsolen.
 
 ## Microsoft 365 / Entra ID
 

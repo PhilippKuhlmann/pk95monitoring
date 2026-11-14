@@ -29,6 +29,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/veeam` | Veeam Backup & Replication 12+ REST client + collector (jobs, repositories) |
 | `internal/collect/pbs` | Proxmox Backup Server REST client + collector (datastores, verification, groups, tasks) |
 | `internal/collect/redfish` | Redfish client + collector for server management controllers (iDRAC, iLO, XCC …) |
+| `internal/collect/unifi` | UniFi OS console client (local user, cookie session) + collector for UniFi Network and Protect |
 | `internal/collect/m365` | Microsoft Graph client (client credentials) + collector for a Microsoft 365 / Entra ID tenant |
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
@@ -48,6 +49,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/fake/fakeveeam` | simulated Veeam REST API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakepbs` | simulated Proxmox Backup Server API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakeredfish` | simulated Redfish controller shaped like a Dell iDRAC 9 (httptest TLS) – used by tests and demo |
+| `internal/fake/fakeunifi` | simulated UniFi OS console (Dream Machine Pro with Network and Protect, httptest TLS) – used by tests and demo |
 | `internal/fake/fakegraph` | simulated Entra token endpoint + Microsoft Graph (tenant "Muster GmbH", httptest) – used by tests and demo |
 | `web/` | SPA: `index.html`, `app.js`, `style.css` (copied), `theme.js`, `logo.svg`, `fonts/` |
 | `deploy/updater.sh` | update helper on the Docker host (systemd path unit; see "Server update") |
@@ -160,6 +162,13 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | redfish | `rf:ctrl:<storage>` | Controller <model> | RAID: storage health and its StorageControllers; facts Modell, Firmware, Volumes, Platten. Storage without volumes and drives (onboard SATA) left out; storage tree cached 5 min |
 | redfish | `rf:vol:<storage>:<volume>` | Volume <name> (<RAID>) | RAID: health; operation Rebuild = warn with progress |
 | redfish | `rf:drive:<storage>:<drive>` | Platte <name> | Platten: health (crit "Platte ausgefallen"), FailurePredicted = warn; `disk.wearout` = 100 − PredictedMediaLifeLeftPercent |
+| unifi | `unifi:console` | Konsole | UniFi: model (gateway model code → name, else Protect NVR), firmware and update, Network and Protect versions; `cpu.usage`, `mem.usage`, `temp` of the gateway |
+| unifi | `unifi:wan:<site>` | Internet [(<site>)] | UniFi: health `wan` error = crit, warning = warn; `www` error = crit "Kein Internet"; `unifi.latency`; gateway `wan2` down = warn |
+| unifi | `unifi:dev:<mac>` | device name | UniFi-Geräte: adopted devices; state 0 crit, 1 ok, 4/5/10 ok (update, provisioning), others warn; `uptime`, `unifi.clients`, `cpu.usage`, `mem.usage`, `temp`; firmware update as fact |
+| unifi | `unifi:nvr` | Protect-Aufzeichnung | UniFi Protect: `unifi.storage_usage`, no storage = crit, recording disabled = warn |
+| unifi | `unifi:disk:<n>` | Festplatte <n> | UniFi Protect: systemInfo.storage.devices[].healthy false = crit |
+| unifi | `unifi:cam:<id>` | camera name | Kameras: adopted cameras; DISCONNECTED crit, connected without recording although mode ≠ never = warn |
+| unifi | `unifi:protect` | UniFi Protect | only on errors: no rights = warn, other errors unknown |
 | m365 | `m365:tenant` | Mandant | Microsoft 365: name, default domain, verified domains; an unverified domain = warn |
 | m365 | `m365:sync` | Entra Connect Sync | Microsoft 365 (only with `onPremisesSyncEnabled`): `m365.sync_age`; never synced = warn |
 | m365 | `m365:health` | Microsoft-Dienststatus | Microsoft 365: services in serviceInterruption = crit, serviceDegradation/investigating/restoring/verifying/extendedRecovery = warn, with the oldest open incident; advisories counted |
@@ -251,6 +260,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `temp` | °C | `System`, Synology diskID, `Batterie` (UPS), `USV` (nut `ups.temperature`; several UPS: `<ups>/USV`, `<ups>/Batterie`), UniFi `Sensor N`, Redfish sensor name | snmp, nut, redfish |
 | `fan.rpm` | rpm | fan name (`Lüfter N`) | snmp (UniFi), redfish |
 | `power.watts` | W | – | redfish (power consumption) |
+| `unifi.clients` | – | – | UniFi device clients |
+| `unifi.latency` | ms | – | UniFi internet latency (health `www`) |
+| `unifi.storage_usage` | % | – | UniFi Protect recording storage (no default threshold: full is normal) |
 | `m365.sync_age` | h | – | m365 Entra Connect (default warn 3, crit 12) |
 | `m365.cred_days` | d | – | m365 app secret/certificate (default below 30 warn, below 7 crit; kind `app` on "Ablaufdaten") |
 | `m365.sub_days` | d | – | m365 trial or ending subscription (below 14 warn, below 3 crit; kind `license` on "Ablaufdaten") |
@@ -556,6 +568,17 @@ targets (attached agents count for their parent). Default ranges: the /24 networ
 addresses (not loopback, link-local, 172.17.0.0/16), the 8 with most devices. Events "Netzwerk-Scan gestartet" and
 "Netzwerk-Scan beendet (n gefunden, m noch nicht überwacht)".
 
+## UniFi console (`collect/unifi`)
+
+Device type `unifi` – `UniFiConfig {port (443), username, password, fingerprint, site}`; the password is never sent to
+the UI (`has_password`). Login `POST /api/auth/login {username, password}` sets the cookie TOKEN; the session is kept
+per device and logged in again once on a 401 (login errors: 401/403/400 rejected, MFA in the body, 404 = no UniFi OS,
+429 = locked). Reads `GET /proxy/network/api/self/sites`, per site `s/{site}/stat/device`, `stat/health`,
+`stat/sysinfo`, and `GET /proxy/protect/api/bootstrap` (404/502/503 = no Protect; 401/403 = check `unifi:protect`).
+Sites 404/502/503 = a console without Network. TLS: pinned SHA-256 fingerprint, else system CAs. Network scan: HTTPS
+with a UniFi title = suggestion `unifi`. Status page template `video`: devices with `unifi:cam:*` checks, groups
+"Kameras" and "UniFi Protect", mode outage.
+
 ## Microsoft 365 (`collect/m365`)
 
 Device type `m365` – a device without host (default interval 300 s). `M365Config {tenant_id (GUID or domain),
@@ -744,6 +767,8 @@ Authenticated:
   the stored one); `POST /api/probe {host, port: 9419}` fetches the certificate fingerprint as for Proxmox.
 - `POST /api/test/pbs {id?, host, pbs}` → `{ok, version, datastores:[name], message}` (empty secret with id = the
   stored one; no datastore visible = error "Rolle Audit"); fingerprint via `POST /api/probe {host, port: 8007}`.
+- `POST /api/test/unifi {id?, host, unifi}` → `{ok, console, network, protect, devices, cameras, message}` (empty
+  password with id = the stored one); fingerprint via `POST /api/probe {host, port: 443}`.
 - `POST /api/test/m365 {id?, m365}` → `{ok, tenant, domain, sync, licenses, apps, missing:[permission], message}`
   (empty secret with id = the stored one).
 - `POST /api/test/redfish {id?, host, redfish}` → `{ok, vendor, model, serial, power, firmware, message}` (empty
@@ -872,7 +897,8 @@ the end are down and stay ok), a UniFi USW-Pro-24-PoE `demo-unifi` (10.0.0.3, gr
 unifi; PoE on 12 ports, LLDP neighbors, fans, temperatures; "Alarm bei Link-Ausfall" on 0/13–0/15, 0/24–0/26),
 a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port updated on every start), a Veeam
 server `demo-veeam` on `fakeveeam` (jobs with success, warning, failure and a disabled one; a NAS and an S3
-repository; config updated on every start), a Microsoft 365 tenant `demo-m365` on `fakegraph` (group Cloud; Entra Connect, an unverified domain, Entra ID P1 in its grace period, a Copilot trial ending in 9 days, an app secret expiring in 12 days, one expired 3 days ago, an Exchange Online incident), a Dell iDRAC `demo-idrac` on `fakeredfish` (PowerEdge R650: power supply 2 without input, redundancy lost,
+repository; config updated on every start), a UniFi Dream Machine Pro `demo-udm` on `fakeunifi` (group Netzwerk: 5 devices, AP "AP Lager" offline, 5 cameras –
+"Lager" disconnected, "Parkplatz" not recording –, 89 % recording storage), a Microsoft 365 tenant `demo-m365` on `fakegraph` (group Cloud; Entra Connect, an unverified domain, Entra ID P1 in its grace period, a Copilot trial ending in 9 days, an app secret expiring in 12 days, one expired 3 days ago, an Exchange Online incident), a Dell iDRAC `demo-idrac` on `fakeredfish` (PowerEdge R650: power supply 2 without input, redundancy lost,
 an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a
 9-day-old host backup, a failed sync job, a prune job with warnings), guest backups on the shared storage "backup" (VM 106 in no job),

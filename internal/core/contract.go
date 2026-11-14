@@ -21,6 +21,7 @@ import (
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/collect/redfish"
 	"pk95monitoring/internal/collect/snmp"
+	"pk95monitoring/internal/collect/unifi"
 	"pk95monitoring/internal/collect/veeam"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/netscan"
@@ -177,6 +178,7 @@ type Core struct {
 	PBS     *pbs.Collector
 	Redfish *redfish.Collector
 	M365    *m365.Collector
+	UniFi   *unifi.Collector
 
 	// Notify delivers a notification (default notify.Send); tests replace it.
 	Notify func(ctx context.Context, s notify.Settings, m notify.Message) error

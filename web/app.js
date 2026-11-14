@@ -188,8 +188,8 @@ function groupBy(list, keyFn) {
 const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { numeric: true });
 
 // ---------- labels ----------
-const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server", redfish: "Hardware (Redfish)", m365: "Microsoft 365" };
-const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive", redfish: "cpu", m365: "apps" };
+const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server", redfish: "Hardware (Redfish)", m365: "Microsoft 365", unifi: "UniFi-Konsole" };
+const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive", redfish: "cpu", m365: "apps", unifi: "signal" };
 const STATES = { ok: ["OK", "green"], warn: ["Warnung", "amber"], crit: ["Kritisch", "rose"], unknown: ["Unbekannt", ""], maintenance: ["Wartung", "blue"], disabled: ["Deaktiviert", ""] };
 const SDOT = { ok: "ok", warn: "warning", crit: "error", unknown: "", maintenance: "blue", disabled: "" };
 const RANK = { ok: 0, disabled: 0, maintenance: 0, unknown: 1, warn: 2, crit: 3 };
@@ -291,6 +291,9 @@ const METRIC_LABELS = {
   "m365.cred_days": ["Restlaufzeit App-Geheimnis", "d"],
   "m365.sub_days": ["Restlaufzeit Abonnement", "d"],
   "m365.lic_free": ["Freie Lizenzen", ""],
+  "unifi.clients": ["WLAN-Clients", ""],
+  "unifi.latency": ["Internet-Latenz", "ms"],
+  "unifi.storage_usage": ["Aufnahmespeicher belegt", "%"],
   "mssql.data_size": ["Datenbankgröße", "B"],
   "mssql.log_size": ["Größe des Transaktionslogs", "B"],
   "mssql.log_usage": ["Transaktionslog belegt", "%"],
@@ -1118,6 +1121,7 @@ function addDevice(done) {
       ["snmp", "SNMP-Gerät", "Switch, USV, Drucker, NAS – Schnittstellen, Akku, Toner, Speicher."],
       ["nut", "USV (NUT-Server)", "USV über Network UPS Tools, z. B. UniFi-USV – Akku, Restlaufzeit, Last, Spannungen."],
       ["redfish", "Server-Hardware (iDRAC, iLO, XCC)", "Über den Management-Controller per Redfish – Netzteile, Lüfter, Temperaturen, RAID und Platten, auch wenn das Betriebssystem steht."],
+      ["unifi", "UniFi-Konsole (Dream Machine, Cloud Key, UNVR)", "UniFi Network und Protect: Access Points, Switches, Internetverbindung, Kameras, Aufzeichnung und Festplatten."],
       ["m365", "Microsoft 365 / Entra ID", "Mandant über Microsoft Graph – Entra-Connect-Sync, Lizenzen, ablaufende App-Geheimnisse, Domains und der Microsoft-Dienststatus."],
       ["net", "Netzwerk / Website", "Ping, HTTP(S), TCP-Port, DNS und TLS-Zertifikat – ohne Software auf dem Ziel."]] }],
     submit: async (v) => {
@@ -1267,12 +1271,13 @@ function deviceForm(dev, type, done, pre) {
   const pb = d0.pbs || { port: 8007, token_id: "", fingerprint: "" };
   const rf = d0.redfish || { port: 443, username: "", fingerprint: "" };
   const ms = d0.m365 || { tenant_id: "", client_id: "" };
+  const uf = d0.unifi || { port: 443, username: "", fingerprint: "", site: "" };
   const groups = [...new Set([...(state.groups || []), ...(d0.group ? [d0.group] : [])])].sort((a, b) => a.localeCompare(b, "de"));
-  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs" || type === "redfish";
-  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", redfish: "z. B. iDRAC hv01", m365: "z. B. Microsoft 365", agent: "" }[type];
+  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs" || type === "redfish" || type === "unifi";
+  const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", redfish: "z. B. iDRAC hv01", m365: "z. B. Microsoft 365", unifi: "z. B. UDM Pro Büro", agent: "" }[type];
   const fields = [
     { name: "name", label: "Name", value: d0.name, required: true, placeholder: namePh },
-    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : type === "redfish" ? "Management-Controller (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
+    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : type === "redfish" ? "Management-Controller (Host / IP)" : type === "unifi" ? "Konsole (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
       placeholder: type === "net" ? "optional, z. B. 192.168.1.1" : "192.168.1.10",
       hint: type === "agent" ? "Meldet der Agent selbst; nur für Ping-Checks und die Anzeige." : type === "net" ? "Standardziel für Ping-Checks ohne eigenes Ziel." : type === "nut" ? "Die USV selbst (z. B. UniFi) oder der Server, an dem sie per USB hängt." : "" },
     { name: "group", label: "Gruppe", value: d0.group, list: "dl-groups", placeholder: "z. B. Server, Netzwerk" },
@@ -1366,6 +1371,20 @@ function deviceForm(dev, type, done, pre) {
         <p class="hint">Der Management-Port (meist ein eigenes Netz) muss vom Monitoring aus per HTTPS erreichbar sein. Gelesen werden Netzteile, Lüfter, Temperaturen, Arbeitsspeicher, Prozessoren und die RAID-Controller mit Volumes und Platten.</p></details>
     </div></div>`;
   }
+  if (type === "unifi") {
+    extra += `<div class="section"><div class="section-title">UniFi-Konsole</div><div class="form-grid">
+      ${field({ name: "unifi.port", label: "Port", type: "number", min: 1, max: 65535, value: uf.port || 443, hint: "HTTPS, Standard 443." })}
+      ${field({ name: "unifi.site", label: "Standort (optional)", value: uf.site, placeholder: "alle", hint: "Name eines UniFi-Network-Standorts; leer = alle." })}
+      ${field({ name: "unifi.username", label: "Lokaler Benutzer", required: true, value: uf.username, mono: true, placeholder: "monitoring" })}
+      ${field({ name: "unifi.password", label: "Kennwort", type: "password", required: !uf.has_password, placeholder: uf.has_password ? "unverändert lassen" : "" })}
+      ${field({ name: "unifi.fingerprint", label: "Fingerabdruck des Zertifikats", value: uf.fingerprint, wide: true, mono: true, button: "Abrufen", hint: "Konsolen haben ein selbst signiertes Zertifikat – „Abrufen“ übernimmt seinen Fingerabdruck." })}
+      <div class="field wide"><div class="flex"><button class="btn gray" type="button" data-test-unifi>${icon("signal")} Verbindung testen</button></div><div class="test-out" data-test-out></div></div>
+      <details class="howto wide"><summary>Welcher Benutzer?</summary>
+        <ol class="hint"><li>In der Konsole unter <b>Admins &amp; Benutzer</b> einen Admin anlegen, z. B. „monitoring“, mit <b>„Nur lokaler Zugriff“</b> (ohne UI-Konto, ohne Zwei-Faktor-Anmeldung).</li>
+          <li>Rollen: <b>UniFi Network – Nur anzeigen</b> und <b>UniFi Protect – Nur anzeigen</b>, alle anderen Anwendungen ohne Zugriff.</li></ol>
+        <p class="hint">Gelesen werden – über dieselbe Schnittstelle wie die UniFi-Oberfläche – die Access Points, Switches und Gateways mit Zustand und Firmware, die Internetverbindung sowie in Protect die Kameras, ob sie aufnehmen, und Speicher und Festplatten. Diese Schnittstelle dokumentiert Ubiquiti nicht; nach größeren Updates kann sich etwas ändern.</p></details>
+    </div></div>`;
+  }
   if (type === "m365") {
     extra += `<div class="section"><div class="section-title">Microsoft 365 (App-Registrierung)</div><div class="form-grid">
       ${field({ name: "m365.tenant_id", label: "Mandanten-ID (Verzeichnis-ID)", required: true, value: ms.tenant_id, mono: true, placeholder: "00000000-0000-0000-0000-000000000000", hint: "Oder eine Domain des Mandanten, z. B. kunde.onmicrosoft.com." })}
@@ -1386,8 +1405,8 @@ function deviceForm(dev, type, done, pre) {
     <div class="flex"><button class="btn gray sm" type="button" data-add-check>${icon("plus")} Check hinzufügen</button></div></div>`;
 
   let nc, oids, ifs;
-  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", pbs: "Proxmox Backup Server hinzufügen", redfish: "Server-Hardware hinzufügen", m365: "Microsoft 365 hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
-  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", pbs: "Datastores, Sicherungsgruppen, Verifizierung und Jobs eines Proxmox Backup Servers über einen API-Token mit Leserechten.", redfish: "Hardware eines Servers über seinen Management-Controller (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro) per Redfish.", m365: "Ein Microsoft-365-Mandant über Microsoft Graph – mit einer eigenen App-Registrierung, die nur lesen darf.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
+  const title = edit ? `${dev.name} bearbeiten` : { proxmox: "Proxmox VE hinzufügen", snmp: "SNMP-Gerät hinzufügen", nut: "USV (NUT) hinzufügen", veeam: "Veeam-Server hinzufügen", pbs: "Proxmox Backup Server hinzufügen", redfish: "Server-Hardware hinzufügen", m365: "Microsoft 365 hinzufügen", unifi: "UniFi-Konsole hinzufügen", net: "Netzwerk-Checks hinzufügen", agent: "Agent" }[type];
+  const text = !edit ? { proxmox: "Ein Knoten genügt, auch bei einem Cluster. Zugang über einen API-Token mit Leserechten.", snmp: "Switch, USV, Drucker oder NAS mit eingeschaltetem SNMP.", nut: "USV über einen NUT-Server (Network UPS Tools) – z. B. eine UniFi-USV oder ein Server mit angeschlossener USV.", veeam: "Jobs und Repositories eines Veeam-Backup-&-Replication-Servers (ab Version 12) über seine REST-API.", pbs: "Datastores, Sicherungsgruppen, Verifizierung und Jobs eines Proxmox Backup Servers über einen API-Token mit Leserechten.", redfish: "Hardware eines Servers über seinen Management-Controller (Dell iDRAC, HPE iLO, Lenovo XCC, Supermicro) per Redfish.", m365: "Ein Microsoft-365-Mandant über Microsoft Graph – mit einer eigenen App-Registrierung, die nur lesen darf.", unifi: "Eine UniFi-OS-Konsole mit UniFi Network und Protect – über einen lokalen Benutzer mit Leserechten.", net: "Erreichbarkeit, Antwortzeit und Zertifikate von Diensten und Websites." }[type] : esc(TYPE_LABELS[type] || type);
   const pxValues = (v) => ({
     port: Number(v["proxmox.port"]) || 8006, token_id: (v["proxmox.token_id"] || "").trim(), secret: v["proxmox.secret"] || "",
     fingerprint: (v["proxmox.fingerprint"] || "").trim(), watch_guests: v["proxmox.watch_guests"] || "onboot",
@@ -1407,6 +1426,10 @@ function deviceForm(dev, type, done, pre) {
   });
   const rfValues = (v) => ({
     port: Number(v["redfish.port"]) || 443, username: (v["redfish.username"] || "").trim(), password: v["redfish.password"] || "", fingerprint: (v["redfish.fingerprint"] || "").trim(),
+  });
+  const ufValues = (v) => ({
+    port: Number(v["unifi.port"]) || 443, username: (v["unifi.username"] || "").trim(), password: v["unifi.password"] || "",
+    fingerprint: (v["unifi.fingerprint"] || "").trim(), site: (v["unifi.site"] || "").trim(),
   });
   const msValues = (v) => ({
     tenant_id: (v["m365.tenant_id"] || "").trim(), client_id: (v["m365.client_id"] || "").trim(), secret: (v["m365.secret"] || "").trim(),
@@ -1546,6 +1569,29 @@ function deviceForm(dev, type, done, pre) {
           } catch (e) { out.innerHTML = ""; showErrors(d, e); }
         });
       }
+      if (type === "unifi") {
+        const fb = qs('[data-fbtn="unifi.fingerprint"]', d);
+        fb.onclick = () => run(fb, async () => {
+          showErrors(d, null);
+          try {
+            const r = await POST("/api/probe", { host: host(), port: Number(qs('[name="unifi.port"]', d).value) || 443 });
+            qs('[name="unifi.fingerprint"]', d).value = r.fingerprint;
+            toast("Fingerabdruck abgerufen.");
+          } catch (e) { showErrors(d, e.fields ? e : Object.assign(e, { fields: { "unifi.fingerprint": e.message } })); }
+        });
+        const tb = qs("[data-test-unifi]", d), out = qs("[data-test-out]", d);
+        tb.onclick = () => run(tb, async () => {
+          showErrors(d, null);
+          out.innerHTML = `<span class="spinner"></span> melde an …`;
+          try {
+            const r = await POST("/api/test/unifi", { id: dev ? dev.id : "", host: host(), unifi: ufValues(formValues(form)) });
+            out.innerHTML = r.ok === false ? `${pill("Fehler", "rose")} <span class="bad">${esc(r.message || "Verbindung fehlgeschlagen.")}</span>` :
+              `${pill("Verbunden", "green", true)} <span><b>${esc(r.console)}</b>${r.network ? ` · Network ${esc(r.network)} · ${int(r.devices)} ${r.devices === 1 ? "Gerät" : "Geräte"}` : ""}${r.protect ? ` · Protect ${esc(r.protect)} · ${int(r.cameras)} ${r.cameras === 1 ? "Kamera" : "Kameras"}` : " · ohne Protect"}</span>`;
+            const nm = qs('[name="name"]', d);
+            if (r.ok !== false && !nm.value.trim() && r.console) nm.value = r.console;
+          } catch (e) { out.innerHTML = ""; showErrors(d, e); }
+        });
+      }
       if (type === "m365") {
         const tb = qs("[data-test-m365]", d), out = qs("[data-test-out]", d);
         tb.onclick = () => run(tb, async () => {
@@ -1615,6 +1661,7 @@ function deviceForm(dev, type, done, pre) {
       if (type === "pbs") out.pbs = pbValues(v);
       if (type === "redfish") out.redfish = rfValues(v);
       if (type === "m365") out.m365 = msValues(v);
+      if (type === "unifi") out.unifi = ufValues(v);
       const r = edit ? await PUT(`/api/devices/${enc(dev.id)}`, out) : await POST("/api/devices", out);
       state.ovAt = 0;
       toast(edit ? "Gespeichert." : `${out.name} hinzugefügt – die erste Abfrage läuft.`);
@@ -2235,7 +2282,7 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Microsoft 365", "Lizenzen", "App-Registrierungen", "SQL Server", "SQL-Datenbanken", "SQL-Agent-Aufträge", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Microsoft 365", "Lizenzen", "App-Registrierungen", "SQL Server", "SQL-Datenbanken", "SQL-Agent-Aufträge", "UniFi", "UniFi-Geräte", "UniFi Protect", "Kameras", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 // fullIn: "voll in 23 Tagen" from the storage forecast of a check ("" without one).
@@ -2405,6 +2452,12 @@ function cardValue(c) {
   const v = (n) => mval(c, n), has = (n) => isNum(v(n));
   const sp = (n, n2) => ({ names: n2 ? [n, n2] : [n], inst: instOf(c, n) });
   const fa = c.facts || {};
+  // UniFi: devices, cameras and disks say their state; the recording shows its storage
+  if (/^unifi:(dev|cam|disk|console):?/.test(c.key)) {
+    const [head, ...rest] = String(c.msg || "").split(" · ");
+    return { word: true, text: head || "—", sub: rest.join(" · "), spark: has("unifi.clients") ? sp("unifi.clients") : undefined };
+  }
+  if (has("unifi.storage_usage")) return { text: fmtPct(v("unifi.storage_usage")), sub: fa.Speicher ? "voll – älteste Aufnahmen werden überschrieben" : "Aufnahmespeicher belegt", bar: v("unifi.storage_usage"), spark: sp("unifi.storage_usage") };
   if (has("ups.battery")) {
     const sub = [has("ups.runtime") ? `Restlaufzeit ${fmtVal(v("ups.runtime"), "min")}` : "", has("ups.load") ? `Last ${fmtPct(v("ups.load"))}` : ""].filter(Boolean).join(" · ");
     return { text: `Akku ${fmtPct(v("ups.battery"))}`, sub, spark: sp("ups.battery") };
@@ -3619,6 +3672,8 @@ const EXPLAIN = {
   "m365.cred_days": { what: "Wie viele Tage das Geheimnis oder Zertifikat der App-Registrierung noch gültig ist (das am längsten gültige zählt).", why: "Läuft es ab, hört die Anwendung schlagartig auf zu funktionieren – Scan-to-Mail, Sicherungen, Schnittstellen oder dieses Monitoring.", todo: ["Im Entra Admin Center unter App-Registrierungen → Zertifikate & Geheimnisse ein neues Geheimnis anlegen.", "Den neuen Wert in der Anwendung eintragen (bei dieser Überwachung: am Gerät unter Bearbeiten).", "Das alte Geheimnis danach löschen. Wird die App nicht mehr gebraucht, die App-Registrierung entfernen."] },
   "m365.sub_days": { what: "In wie vielen Tagen das Abonnement endet – angezeigt für Testversionen und Abonnements, die abgelaufen oder gesperrt sind.", why: "Endet es, verlieren die Benutzer die Lizenz: erst Kulanzzeit, dann gesperrt, am Ende werden Daten gelöscht.", todo: ["Im Microsoft 365 Admin Center unter Abrechnung → Ihre Produkte das Abonnement verlängern oder kaufen.", "Bei einer Testversion entscheiden, ob sie in ein bezahltes Abonnement übergehen soll.", "Wird das Produkt nicht mehr gebraucht, die Lizenzen den Benutzern entziehen."] },
   "m365.lic_free": { what: "Wie viele Lizenzen dieses Produkts noch frei sind (gekauft minus zugewiesen).", why: "Ohne freie Lizenz lässt sich kein neuer Mitarbeiter einrichten; zu viele freie Lizenzen kosten Geld.", todo: ["Vor einem Neuzugang rechtzeitig Lizenzen nachkaufen.", "Lizenzen ausgeschiedener Mitarbeiter entziehen.", "Eine Warnschwelle für wenige freie Lizenzen am Gerät unter Schwellwerte (Messwert m365.lic_free, unterhalb) setzen."] },
+  "unifi.storage_usage": { what: "Wie voll der Aufnahmespeicher von UniFi Protect ist.", why: "Ein voller Speicher ist bei Protect normal: die ältesten Aufnahmen werden überschrieben. Wächst die Zahl der Kameras, sinkt aber die Zeit, die zurückreicht.", todo: ["In Protect unter Einstellungen → Aufzeichnung die Aufbewahrungsdauer prüfen.", "Für längere Aufbewahrung eine größere oder zusätzliche Festplatte einbauen."] },
+  "unifi.latency": { what: "Antwortzeit ins Internet, wie die UniFi-Konsole sie misst.", why: "Hohe Latenz macht Telefonie, Videokonferenzen und Cloud-Anwendungen zäh.", todo: ["Auslastung der Leitung prüfen (große Uploads, Sicherungen in die Cloud).", "Bei dauerhaft hohen Werten den Anbieter kontaktieren."] },
   "mssql.log_backup_age": { what: "Wie viele Stunden die letzte Sicherung des Transaktionslogs zurückliegt – für Datenbanken im Wiederherstellungsmodell „Vollständig“.", why: "Im Modell „Vollständig“ wird das Log erst nach einer Protokollsicherung wiederverwendet. Ohne sie wächst die Logdatei, bis die Platte voll ist – dann steht die Datenbank. Und eine Wiederherstellung auf einen Zeitpunkt ist nur bis zur letzten Protokollsicherung möglich.", todo: ["Im Sicherungsprogramm (Veeam: „Transaktionsprotokolle sichern“) oder per Wartungsplan regelmäßige Protokollsicherungen einrichten.", "Braucht die Datenbank keine Wiederherstellung auf einen Zeitpunkt, das Wiederherstellungsmodell auf „Einfach“ stellen.", "Ist das Log schon riesig, nach der ersten Protokollsicherung die Datei verkleinern (DBCC SHRINKFILE)."] },
   "mssql.express_usage": { what: "Wie viel der 10-GB-Grenze, die SQL Server Express je Datenbank hat, die Datendateien belegen (das Log zählt nicht).", why: "Ist die Grenze erreicht, kann die Datenbank nicht mehr wachsen – die Anwendung meldet Fehler beim Speichern und steht.", todo: ["Beim Hersteller der Anwendung nachfragen, ob alte Daten archiviert oder gelöscht werden können.", "Auf eine SQL-Server-Standard-Lizenz wechseln (z. B. über den Hersteller der Anwendung).", "Leere Bereiche freigeben, falls viel gelöscht wurde (Datenbank verkleinern)."] },
   "mssql.log_usage": { what: "Wie viel Prozent der Logdatei gerade belegt sind (DBCC SQLPERF(LOGSPACE)).", why: "Ein volles Log kann meist wachsen; ist es fest begrenzt oder die Platte voll, stoppt die Datenbank alle Änderungen.", todo: ["Unter „Log wartet auf“ steht, was die Wiederverwendung blockiert (z. B. LOG_BACKUP = Protokollsicherung fehlt, ACTIVE_TRANSACTION = lange Transaktion).", "Protokollsicherungen einrichten oder das Wiederherstellungsmodell „Einfach“ verwenden."] },
@@ -4849,7 +4904,7 @@ PAGES["/maintenance"] = async (el, token) => {
 // ---------- network scan ----------
 const PORT_NAMES = { 22: "SSH", 53: "DNS", 80: "HTTP", 443: "HTTPS", 445: "SMB", 631: "IPP", 1433: "SQL Server", 3389: "RDP", 3493: "NUT",
   5001: "Synology", 5985: "WinRM", 8006: "Proxmox", 8007: "PBS", 8443: "UniFi", 9100: "JetDirect", 9419: "Veeam" };
-const SCAN_TYPES = { proxmox: "Proxmox VE", pbs: "Proxmox Backup Server", veeam: "Veeam", redfish: "Server-Hardware", nut: "USV (NUT)", snmp: "SNMP-Gerät", net: "Netzwerk-Checks" };
+const SCAN_TYPES = { unifi: "UniFi-Konsole", proxmox: "Proxmox VE", pbs: "Proxmox Backup Server", veeam: "Veeam", redfish: "Server-Hardware", nut: "USV (NUT)", snmp: "SNMP-Gerät", net: "Netzwerk-Checks" };
 
 // scanPrefill is what the device dialog gets for a found host.
 function scanPrefill(h) {

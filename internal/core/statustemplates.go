@@ -20,6 +20,7 @@ const (
 	TplLogon    = "logon"
 	TplM365     = "m365"
 	TplPrinting = "printing"
+	TplVideo    = "video"
 )
 
 // Targets of the internet device: two anycast resolvers of different providers, a DNS lookup
@@ -70,6 +71,10 @@ func (c *Core) templateFind(id string) []model.Device {
 			}
 		case TplPrinting:
 			if has("snmp:printer") {
+				out = append(out, d)
+			}
+		case TplVideo:
+			if rt != nil && slices.ContainsFunc(rt.st.Checks, func(cs model.CheckStatus) bool { return strings.HasPrefix(cs.Key, "unifi:cam:") }) {
 				out = append(out, d)
 			}
 		}
@@ -130,6 +135,9 @@ func (c *Core) StatusTemplates() []StatusTemplate {
 	pr := StatusTemplate{ID: TplPrinting, Name: "Drucken", Text: "Ob die Drucker erreichbar sind (Toner und Papier zählen nicht)."}
 	pr.Hint, pr.Ready = found(TplPrinting, "Drucker", "Drucker", "Kein Drucker gefunden – Drucker werden per SNMP überwacht.")
 	out = append(out, pr)
+	vid := StatusTemplate{ID: TplVideo, Name: "Videoüberwachung", Text: "Kameras und Aufzeichnung von UniFi Protect – fällt ein Teil der Kameras aus, heißt es „Teilweise gestört“."}
+	vid.Hint, vid.Ready = found(TplVideo, "UniFi-Konsole", "UniFi-Konsolen", "Keine UniFi-Konsole mit Protect-Kameras – erst unter Geräte → Hinzufügen einrichten.")
+	out = append(out, vid)
 	return out
 }
 
@@ -206,7 +214,7 @@ func (c *Core) ApplyStatusTemplate(id, input string) (StatusPage, string, map[st
 		}
 		cp = StatusComponent{Name: "Webseite", Note: host, Mode: StatusOutage, Devices: []string{d.ID},
 			Checks: []StatusCheck{{Device: d.ID, Key: d.Checks[i].Key()}}}
-	case TplLogon, TplM365, TplPrinting:
+	case TplLogon, TplM365, TplPrinting, TplVideo:
 		c.mu.Lock()
 		l := c.templateFind(id)
 		c.mu.Unlock()
@@ -226,6 +234,9 @@ func (c *Core) ApplyStatusTemplate(id, input string) (StatusPage, string, map[st
 				Devices: ids, Checks: []StatusCheck{{Key: "m365:health"}}}
 		case TplPrinting:
 			cp = StatusComponent{Name: "Drucken", Mode: StatusOutage, Devices: ids}
+		case TplVideo:
+			cp = StatusComponent{Name: "Videoüberwachung", Note: "Kameras und Aufzeichnung", Mode: StatusOutage, Devices: ids,
+				Checks: []StatusCheck{{Group: "Kameras"}, {Group: "UniFi Protect"}}}
 		}
 	default:
 		return StatusPage{}, "", map[string]string{"template": "Unbekannte Vorlage."}, nil
