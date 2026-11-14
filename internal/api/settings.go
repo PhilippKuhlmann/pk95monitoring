@@ -202,3 +202,45 @@ func (s *Server) deleteNotifyRule(w http.ResponseWriter, r *http.Request) {
 	}
 	ok(w)
 }
+
+// ---- server update (Einstellungen → Aktualisierung) ----
+
+func (s *Server) getUpdate(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.C.Update())
+}
+
+// putUpdate turns the regular look for new versions on or off: {auto_check}.
+func (s *Server) putUpdate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AutoCheck bool `json:"auto_check"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if err := s.C.SetUpdateAutoCheck(req.AutoCheck); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.C.Update())
+}
+
+// checkUpdate asks GitHub for the newest release now.
+func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	info, err := s.C.CheckUpdate(ctx)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "Nachsehen fehlgeschlagen: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// installUpdate asks the host helper to install the newest release.
+func (s *Server) installUpdate(w http.ResponseWriter, r *http.Request) {
+	if err := s.C.InstallUpdate(); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.C.Update())
+}

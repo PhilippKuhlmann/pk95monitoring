@@ -185,6 +185,7 @@ type Core struct {
 	rt      map[string]*devState
 	open    map[string]*openAlert // by alertKey(device, check)
 	windows map[string]MaintWindow
+	upd     updateRuntime         // server update check
 	nrules  map[string]NotifyRule // notification rules
 	digests map[string]int64      // rule ID → end of the last summarised quiet time
 	// winActive is the start of the running occurrence per window (for the begin/end events).

@@ -38,6 +38,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/fake/fakesnmp` | simulated SNMP devices (implements the snmp package's session interface), incl. a UniFi USW-Pro-24-PoE |
 | `internal/fake/fakenut` | simulated NUT server (upsd on 127.0.0.1) – used by tests and demo |
 | `web/` | SPA: `index.html`, `app.js`, `style.css` (copied), `theme.js`, `logo.svg`, `fonts/` |
+| `deploy/updater.sh` | update helper on the Docker host (systemd path unit; see "Server update") |
 | `Dockerfile`, `docker-compose.yml` | image (linux/amd64, linux/arm64) with the server and the agent binaries for linux/amd64, linux/arm64, windows/amd64 |
 | `Makefile` | `test`, `vet`, `fmt`, `check` (vet incl. the agent's per-OS files, gofmt, `node --check`), `build`, `agents` (→ `dist/agents/`), `demo`, `docker` |
 | `.github/workflows/release.yml` | CI on push/PR (check, test, agent cross-build, image build); tag `v*`: push image to ghcr.io, GitHub release with agent binaries + `SHA256SUMS` |
@@ -483,6 +484,10 @@ Authenticated:
 - `GET /api/expiry` → `{rows:[ExpiryRow]}`: every check with `cert.days` or `domain.days` (and domain checks
   without a date), soonest first – `{device_id, device, group, check_key, name, kind: cert|domain, days (null =
   unknown), until, detail (issuer / registrar), state, acked, message}`.
+- `GET /api/update` → UpdateInfo `{current, latest, tag, available, notes, url, published, checked, error, auto_check,
+  helper, helper_mode, phase (requested|running|done|failed), phase_tag, started, finished, log, can_install, reason,
+  repo}`; `PUT /api/update {auto_check}`; `POST /api/update/check` (502 with the reason when GitHub fails);
+  `POST /api/update/install` (409 with the reason) → UpdateInfo.
 - `GET /api/notify/rules` → `{rules:[NotifyRuleView], channels:{mail, telegram, hook (switched on), mail_to}}`;
   NotifyRuleView = NotifyRule + `{matches (devices), quiet (German text, "" = none), quiet_now}`, by name.
   `POST /api/notify/rules` and `PUT /api/notify/rules/{id}` (NotifyRule) → NotifyRuleView (422 on name, kinds,
@@ -611,6 +616,29 @@ Central push (settings.central): every `interval` minutes `POST <url>` with Summ
   right binary from `/agent/download/{os}/{arch}`, verify the SHA-256 passed in the one-liner,
   place it and run `pk95agent install …`. They accept `--device`/`--node` (`-Device`/`-Node`) and pass them on;
   the one-liners for a device (`agentdist.Params.DeviceID`/`Node`) add them.
+
+## Server update
+
+Einstellungen → Aktualisierung (`core/selfupdate.go`). The server asks GitHub
+(`/repos/PhilippKuhlmann/pk95monitoring/releases/latest`, User-Agent `pk95monitoring/<version>`, nothing else) every
+12 h (switchable, settings key `update_state`) or on request, and writes the event "Version X verfügbar" once.
+A container cannot replace itself, so installing goes through the host helper `deploy/updater.sh`:
+
+- `sudo sh updater.sh install [CONTAINER]` (default pk95monitoring) reads the container's `/data` mount, compose
+  working dir and service from `docker inspect`, copies itself to `/usr/local/lib/pk95monitoring/`, creates
+  `<data>/update/` (owner of the volume, so uid 10001 can write) and the units `pk95mon-update-<container>.path`
+  (`PathExists=<data>/update/request.json`) and `.service` (oneshot, 30 min), and writes `helper.json`
+  `{version, mode: update.sh|compose, installed}`. `uninstall` removes them.
+- "Installieren" (`POST /api/update/install`, only with helper, newer release, nothing running; never in the demo)
+  writes `request.json` `{tag, requested}`. The helper removes it, validates the tag (`^v\d+\.\d+\.\d+$`), writes
+  `status.json` `{state: running|done|failed, tag, started, finished, code}` and runs `./update.sh <tag>` in the compose
+  dir when present (the production server builds from the repository), else `docker compose pull <service>` +
+  `up -d <service>` (image `:latest`); output in `update.log`.
+- The UI polls every 3 s, shows the phase (requested, running, failed with the end of `update.log`), waits through
+  the restart and reloads in the new version. `updateTick` (30 s) reports a finished helper run once (key
+  `<tag>/<finished>`): "Auf Version X aktualisiert", "Update auf X ohne Wirkung" (done, but the old version runs –
+  fixed image tag) or "Update auf X fehlgeschlagen".
+- CI creates the GitHub release only after the image is on ghcr.io (`release` needs `image`).
 
 ## Demo mode
 

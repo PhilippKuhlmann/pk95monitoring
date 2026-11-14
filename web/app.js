@@ -556,7 +556,7 @@ function shell() {
         ${NAV.map((n) => n.head ? `<li class="nav-head">${esc(n.head)}</li>` :
           `<li><a class="nav-link" href="${n.path}" data-go ${cur === n.path || (n.path !== "/" && cur.startsWith(n.path)) ? 'aria-current="page"' : ""}>${icon(n.icon)}<span>${esc(n.label)}</span></a></li>`).join("")}
       </ul>
-      <a href="/settings" data-go class="side-foot" style="text-decoration:none">PK95 Monitoring v${esc(state.version)}</a>
+      <a href="/settings#update" data-go class="side-foot" style="text-decoration:none">PK95 Monitoring v${esc(state.version)}</a>
     </aside>
     <main><div class="wrap" id="page"></div></main>`;
   qs("[data-menu]").onclick = () => document.body.classList.toggle("menu-open");
@@ -4654,9 +4654,79 @@ function formSubmit(form, fn, prefix) {
   };
 }
 
+// ---------- server update (settings → Aktualisierung) ----------
+// updatePanel shows the installed and the newest version; "Installieren" asks the host helper
+// (deploy/updater.sh). While an update runs it polls, waits through the restart and reloads the
+// page in the new version.
+async function updatePanel(box, alive) {
+  let info = await GET("/api/update");
+  let polling = false, restarting = false;
+  const ref = /^\d+\.\d+\.\d+$/.test(info.current) ? "v" + info.current : "main";
+  const helperCmd = `curl -fsSLO https://raw.githubusercontent.com/${info.repo}/${ref}/deploy/updater.sh\nsudo sh updater.sh install pk95monitoring`;
+  const draw = () => {
+    const i = info, busy = i.phase === "requested" || i.phase === "running";
+    let phase = "";
+    if (restarting) phase = callout("", "Der Server startet neu …", "Die Seite lädt in der neuen Version, sobald er wieder antwortet.");
+    else if (i.phase === "requested") phase = callout("", `Update auf ${esc(i.phase_tag)} angefordert`, "Wartet auf den Update-Helfer des Docker-Hosts – das dauert nur Sekunden. Passiert nichts, läuft der Helfer nicht (systemctl status pk95mon-update-pk95monitoring.path).");
+    else if (i.phase === "running") phase = callout("", `Update auf ${esc(i.phase_tag)} läuft`, "Der Helfer lädt bzw. baut die neue Version. Danach startet der Server neu; die Seite lädt dann von selbst.");
+    else if (i.phase === "failed") phase = callout("red", `Update auf ${esc(i.phase_tag)} fehlgeschlagen`, `Es läuft weiterhin ${esc(i.current)}.${i.log ? `<pre class="upd-log">${esc(i.log)}</pre>` : ""}`);
+    box.innerHTML = `<div class="panel"><div class="panel-head"><div class="panel-title">Aktualisierung</div></div>
+      <table class="kv">
+        <tr><td>Installiert</td><td><b>PK95 Monitoring ${esc(i.current)}</b></td></tr>
+        <tr><td>Neueste Version</td><td>${i.latest ? `${esc(i.latest)} ${i.available ? pill("neu", "green", true) : pill("aktuell")}${i.published ? ` <span class="muted small">vom ${esc(fmtTime(i.published, true))}</span>` : ""}${i.url ? ` · <a href="${esc(i.url)}" target="_blank" rel="noopener">Versionshinweise</a>` : ""}` : '<span class="muted">noch nicht nachgesehen</span>'}</td></tr>
+        <tr><td>Zuletzt nachgesehen</td><td>${i.checked ? esc(fmtTime(i.checked, true)) : "—"}${i.error ? `<div class="bad small">${esc(i.error)}</div>` : ""}</td></tr>
+        <tr><td>Update-Helfer</td><td>${i.helper ? `${pill("eingerichtet", "green", true)} <span class="muted small">${i.helper_mode === "update.sh" ? "mit update.sh (baut aus dem Repository)" : "mit docker compose pull"}</span>` : pill("nicht eingerichtet")}</td></tr>
+      </table>
+      ${phase}
+      <div class="flex mt">
+        ${i.available ? `<button class="btn" type="button" data-upd-install ${i.can_install && !restarting ? "" : "disabled"}>${icon("download")} Version ${esc(i.latest)} installieren</button>` : ""}
+        <button class="btn gray" type="button" data-upd-check ${busy || restarting ? "disabled" : ""}>${icon("refresh")} Nach Updates suchen</button>
+        ${i.available && !i.can_install && i.reason && !busy ? `<span class="muted small">${esc(i.reason)}</span>` : ""}
+      </div>
+      <div class="mt">${field({ name: "auto_check", label: "Alle 12 Stunden nach neuen Versionen sehen", type: "checkbox", value: i.auto_check, wide: true, hint: "Eine neue Version erscheint als Ereignis. Dabei geht nur die Versionsnummer an GitHub." })}</div>
+      ${i.available && i.notes ? `<details class="howto mt"><summary>Was ist neu in ${esc(i.latest)}?</summary><div class="upd-notes">${esc(i.notes)}</div></details>` : ""}
+      ${i.helper ? "" : `<div class="section mt"><div class="section-title">Update-Helfer einrichten</div>
+        <p class="hint" style="margin:-8px 0 8px">Ein Container kann sich nicht selbst austauschen. Der Update-Helfer ist ein kleines Skript mit einer systemd-Einheit auf dem Docker-Host: „Installieren“ legt eine Anforderung in den Datenordner, der Helfer aktualisiert den Container (mit <code>update.sh</code>, falls im compose-Ordner vorhanden, sonst mit <code>docker compose pull</code>). Der Container braucht dafür keinen Zugriff auf Docker. Einmalig auf dem Docker-Host ausführen – <code>pk95monitoring</code> ist der Name des Containers:</p>
+        ${codeBlock(helperCmd)}
+        <p class="muted small mt">Ohne Helfer im compose-Ordner von Hand: <code>docker compose pull && docker compose up -d</code>. In der compose-Datei muss das Image <code>:latest</code> heißen, nicht eine feste Version.</p></div>`}
+    </div>`;
+    bindCopy(box);
+    const ib = qs("[data-upd-install]", box);
+    if (ib) ib.onclick = async () => {
+      if (!await confirmDialog({ title: `Version ${i.latest} installieren?`, text: "Der Server startet dabei neu und ist für etwa eine Minute nicht erreichbar. Agents puffern ihre Werte so lange und liefern sie nach.", button: "Installieren", tone: "", ic: "download" })) return;
+      await run(ib, async () => { info = await POST("/api/update/install"); draw(); poll(); }, "Update angefordert.");
+    };
+    qs("[data-upd-check]", box).onclick = (e) => run(e.currentTarget, async () => { info = await POST("/api/update/check"); draw(); }, "Nachgesehen.");
+    qs('[name="auto_check"]', box).onchange = (e) => run(null, async () => { info = await PUT("/api/update", { auto_check: e.target.checked }); }, "Gespeichert.");
+  };
+  // poll follows a running update through the restart into the new version.
+  const poll = () => {
+    if (polling) return;
+    polling = true;
+    const before = info.current;
+    const tick = async () => {
+      if (!alive()) { polling = false; return; }
+      try {
+        const r = await GET("/api/update");
+        if (r.current !== before) { toast(`Aktualisiert auf ${r.current}.`); setTimeout(() => location.reload(), 800); return; }
+        info = r; restarting = false;
+        if (r.phase !== "requested" && r.phase !== "running") { polling = false; draw(); return; }
+      } catch (e) {
+        if (e.status === 401) { polling = false; return; }
+        restarting = true; // the server is restarting
+      }
+      draw();
+      setTimeout(tick, 3000);
+    };
+    setTimeout(tick, 3000);
+  };
+  draw();
+  if (info.phase === "requested" || info.phase === "running") poll();
+}
+
 // Settings tabs: key (URL hash), label, icon.
 const STABS = [["general", "Allgemein", "cog"], ["notify", "Benachrichtigungen", "bell"], ["thresholds", "Schwellwerte", "pulse"],
-  ["agents", "Agents", "desktop"], ["api", "Schnittstellen", "link"], ["account", "Konto", "user"]];
+  ["agents", "Agents", "desktop"], ["api", "Schnittstellen", "link"], ["update", "Aktualisierung", "download"], ["account", "Konto", "user"]];
 
 PAGES["/settings"] = async (el, token) => {
   const [sys, set, tok] = await Promise.all([GET("/api/system"), GET("/api/settings"), GET("/api/tokens").catch(() => ({ tokens: [] }))]);
@@ -4761,6 +4831,7 @@ PAGES["/settings"] = async (el, token) => {
           <div class="flex"><button class="btn" type="submit">Speichern</button><a class="btn gray" href="/agents" data-go>Agents installieren und verwalten</a></div></form></div>
 
     </div>
+    <div class="set-pane" role="tabpanel" id="spane-update" aria-labelledby="stab-update" data-spane="update" hidden><div data-update>${loadingPanel()}</div></div>
     <div class="set-pane" role="tabpanel" id="spane-api" aria-labelledby="stab-api" data-spane="api" hidden><div class="grid">
       <div class="panel flush"><div class="panel-head"><div class="panel-title">API-Token</div><div class="actions"><button class="btn" type="button" data-tok-add>${icon("plus")} Token erstellen</button></div></div>
         <p class="panel-intro">Für eine Zentrale oder andere Programme: nur lesender Zugriff auf Zusammenfassung, Geräte und Alarme.</p>
@@ -4828,6 +4899,9 @@ PAGES["/settings"] = async (el, token) => {
     try { await POST("/api/report/send", {}); toast("Monatsbericht verschickt."); }
     catch (err) { showErrors(rf, err); }
   });
+
+  // Aktualisierung
+  updatePanel(qs("[data-update]", el), () => token === pageToken).catch((e) => { qs("[data-update]", el).innerHTML = `<div class="panel">${esc(e.message)}</div>`; });
 
   // Benachrichtigungsregeln
   notifyRulesPanel(qs("[data-nrules]", el)).catch((e) => { qs("[data-nrules]", el).innerHTML = `<div class="panel">${esc(e.message)}</div>`; });

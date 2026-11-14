@@ -75,8 +75,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # After the image: a release is the signal for "Einstellungen → Aktualisierung", so its image
+  # must already be on ghcr.io.
   release:
-    needs: test
+    needs: [test, image]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

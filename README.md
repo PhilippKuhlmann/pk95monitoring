@@ -492,7 +492,23 @@ Der Volume-Name ist `<Projektordner>_pk95mon-data` (`docker volume ls`). Bei ein
 (`./data`) genügt es, dieses bei gestopptem Container zu kopieren. Wiederherstellen: Archiv in ein leeres Volume
 entpacken, Rechte `10001:10001`.
 
-Update:
+Update: Unter **Einstellungen → Aktualisierung** zeigt der Server die installierte und die neueste Version (von
+GitHub, alle 12 Stunden oder auf Knopfdruck; dabei geht nur die Versionsnummer hinaus) samt Versionshinweisen. Mit
+dem **Update-Helfer** installiert „Installieren“ die neue Version per Klick. Ein Container kann sich nicht selbst
+austauschen; der Helfer ist ein kleines Skript mit einer systemd-Einheit auf dem Docker-Host. Er reagiert auf eine
+Anforderung im Datenordner und aktualisiert den Container – der Container selbst braucht keinen Zugriff auf Docker.
+Einmalig auf dem Docker-Host einrichten (`pk95monitoring` = Name des Containers, bei mehreren Kunden je Container):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/PhilippKuhlmann/pk95monitoring/main/deploy/updater.sh
+sudo sh updater.sh install pk95monitoring
+```
+
+Der Helfer führt im compose-Ordner `./update.sh <version>` aus, wenn es dort eines gibt, sonst
+`docker compose pull` und `docker compose up -d` – das Image muss dafür `:latest` heißen. Ergebnis und Protokoll
+stehen danach auf der Seite. Entfernen: `sudo sh updater.sh uninstall pk95monitoring`.
+
+Von Hand:
 
 ```bash
 docker compose pull && docker compose up -d

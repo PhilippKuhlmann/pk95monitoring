@@ -1214,3 +1214,7 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .nr-ways { display: flex; flex-wrap: wrap; gap: 8px 20px; }
 .nr-table td { vertical-align: top; }
 .nr-table td:nth-child(n+2):nth-child(-n+5) { min-width: 140px; max-width: 280px; white-space: normal; }
+
+/* ---- server update ---- */
+.upd-log { margin: 8px 0 0; max-height: 240px; overflow: auto; padding: 8px 10px; border-radius: var(--r); background: var(--panel-2); font: 12px/1.45 var(--mono); white-space: pre-wrap; color: var(--ink-2); }
+.upd-notes { padding: 8px 0 0; white-space: pre-wrap; font-size: 13px; color: var(--ink-2); }
