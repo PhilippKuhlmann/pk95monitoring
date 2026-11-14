@@ -291,6 +291,11 @@ const METRIC_LABELS = {
   "m365.cred_days": ["Restlaufzeit App-Geheimnis", "d"],
   "m365.sub_days": ["Restlaufzeit Abonnement", "d"],
   "m365.lic_free": ["Freie Lizenzen", ""],
+  "mssql.data_size": ["Datenbankgröße", "B"],
+  "mssql.log_size": ["Größe des Transaktionslogs", "B"],
+  "mssql.log_usage": ["Transaktionslog belegt", "%"],
+  "mssql.log_backup_age": ["Letzte Protokollsicherung vor", "h"],
+  "mssql.express_usage": ["Express-Grenze (10 GB) belegt", "%"],
   "printer.toner": ["Toner", "%"],
   "printer.pages": ["Gedruckte Seiten", ""],
   "custom": ["Eigener Wert", ""],
@@ -2228,7 +2233,7 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Microsoft 365", "Lizenzen", "App-Registrierungen", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Microsoft 365", "Lizenzen", "App-Registrierungen", "SQL Server", "SQL-Datenbanken", "SQL-Agent-Aufträge", "Hyper-V", "Hyper-V Replikation", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 // fullIn: "voll in 23 Tagen" from the storage forecast of a check ("" without one).
@@ -2453,6 +2458,11 @@ function cardValue(c) {
     return { word: true, text: n ? `${n.toLocaleString("de-DE")} ${n === 1 ? "Update" : "Updates"}${s ? ` (${s.toLocaleString("de-DE")} Sicherheit)` : ""}` : "Aktuell" };
   }
   if (has("services.failed")) { const n = int(v("services.failed")); return { word: true, text: n ? `${n.toLocaleString("de-DE")} fehlgeschlagen` : "Keine Fehler" }; }
+  if (has("mssql.data_size")) {
+    const h = has("backup.age") ? v("backup.age") : null, ex = has("mssql.express_usage");
+    const age = h == null ? (fa.Art ? "" : "nie gesichert") : `gesichert ${h < 1 ? `vor ${Math.max(1, Math.round(h * 60))} Min.` : h < 48 ? `vor ${Math.round(h)} Std.` : `vor ${Math.round(h / 24)} Tagen`}`;
+    return { text: fmtBytes(v("mssql.data_size")), sub: [ex ? `${fmtPct(v("mssql.express_usage"))} von 10 GiB` : "", age].filter(Boolean).join(" · "), bar: ex ? v("mssql.express_usage") : undefined, spark: sp("mssql.data_size") };
+  }
   if (has("backup.age") || has("job.age") || has("group.age")) {
     const h = has("backup.age") ? v("backup.age") : has("group.age") ? v("group.age") : v("job.age");
     const txt = h < 1 ? `vor ${Math.max(1, Math.round(h * 60))} Min.` : h < 48 ? `vor ${Math.round(h)} Std.` : `vor ${Math.round(h / 24)} Tagen`;
@@ -3607,6 +3617,10 @@ const EXPLAIN = {
   "m365.cred_days": { what: "Wie viele Tage das Geheimnis oder Zertifikat der App-Registrierung noch gültig ist (das am längsten gültige zählt).", why: "Läuft es ab, hört die Anwendung schlagartig auf zu funktionieren – Scan-to-Mail, Sicherungen, Schnittstellen oder dieses Monitoring.", todo: ["Im Entra Admin Center unter App-Registrierungen → Zertifikate & Geheimnisse ein neues Geheimnis anlegen.", "Den neuen Wert in der Anwendung eintragen (bei dieser Überwachung: am Gerät unter Bearbeiten).", "Das alte Geheimnis danach löschen. Wird die App nicht mehr gebraucht, die App-Registrierung entfernen."] },
   "m365.sub_days": { what: "In wie vielen Tagen das Abonnement endet – angezeigt für Testversionen und Abonnements, die abgelaufen oder gesperrt sind.", why: "Endet es, verlieren die Benutzer die Lizenz: erst Kulanzzeit, dann gesperrt, am Ende werden Daten gelöscht.", todo: ["Im Microsoft 365 Admin Center unter Abrechnung → Ihre Produkte das Abonnement verlängern oder kaufen.", "Bei einer Testversion entscheiden, ob sie in ein bezahltes Abonnement übergehen soll.", "Wird das Produkt nicht mehr gebraucht, die Lizenzen den Benutzern entziehen."] },
   "m365.lic_free": { what: "Wie viele Lizenzen dieses Produkts noch frei sind (gekauft minus zugewiesen).", why: "Ohne freie Lizenz lässt sich kein neuer Mitarbeiter einrichten; zu viele freie Lizenzen kosten Geld.", todo: ["Vor einem Neuzugang rechtzeitig Lizenzen nachkaufen.", "Lizenzen ausgeschiedener Mitarbeiter entziehen.", "Eine Warnschwelle für wenige freie Lizenzen am Gerät unter Schwellwerte (Messwert m365.lic_free, unterhalb) setzen."] },
+  "mssql.log_backup_age": { what: "Wie viele Stunden die letzte Sicherung des Transaktionslogs zurückliegt – für Datenbanken im Wiederherstellungsmodell „Vollständig“.", why: "Im Modell „Vollständig“ wird das Log erst nach einer Protokollsicherung wiederverwendet. Ohne sie wächst die Logdatei, bis die Platte voll ist – dann steht die Datenbank. Und eine Wiederherstellung auf einen Zeitpunkt ist nur bis zur letzten Protokollsicherung möglich.", todo: ["Im Sicherungsprogramm (Veeam: „Transaktionsprotokolle sichern“) oder per Wartungsplan regelmäßige Protokollsicherungen einrichten.", "Braucht die Datenbank keine Wiederherstellung auf einen Zeitpunkt, das Wiederherstellungsmodell auf „Einfach“ stellen.", "Ist das Log schon riesig, nach der ersten Protokollsicherung die Datei verkleinern (DBCC SHRINKFILE)."] },
+  "mssql.express_usage": { what: "Wie viel der 10-GB-Grenze, die SQL Server Express je Datenbank hat, die Datendateien belegen (das Log zählt nicht).", why: "Ist die Grenze erreicht, kann die Datenbank nicht mehr wachsen – die Anwendung meldet Fehler beim Speichern und steht.", todo: ["Beim Hersteller der Anwendung nachfragen, ob alte Daten archiviert oder gelöscht werden können.", "Auf eine SQL-Server-Standard-Lizenz wechseln (z. B. über den Hersteller der Anwendung).", "Leere Bereiche freigeben, falls viel gelöscht wurde (Datenbank verkleinern)."] },
+  "mssql.log_usage": { what: "Wie viel Prozent der Logdatei gerade belegt sind (DBCC SQLPERF(LOGSPACE)).", why: "Ein volles Log kann meist wachsen; ist es fest begrenzt oder die Platte voll, stoppt die Datenbank alle Änderungen.", todo: ["Unter „Log wartet auf“ steht, was die Wiederverwendung blockiert (z. B. LOG_BACKUP = Protokollsicherung fehlt, ACTIVE_TRANSACTION = lange Transaktion).", "Protokollsicherungen einrichten oder das Wiederherstellungsmodell „Einfach“ verwenden."] },
+  "mssql.data_size": { what: "Wie groß die Datendateien der Datenbank sind.", why: "Der Verlauf zeigt, wie schnell die Datenbank wächst – wichtig für Plattenplatz und Sicherungsdauer.", todo: ["Starkes Wachstum mit dem Hersteller der Anwendung klären (Protokolltabellen, Anhänge)."] },
   "ad.time_offset": { what: "Wie viele Sekunden die Uhr des Domänencontrollers vom PDC-Emulator abweicht.", why: "Kerberos lehnt Anmeldungen ab, wenn Uhren mehr als 5 Minuten auseinanderliegen.", todo: ["Mit „w32tm /query /status“ die Zeitquelle prüfen.", "Mit „w32tm /resync /rediscover“ neu synchronisieren.", "Auf virtuellen DCs die Zeitsynchronisierung des Hypervisors abschalten (Hyper-V: Integrationsdienst „Zeitsynchronisierung“)."] },
   "forecast.days": { what: "In wie vielen Tagen der Speicher voll ist, wenn er so weiterwächst wie in den letzten 14 Tagen (Trend der Belegung; nach einer Bereinigung zählt nur die Zeit danach).", why: "Die Warnung bei 85 % kommt bei schnell wachsenden Datenlaufwerken oft zu spät. Die Prognose meldet sich einen Monat vorher (Warnung unter 30, kritisch unter 7 Tagen).", todo: ["Prüfen, was wächst (Protokolle, Sicherungen, Papierkorb, Schattenkopien, Snapshots).", "Aufräumen oder den Speicher rechtzeitig vergrößern.", "Wächst der Speicher planmäßig, die Grenzen unter Einstellungen → Schwellwerte (Messwert forecast.days) am Gerät anpassen."] },
   "zfs.usage": { what: "Die Belegung des ZFS-Pools.",

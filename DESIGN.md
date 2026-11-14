@@ -33,6 +33,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
 | `internal/agent` | agent runtime (collect, push, buffer, self-update, service) |
 | `internal/eventrules` | System log rules (Windows event log, Linux journal): built-in rules, merge, validation, XPath and journalctl queries, evaluation (pure Go; used by agent, core and demo) |
+| `internal/mssql` | Microsoft SQL Server: PowerShell query (System.Data.SqlClient, Windows authentication), parser and checks (pure Go; used by the Windows agent and the demo) |
 | `internal/addc` | Active Directory domain controller: PowerShell query, parser and checks (pure Go; used by the Windows agent and the demo) |
 | `internal/hyperv` | Hyper-V: PowerShell query, parser and checks of the VMs and their replication (pure Go; used by the Windows agent and the demo) |
 | `internal/agentdist` | server side of agent distribution: install scripts (embedded templates), binary catalog with SHA-256 |
@@ -123,6 +124,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | agent | `ad:repl:<partner>` | Replikation von <DC> | Active Directory: inbound replication from one partner over all partitions (`Get-ADReplicationPartnerMetadata -Partition *`); failures = warn with the Win32 error explained, 8614 (tombstone) = crit, never succeeded = warn; `ad.repl_age` (h since the oldest last success, instance partner; threshold 12/24). No partner: `ad:repl:-` ok "einziger Domänencontroller". Deleted partners marked "(gelöscht)" |
 | agent | `ad:sysvol` | SYSVOL | Active Directory: DFSR replicated folder "SYSVOL Share" state (4 normal ok, 5 error crit, else warn), FRS still running = warn, share SYSVOL or NETLOGON missing = crit |
 | agent | `ad:services` | AD-Dienste | Active Directory: NTDS, Netlogon, Kdc, DNS (if installed), DFSR (unless FRS), W32Time not running = crit, ADWS = warn |
+| agent | `mssql:<instance lower>` | SQL Server [<instance>] | SQL Server: version (product year from ProductVersion), edition, CU; service stopped with start type automatic = crit, manual/disabled = ok; connection error = warn (login denied: facts with the T-SQL of `mssql.Grant`); support end passed = warn; SQL Server Agent stopped although automatic = warn. Script failure: one check `mssql` unknown |
+| agent | `mssql:db:<instance lower>/<database>` | <database> [(<instance>)] | SQL-Datenbanken: state (OFFLINE/RESTORING/RECOVERING warn, others crit), `mssql.data_size`, `mssql.log_size` (B), `mssql.log_usage` (%), `backup.age` (h, newest full or differential from msdb; user database never backed up = warn; `model` skipped), `mssql.log_backup_age` (FULL/BULK_LOGGED user databases; none = warn), `mssql.express_usage` (Express, data MB / 10240) |
+| agent | `mssql:job:<instance lower>/<job>` | <job> [(<instance>)] | SQL-Agent-Aufträge: enabled jobs, last outcome (failed crit, retry/canceled warn); jobs not readable: one check `mssql:job:<instance>` warn |
 | agent | `ad:time` | Zeit | Active Directory: offset to the PDC emulator (`w32tm /stripchart`, `ad.time_offset` absolute seconds, threshold 60/240); on the PDC emulator: time source "Local CMOS Clock"/"Free-running System Clock" = warn; no answer = unknown |
 | agent | `hv:host` | Hyper-V | Hyper-V (Windows hosts with the Hyper-V module only; `hyperv.Script` every 2 min, hosts without the module asked again after 6 h): "n von m VMs laufen"; query failed before any result = unknown, later errors keep the last result |
 | agent | `hv:vm:<VMId>` | VM <name> | Hyper-V: Running = ok (warn on heartbeat LostCommunication) with `guest.cpu` (%), `guest.mem` (demand / assigned %), `guest.mem_used` (assigned B), instance VM name; Off/Saved = crit when AutomaticStartAction is Start/StartIfRunning and it is no Replica copy, else ok; Paused/PausedCritical = crit; transitional states ok; `checkpoint.age` (d, oldest non-replica checkpoint, threshold 7/30); facts vCPUs, RAM, Generation, Konfigurationsversion, Autostart, Cluster, Replikat, Prüfpunkte, Ältester Prüfpunkt, Status. Not part of the inventory (VMs move between cluster nodes and Replica servers) |
@@ -221,6 +225,10 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `zfs.scrub_age` | d | ditto | pve (days since the last finished scrub) |
 | `repl.age` | min | `<job>`, VM name | pve, Hyper-V (minutes since the last sync/replication) |
 | `ad.repl_age` | h | partner DC | Active Directory: hours since the last successful inbound replication (default threshold warn 12, crit 24) |
+| `mssql.data_size`, `mssql.log_size` | B | – | SQL Server database data / log files |
+| `mssql.log_usage` | % | – | SQL Server log in use (DBCC SQLPERF(LOGSPACE)) |
+| `mssql.log_backup_age` | h | – | SQL Server last log backup (default warn 24, crit 72) |
+| `mssql.express_usage` | % | – | SQL Server Express data size of the 10 GB limit (default warn 80, crit 95) |
 | `ad.time_offset` | s | – | Active Directory: clock offset to the PDC emulator (default threshold warn 60, crit 240) |
 | `checkpoint.age` | d | VM name | Hyper-V: age of the oldest checkpoint (default threshold warn 7, crit 30) |
 | `storage.used`, `storage.total` | B | ditto | pve |
@@ -843,7 +851,9 @@ repository; config updated on every start), a Microsoft 365 tenant `demo-m365` o
 an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a
 9-day-old host backup, a failed sync job, a prune job with warnings), guest backups on the shared storage "backup" (VM 106 in no job),
-6 simulated agents (2 Debian, 3 Windows – dc01 is the PDC emulator of kunde.local via `addc.Checks`: replication from DC02
+7 simulated agents (2 Debian, 4 Windows – sql01 runs SQL Server via `mssql.Checks`: SQL Server 2019 Standard with the
+ERP (log backups every 15 minutes), a DMS without log backups, a failing job "DMS-Import" and an out-of-support SQL
+Server 2016 Express whose database "Zeiterfassung" is at 84 % of the 10 GB limit; dc01 is the PDC emulator of kunde.local via `addc.Checks`: replication from DC02
 fine, from the branch office DC03 failing for 3 hours with error 1722 –, plus `demo-pve1` attached to the cluster as node pve1; the Windows host hv01
 runs Hyper-V via `hyperv.Checks`: a replicated DC, erp01 with a 12-day-old checkpoint, sql02 with a replication
 warning, print01 off although it starts with the host, an off test VM; one with high disk

@@ -16,6 +16,7 @@ import (
 	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/hyperv"
 	"pk95monitoring/internal/model"
+	"pk95monitoring/internal/mssql"
 )
 
 // platformState holds the Windows caches. Update search and event log query run in the
@@ -25,8 +26,9 @@ type platformState struct {
 	events  *periodic[map[string]eventrules.Result]
 	hyperv  *periodic[hyperv.Report]
 	ad      *periodic[addc.Report]
+	sql     *periodic[mssql.Report]
 
-	hvRole, adRole roleProbe
+	hvRole, adRole, sqlRole roleProbe
 
 	evMu      sync.Mutex
 	evQueries []eventrules.Query
@@ -52,6 +54,7 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 		c.plat.events = newPeriodic(5*time.Minute, 2*time.Minute, 3*time.Minute, c.plat.queryEvents)
 		c.plat.hyperv = newPeriodic(2*time.Minute, 2*time.Minute, 90*time.Second, c.plat.queryHyperV)
 		c.plat.ad = newPeriodic(5*time.Minute, 2*time.Minute, 2*time.Minute, c.plat.queryAD)
+		c.plat.sql = newPeriodic(5*time.Minute, 2*time.Minute, 3*time.Minute, c.plat.querySQL)
 	}
 	out := serviceChecks(cfg, h.Uptime)
 	u, err, have := c.plat.updates.Get(ctx, c.WaitSlow)
@@ -78,13 +81,16 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 		res = dropSelfRestarts(res, cfg.SelfRestarts)
 		out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 	}
-	// The first Hyper-V and AD results are waited for: without them an agent restart would
+	// The first Hyper-V, AD and SQL Server results are waited for: without them an agent restart would
 	// drop their checks for one report and close their alerts. Later reports use the cache.
 	if hv, err, ok := firstResult(ctx, c.plat.hyperv); ok {
 		out = append(out, hyperv.Checks(hv, err, time.Now())...)
 	}
 	if ad, err, ok := firstResult(ctx, c.plat.ad); ok {
 		out = append(out, addc.Checks(ad, err, time.Now())...)
+	}
+	if sq, err, ok := firstResult(ctx, c.plat.sql); ok {
+		out = append(out, mssql.Checks(sq, err, time.Now())...)
 	}
 	return out
 }
@@ -138,6 +144,23 @@ func (p *platformState) queryHyperV(ctx context.Context) (hyperv.Report, error) 
 		return hyperv.Report{}, fmt.Errorf("unerwartete Ausgabe %q", truncate(out, 100))
 	}
 	p.hvRole.set(r.Available)
+	return r, nil
+}
+
+// querySQL reads the SQL Server instances (mssql.Script).
+func (p *platformState) querySQL(ctx context.Context) (mssql.Report, error) {
+	if p.sqlRole.skip() {
+		return mssql.Report{}, nil
+	}
+	out, err := powershell(ctx, mssql.Script)
+	if err != nil {
+		return mssql.Report{}, err
+	}
+	r, err := mssql.Parse(out)
+	if err != nil {
+		return mssql.Report{}, fmt.Errorf("unerwartete Ausgabe %q", truncate(out, 100))
+	}
+	p.sqlRole.set(r.Available)
 	return r, nil
 }
 

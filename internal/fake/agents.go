@@ -13,6 +13,7 @@ import (
 	"pk95monitoring/internal/core"
 	"pk95monitoring/internal/hyperv"
 	"pk95monitoring/internal/model"
+	"pk95monitoring/internal/mssql"
 )
 
 // Check groups of the agent (same as internal/agent).
@@ -63,6 +64,7 @@ type simAgent struct {
 	parent, node        string            // attached to this demo device (and its node)
 	hyperV              []simVM           // windows: VMs of a Hyper-V host
 	dc                  bool              // windows: domain controller (PDC emulator of kunde.local)
+	sql                 bool              // windows: SQL Server (ERP) and an old SQL Server Express
 	ref                 int64             // demo start: growing disks are at pct then
 }
 
@@ -139,6 +141,18 @@ func demoAgents(now time.Time) []*simAgent {
 			pending: 6, security: 2, boot: t - 41*day, seed: 5.2,
 			rules:  []model.CheckRule{{Match: "updates", Mode: model.ModeQuiet}},
 			parent: "demo-pve", node: "pve1"},
+		// SQL Server of the ERP: a database without log backups, a failing import job and an
+		// out-of-support SQL Server Express whose database is close to the 10 GB limit.
+		{id: "demo-sql01", name: "sql01", group: groupServer, ip: "10.0.0.16", os: "windows",
+			platform: "Microsoft Windows Server 2019 Standard", ver: "10.0.17763 Build 17763", kernel: "10.0.17763 Build 17763",
+			cpuModel: "Intel(R) Xeon(R) Gold 5418Y", cores: 8, threads: 8, memGB: 48,
+			cpuBase: 26, cpuAmp: 14, memBase: 86, memAmp: 2,
+			disks: []simDisk{{mount: "C:", fs: "NTFS", total: 120 * gib, pct: 52, amp: 0.2},
+				{mount: "D:", fs: "NTFS", total: 500 * gib, pct: 58, amp: 0.3}, {mount: "L:", fs: "NTFS", total: 100 * gib, pct: 41, amp: 3}},
+			iface: "Ethernet0", rxBase: 2.1e6, txBase: 3.4e6, services: []string{"MSSQLSERVER"},
+			known: map[string]simService{"MSSQLSERVER": {"SQL Server (MSSQLSERVER)", true}, "SQLSERVERAGENT": {"SQL Server-Agent (MSSQLSERVER)", true},
+				"MSSQL$SQLEXPRESS": {"SQL Server (SQLEXPRESS)", true}, "W32Time": {"Windows-Zeitgeber", true}},
+			boot: t - 19*day - 3*3600, seed: 7.3, installedDays: 21, sql: true},
 		// Hyper-V host: a replicated domain controller, a VM with a forgotten checkpoint, a
 		// replication with warnings, a VM that should run but is off and a switched-off test VM.
 		{id: "demo-hv01", name: "hv01", group: groupServer, ip: "10.0.0.15", os: "windows",
@@ -166,6 +180,45 @@ func demoAgents(now time.Time) []*simAgent {
 		a.ref = t
 	}
 	return list
+}
+
+// sqlReport is the SQL Server state of a demo host at t (what mssql.Script would print):
+// nightly backups at 22:00, log backups every 15 minutes for the ERP, none for the DMS
+// (full recovery model), a failing import job and an Express database that keeps growing.
+func (a *simAgent) sqlReport(t int64) mssql.Report {
+	now := time.Unix(t, 0).Local()
+	night := time.Date(now.Year(), now.Month(), now.Day(), 22, 35, 0, 0, now.Location())
+	if night.After(now) {
+		night = night.AddDate(0, 0, -1)
+	}
+	full, quarter := night.Unix(), t-t%900-40
+	days := float64(t-a.ref) / 86400
+	running := &mssql.Service{Status: "Running", Start: "Automatic"}
+	db := func(name, recovery string, dataMB, logMB, logUsed float64, last, logBackup int64) mssql.Database {
+		return mssql.Database{Name: name, State: "ONLINE", Recovery: recovery, LogWait: "NOTHING", DataMB: dataMB, LogMB: logMB, LogUsed: logUsed, LastFull: last, LastLog: logBackup}
+	}
+	dms := db("DMS", "FULL", 18200, 46100+days*400, 98.4, full, 0)
+	dms.LogWait = "LOG_BACKUP"
+	sys := func(name string) mssql.Database {
+		d := db(name, "SIMPLE", 24, 8, 30, full, 0)
+		d.System = true
+		if name == "model" {
+			d.LastFull, d.Recovery = 0, "FULL"
+		}
+		return d
+	}
+	return mssql.Report{Available: true, Instances: []mssql.Instance{
+		{Name: "MSSQLSERVER", Service: running, Agent: running, Version: "15.0.4385.2", Edition: "Standard Edition (64-bit)",
+			Level: "RTM", Update: "CU28", Engine: 2,
+			Databases: []mssql.Database{db("ERP", "FULL", 48640+days*35, 6144, 18+6*math.Sin(float64(t)/3000), full, quarter),
+				db("ERP_Test", "SIMPLE", 39900, 2048, 4, full, 0), dms, sys("master"), sys("model"), sys("msdb")},
+			Jobs: []mssql.Job{{Name: "Wartung – Indizes", Enabled: true, Status: 1, Run: full - 7*86400 + 3600},
+				{Name: "DMS-Import", Enabled: true, Status: 0, Run: t - t%3600 - 20*60, Message: "Der Auftrag ist fehlgeschlagen. Der Auftrag wurde von Benutzer KUNDE\\svc-dms aufgerufen. Der letzte ausgeführte Schritt war Schritt 1 (Import)."},
+				{Name: "syspolicy_purge_history", Enabled: true, Status: 1, Run: full - 20*60},
+				{Name: "Alte Auswertung", Enabled: false, Status: 0}}},
+		{Name: "SQLEXPRESS", Service: running, Version: "13.0.7037.1", Edition: "Express Edition (64-bit)", Level: "SP3", Engine: 4,
+			Databases: []mssql.Database{db("Zeiterfassung", "SIMPLE", 8550+days*12, 640, 7, full, 0), sys("master"), sys("model"), sys("msdb")}},
+	}}
 }
 
 // adReport is the domain controller state of a demo host at t (what addc.Script would print):
@@ -437,6 +490,9 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 	}
 	if a.dc {
 		out = append(out, addc.Checks(a.adReport(t), nil, time.Unix(t, 0))...)
+	}
+	if a.sql {
+		out = append(out, mssql.Checks(a.sqlReport(t), nil, time.Unix(t, 0))...)
 	}
 	return out
 }

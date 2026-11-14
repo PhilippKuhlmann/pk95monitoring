@@ -15,6 +15,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   Linux ebenso das systemd-Journal (OOM-Killer, E/A- und Dateisystemfehler, SMART, Programmabstürze,
   SSH-Anmeldeversuche …). Harmlose Meldungen blendet „Ignorieren“ für ein Gerät oder alle aus. Der Agent schickt seine Werte per HTTPS an den Server – auch hinter einer Firewall, ohne
   offene Ports beim Kunden-Server. Ist der Server kurz nicht erreichbar, puffert er und liefert nach.
+  Unter Windows erkennt er außerdem Domänencontroller (Active Directory), Hyper-V-Hosts und **SQL Server**
+  (Instanzen, Datenbanken, Sicherungen, SQL-Agent-Aufträge) und überwacht sie von selbst.
 - **SNMP-Geräte (v1, v2c, v3):** Switches (Ports, Verkehr, Fehler, LLDP-Nachbarn, PoE; Diagramme je Port),
   UniFi-Switches mit eigenem Profil (CPU, Arbeitsspeicher, Temperaturen, Lüfter, Netzteile, PoE-Budget), USV
   (Akku, Restlaufzeit, Last, Spannungen; RFC 1628 und APC), Drucker (Toner, Seitenzähler), NAS (Synology:
@@ -310,6 +312,41 @@ Läuft der Agent auf einem Hyper-V-Host, überwacht er dessen VMs von selbst –
 Einzelne VMs schaltest du wie jeden Check mit einer Check-Regel ab oder auf „nur anzeigen“ (`hv:vm:<VM-ID>`,
 alle mit `hv:vm:*`). VMs erscheinen und verschwinden ohne Dienste-Inventur, weil sie im Cluster oder bei einem
 Replikat-Failover den Host wechseln.
+
+### SQL Server
+
+Läuft auf einem Windows-Server Microsoft SQL Server, überwacht der Agent alle Instanzen von selbst (alle fünf
+Minuten; Server ohne SQL Server fragt er nur alle sechs Stunden). Er meldet sich lokal mit Windows-Anmeldung als
+**NT-AUTORITÄT\SYSTEM** an. Seit SQL Server 2012 hat dieses Konto dort keine Rechte – einmalig im SQL Server
+Management Studio (oder per `sqlcmd -S .\INSTANZ -E`) Leserechte vergeben:
+
+```sql
+USE master;
+IF SUSER_ID(N'NT AUTHORITY\SYSTEM') IS NULL CREATE LOGIN [NT AUTHORITY\SYSTEM] FROM WINDOWS;
+GRANT VIEW SERVER STATE TO [NT AUTHORITY\SYSTEM];
+GRANT VIEW ANY DEFINITION TO [NT AUTHORITY\SYSTEM];
+USE msdb;
+IF USER_ID(N'NT AUTHORITY\SYSTEM') IS NULL CREATE USER [NT AUTHORITY\SYSTEM] FOR LOGIN [NT AUTHORITY\SYSTEM];
+ALTER ROLE db_datareader ADD MEMBER [NT AUTHORITY\SYSTEM];
+ALTER ROLE SQLAgentReaderRole ADD MEMBER [NT AUTHORITY\SYSTEM];
+```
+
+Fehlen die Rechte, sagt es der Check der Instanz und zeigt das T-SQL in seinen Fakten.
+
+- **Instanz:** Version (Jahr, Edition, CU), Dienst und SQL-Server-Agent. Beendet, obwohl automatisch = kritisch;
+  Agent beendet = Warnung (geplante Aufträge laufen nicht); Version ohne Support von Microsoft (z. B. 2014, 2016) =
+  Warnung.
+- **Datenbanken:** Zustand (offline / Wiederherstellung = Warnung, SUSPECT, RECOVERY_PENDING, Notfallmodus =
+  kritisch), Größe von Daten und Log, Alter der letzten Voll- oder Differenzsicherung (`backup.age`, Warnung ab 30,
+  kritisch ab 54 Stunden; nie gesichert = Warnung). Im Wiederherstellungsmodell „Vollständig“ das Alter der letzten
+  Protokollsicherung (`mssql.log_backup_age`, Warnung ab 24, kritisch ab 72 Stunden) – ohne Protokollsicherung wächst
+  das Log unbegrenzt (Warnung). **SQL Server Express:** Belegung der 10-GB-Grenze (`mssql.express_usage`, Warnung ab
+  80, kritisch ab 95 %). Systemdatenbanken ohne Sicherung warnen nicht, `model` wird nie geprüft.
+- **SQL-Agent-Aufträge:** je aktivem Auftrag der letzte Lauf – fehlgeschlagen = kritisch (mit Meldung),
+  abgebrochen oder in Wiederholung = Warnung.
+
+Sicherungen mit Veeam (anwendungsgesteuert) oder einem Wartungsplan stehen in msdb und zählen. Einzelne Datenbanken
+oder Aufträge schaltest du mit einer Check-Regel ab (`mssql:db:<instanz>/<datenbank>`, `mssql:job:*`).
 
 ### Agent und API kombinieren
 

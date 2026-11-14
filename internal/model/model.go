@@ -651,6 +651,10 @@ func DefaultThresholds() []Threshold {
 		// Microsoft 365: Entra Connect syncs every 30 minutes; app secrets and certificates
 		// expiring within a month (warn) or a week (crit); a trial or ending subscription
 		{Metric: "m365.sync_age", Warn: f(3), Crit: f(12)},
+		// SQL Server: log backups (usually every 15–60 minutes) older than a day; Express data
+		// files close to the 10 GB limit
+		{Metric: "mssql.log_backup_age", Warn: f(24), Crit: f(72)},
+		{Metric: "mssql.express_usage", Warn: f(80), Crit: f(95)},
 		{Metric: "m365.cred_days", Warn: f(30), Crit: f(7), Below: true},
 		{Metric: "m365.sub_days", Warn: f(14), Crit: f(3), Below: true},
 		// Proxmox hardware and storage health
