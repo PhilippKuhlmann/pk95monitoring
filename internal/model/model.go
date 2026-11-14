@@ -609,6 +609,8 @@ func DefaultThresholds() []Threshold {
 		{Metric: "updates.failed", Warn: f(1)},
 		// a daily backup older than a day and a half (warn) or two days and more (crit)
 		{Metric: "backup.age", Warn: f(30), Crit: f(54)},
+		// a Hyper-V checkpoint grows a differencing disk: a week is suspicious, a month harmful
+		{Metric: "checkpoint.age", Warn: f(7), Crit: f(30)},
 		// Proxmox hardware and storage health
 		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
 		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},

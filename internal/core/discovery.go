@@ -30,7 +30,7 @@ const (
 // guest (follows the guests, which the inventory has already).
 func inventoryKey(k string) bool {
 	return k != "" && k != reachKey && k != model.DiscoveryKey && k != "eventlog" && !strings.HasPrefix(k, "net:") && !strings.HasPrefix(k, eventrules.KeyPrefix) &&
-		!strings.HasPrefix(k, "pve:bak:")
+		!strings.HasPrefix(k, "pve:bak:") && !strings.HasPrefix(k, "hv:") // Hyper-V VMs move (cluster, Replica failover)
 }
 
 // reindex rebuilds the set of new keys and the vanished list from the inventory.

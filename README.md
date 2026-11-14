@@ -269,6 +269,24 @@ Alle Befehle verstehen `--config PFAD` (Standard: die Konfigurationsdatei unten)
 - Ein neuer Anmeldeschlüssel (Agents → „Neu erzeugen“) sperrt nur neue Installationen; angemeldete Agents haben
   eigene Zugangsdaten.
 
+### Hyper-V
+
+Läuft der Agent auf einem Hyper-V-Host, überwacht er dessen VMs von selbst – ohne Einstellung (alle zwei Minuten,
+über die Hyper-V-PowerShell; Hosts ohne Hyper-V fragt er nur alle sechs Stunden):
+
+- **VMs:** je VM ein Check mit CPU, Arbeitsspeicher (Bedarf / zugewiesen) und Laufzeit. Eine VM, die mit dem Host
+  startet (automatische Startaktion „immer“ oder „wenn sie lief“), aber aus ist, ist kritisch; ohne automatischen
+  Start bleibt eine ausgeschaltete VM OK. Angehalten (meist voller Datenträger) = kritisch, verlorener Heartbeat
+  (Gast hängt) = Warnung. Replikat-VMs auf dem Replikatserver sind aus und bleiben OK.
+- **Prüfpunkte:** Alter des ältesten Prüfpunkts (`checkpoint.age`, Warnung ab 7, kritisch ab 30 Tagen) – vergessene
+  Prüfpunkte lassen die Differenzdatei wachsen, bis der Datenträger voll ist.
+- **Replikation (Hyper-V-Replikat):** je replizierter VM die Integrität, wie Hyper-V sie bewertet (Warnung /
+  Kritisch, angehalten = Warnung), mit Replikatserver und letzter Übertragung.
+
+Einzelne VMs schaltest du wie jeden Check mit einer Check-Regel ab oder auf „nur anzeigen“ (`hv:vm:<VM-ID>`,
+alle mit `hv:vm:*`). VMs erscheinen und verschwinden ohne Dienste-Inventur, weil sie im Cluster oder bei einem
+Replikat-Failover den Host wechseln.
+
 ### Agent und API kombinieren
 
 Ein Server, der schon per API oder SNMP überwacht wird – z. B. ein Knoten des Proxmox-Clusters –, kann

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"pk95monitoring/internal/core"
+	"pk95monitoring/internal/hyperv"
 	"pk95monitoring/internal/model"
 )
 
@@ -58,6 +59,18 @@ type simAgent struct {
 	seed                float64
 	rules               []model.CheckRule // demo check rules (quiet / off)
 	parent, node        string            // attached to this demo device (and its node)
+	hyperV              []simVM           // windows: VMs of a Hyper-V host
+}
+
+// simVM is a demo Hyper-V VM; checkpoint and replication times are relative to t.
+type simVM struct {
+	id, name, state, autoStart string
+	procs                      int
+	memGB, cpuBase, demandPct  float64
+	bootAgo                    int64 // s
+	checkpoints                int
+	checkpointAgo              int64  // s, oldest checkpoint
+	replHealth, replMode       string // "" = not replicated
 }
 
 func demoAgents(now time.Time) []*simAgent {
@@ -122,7 +135,58 @@ func demoAgents(now time.Time) []*simAgent {
 			pending: 6, security: 2, boot: t - 41*day, seed: 5.2,
 			rules:  []model.CheckRule{{Match: "updates", Mode: model.ModeQuiet}},
 			parent: "demo-pve", node: "pve1"},
+		// Hyper-V host: a replicated domain controller, a VM with a forgotten checkpoint, a
+		// replication with warnings, a VM that should run but is off and a switched-off test VM.
+		{id: "demo-hv01", name: "hv01", group: groupServer, ip: "10.0.0.15", os: "windows",
+			platform: "Microsoft Windows Server 2022 Datacenter", ver: "10.0.20348 Build 20348", kernel: "10.0.20348 Build 20348",
+			cpuModel: "Intel(R) Xeon(R) Gold 5418Y", cores: 24, threads: 48, memGB: 256,
+			cpuBase: 21, cpuAmp: 9, memBase: 71, memAmp: 2,
+			disks: []simDisk{{mount: "C:", fs: "NTFS", total: 240 * gib, pct: 38, amp: 0.2},
+				{mount: "D:", fs: "ReFS", total: 7450 * gib, pct: 64, amp: 0.4}},
+			iface: "vEthernet (LAN)", rxBase: 9.5e6, txBase: 7.2e6, services: []string{"vmms"},
+			known: map[string]simService{"vmms": {"Hyper-V-VM-Verwaltung", true}, "W32Time": {"Windows-Zeitgeber", true},
+				"vmcompute": {"Hyper-V-Hostcomputedienst", true}},
+			boot: t - 33*day - 2*3600, seed: 6.4, installedDays: 21,
+			hyperV: []simVM{
+				{id: "6f1c2a8e-0001-4c55-9a1e-3b7d2f0a1101", name: "dc02", state: "Running", autoStart: "StartIfRunning", procs: 4, memGB: 8, cpuBase: 6, demandPct: 52,
+					bootAgo: 33*day - 1800, replMode: "Primary", replHealth: "Normal"},
+				{id: "6f1c2a8e-0002-4c55-9a1e-3b7d2f0a1102", name: "erp01", state: "Running", autoStart: "StartIfRunning", procs: 8, memGB: 32, cpuBase: 34, demandPct: 78,
+					bootAgo: 12*day + 3600, checkpoints: 1, checkpointAgo: 12*day + 5400},
+				{id: "6f1c2a8e-0003-4c55-9a1e-3b7d2f0a1103", name: "sql02", state: "Running", autoStart: "StartIfRunning", procs: 8, memGB: 48, cpuBase: 22, demandPct: 88,
+					bootAgo: 33*day - 1500, replMode: "Primary", replHealth: "Warning"},
+				{id: "6f1c2a8e-0004-4c55-9a1e-3b7d2f0a1104", name: "print01", state: "Off", autoStart: "Start", procs: 2, memGB: 4},
+				{id: "6f1c2a8e-0005-4c55-9a1e-3b7d2f0a1105", name: "test-win11", state: "Off", autoStart: "Nothing", procs: 4, memGB: 8},
+			}},
 	}
+}
+
+// hyperVReport is the Hyper-V state of a demo host at t (what hyperv.Script would print).
+func (a *simAgent) hyperVReport(t int64) hyperv.Report {
+	r := hyperv.Report{Available: true, Host: strings.ToUpper(a.name)}
+	for i, v := range a.hyperV {
+		vm := hyperv.VM{ID: v.id, Name: v.name, State: v.state, AutoStart: v.autoStart, Procs: v.procs,
+			Startup: v.memGB * gib, Generation: 2, Version: "10.0", Checkpoints: v.checkpoints}
+		if v.state == "Running" {
+			vm.Heartbeat, vm.Status = "OkApplicationsHealthy", "Wird normal ausgeführt"
+			vm.CPU = math.Round(clamp(v.cpuBase*(1+0.6*a.wave(t, 10+float64(i))), 0, 100))
+			vm.Mem = v.memGB * gib
+			vm.Demand = math.Round(vm.Mem * clamp(v.demandPct+4*a.wave(t, 20+float64(i)), 5, 100) / 100)
+			vm.Uptime = v.bootAgo
+		}
+		if v.checkpoints > 0 {
+			vm.OldestCheckpoint = t - v.checkpointAgo
+		}
+		if v.replMode != "" {
+			last := t - 120 - (t % 300) // every 5 minutes
+			if v.replHealth == "Warning" {
+				last = t - 47*60 - (t % 300) // several cycles missed
+			}
+			vm.Replication = &hyperv.Replication{State: "Replicating", Health: v.replHealth, Mode: v.replMode,
+				Primary: strings.ToUpper(a.name), Replica: "HV02", Last: last}
+		}
+		r.VMs = append(r.VMs, vm)
+	}
+	return r
 }
 
 // selectServices mirrors the agent's selection: listed names, plus the known services a
@@ -326,6 +390,9 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 	out = append(out, up)
 	if a.os == "windows" || a.os == "linux" {
 		out = append(out, a.eventChecks(c, t)...)
+	}
+	if len(a.hyperV) > 0 {
+		out = append(out, hyperv.Checks(a.hyperVReport(t), nil, time.Unix(t, 0))...)
 	}
 	return out
 }

@@ -246,6 +246,7 @@ const METRIC_LABELS = {
   "backup.size": ["Größe der letzten Sicherung", "B"],
   "job.age": ["Letzter Lauf vor", "h"],
   "group.age": ["Alter der neuesten Sicherung (PBS)", "h"],
+  "checkpoint.age": ["Ältester Prüfpunkt", "d"],
   "updates.security": ["Sicherheitsupdates", ""],
   "eventlog.errors": ["Fehler im Ereignisprotokoll (24 Std.)", ""],
   "events.count": ["Ereignisse", ""],
@@ -2135,12 +2136,12 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Hyper-V", "Hyper-V Replikation", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 function tableKind(key) {
   if (key.startsWith("pve:node:")) return "node";
-  if (/^pve:(vm|ct):/.test(key)) return "guest";
+  if (/^pve:(vm|ct):/.test(key) || key.startsWith("hv:vm:")) return "guest";
   if (/^pve:(storage|zfs):/.test(key)) return "storage";
   if (key.startsWith("snmp:if:")) return "port";
   if (key.startsWith("snmp:toner:")) return "toner";
@@ -2497,7 +2498,7 @@ const KIND_VIEWS = {
       ${td("Root-Platte", pctBar(mval(c, "disk.usage")), "bar-cell")}
       ${td("Laufzeit", esc(isNum(mval(c, "uptime")) ? fmtUptime(mval(c, "uptime")) : "—"), "small nowrap")}${sparkTd(dv.id, c, "cpu.usage")}${actTd(c)}</tr>`;
   })),
-  guest: (list, dv) => tableOf(["Zustand", "Gast", "Status", "CPU", "Arbeitsspeicher", "#Netz ein/aus", "~CPU · 6 Std."], [...list].sort((a, b) => RANK[b.state] - RANK[a.state] || (parseInt(a.key.split(":")[2], 10) || 0) - (parseInt(b.key.split(":")[2], 10) || 0)).map((c) => {
+  guest: (list, dv) => tableOf(["Zustand", "Gast", "Status", "CPU", "Arbeitsspeicher", "#Netz ein/aus", "~CPU · 6 Std."], [...list].sort((a, b) => RANK[b.state] - RANK[a.state] || (parseInt(a.key.split(":")[2], 10) || 0) - (parseInt(b.key.split(":")[2], 10) || 0) || String(a.name).localeCompare(String(b.name), "de", { numeric: true })).map((c) => {
     const kind = c.key.startsWith("pve:ct:") ? "CT" : "VM";
     const mu = mval(c, "guest.mem_used");
     return `<tr class="row-link" ${rowLink(dv.id, c)}>${td("Zustand", ckPill(c))}
@@ -3528,7 +3529,8 @@ const EXPLAIN = {
   "events.count": { what: "Wie viele Ereignisse im Zeitraum der Regel zu ihren Filtern passen – ohne die ignorierten.", why: "Die Regel steht für ein bekanntes Problem (Filter und Alarmgrenze stehen unter „Werte und Details“). Alles andere im Ereignisprotokoll wird nicht gemeldet.", todo: ["Harmlose Meldungen unten mit „Ignorieren“ ausblenden.", "Regeln ändern unter Systemprotokolle."] },
   "temp": { what: "Eine Temperatur des Geräts.", why: "Zu hohe Temperaturen verkürzen die Lebensdauer und können zur Notabschaltung führen.", todo: ["Lüftung und Raumtemperatur prüfen."] },
   "if.errors": { what: "Fehlerhafte Pakete auf dem Port.", why: "Meist ein Kabel-, Stecker- oder Duplex-Problem; die Verbindung wird langsam oder bricht ab.", todo: ["Kabel tauschen, Port-Geschwindigkeit und Duplex prüfen."] },
-  "repl.age": { what: "Wie lange die letzte erfolgreiche Replikation her ist.", why: "Fällt der Quellknoten aus, fehlen auf dem Ziel alle Änderungen seit dieser Zeit.", todo: ["Replikationsprotokoll in Proxmox prüfen (Rechenzentrum → Replikation)."] },
+  "repl.age": { what: "Wie lange die letzte erfolgreiche Replikation her ist.", why: "Fällt der Quellknoten aus, fehlen auf dem Ziel alle Änderungen seit dieser Zeit.", todo: ["Proxmox: Replikationsprotokoll prüfen (Rechenzentrum → Replikation).", "Hyper-V: im Hyper-V-Manager Rechtsklick auf die VM → Replikation → Replikationsintegrität anzeigen; angehaltene Replikation dort fortsetzen."] },
+  "checkpoint.age": { what: "Wie viele Tage der älteste Prüfpunkt (Snapshot) der Hyper-V-VM alt ist.", why: "Prüfpunkte sind keine Sicherung: Solange einer existiert, schreibt Hyper-V jede Änderung in eine wachsende .avhdx-Differenzdatei. Die VM wird langsamer, der Datenträger läuft voll – und ist er voll, hält Hyper-V die VM an. Liegengebliebene Prüfpunkte stammen oft von einer abgebrochenen Sicherung.", todo: ["Im Hyper-V-Manager unter „Prüfpunkte“ nachsehen, ob der Prüfpunkt noch gebraucht wird.", "Nicht mehr benötigte Prüfpunkte löschen – Hyper-V führt die Differenzdatei dann im Hintergrund zusammen (bei laufender VM möglich).", "Stammt der Prüfpunkt von der Sicherungssoftware, deren letzten Job prüfen."] },
   "guest.cpu": { what: "Die CPU-Auslastung der VM bzw. des Containers.", why: "Dauerhaft volle CPUs machen den Gast langsam.", todo: ["Im Gast prüfen, was die Last erzeugt, oder mehr Kerne zuweisen."] },
   "guest.mem": { what: "Der Speicherverbrauch der VM bzw. des Containers.", why: "Ist der Speicher voll, lagert der Gast aus oder beendet Prozesse.", todo: ["Im Gast prüfen oder mehr Speicher zuweisen."] },
 };

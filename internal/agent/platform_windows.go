@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"pk95monitoring/internal/eventrules"
+	"pk95monitoring/internal/hyperv"
 	"pk95monitoring/internal/model"
 )
 
@@ -21,6 +22,10 @@ import (
 type platformState struct {
 	updates *periodic[updateCount]
 	events  *periodic[map[string]eventrules.Result]
+	hyperv  *periodic[hyperv.Report]
+
+	hvMu     sync.Mutex
+	hvAbsent time.Time // last time the Hyper-V module was missing (asked again after hvRecheck)
 
 	evMu      sync.Mutex
 	evQueries []eventrules.Query
@@ -44,6 +49,7 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 	if c.plat.updates == nil {
 		c.plat.updates = newPeriodic(6*time.Hour, 30*time.Minute, 10*time.Minute, windowsUpdates)
 		c.plat.events = newPeriodic(5*time.Minute, 2*time.Minute, 3*time.Minute, c.plat.queryEvents)
+		c.plat.hyperv = newPeriodic(2*time.Minute, 2*time.Minute, 90*time.Second, c.plat.queryHyperV)
 	}
 	out := serviceChecks(cfg, h.Uptime)
 	u, err, have := c.plat.updates.Get(ctx, c.WaitSlow)
@@ -70,7 +76,43 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 		res = dropSelfRestarts(res, cfg.SelfRestarts)
 		out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 	}
+	// The first Hyper-V result is waited for: without it an agent restart would drop the VM
+	// checks for one report and close their alerts. Later reports use the cached result.
+	hv, err, have := c.plat.hyperv.Get(ctx, false)
+	if !have {
+		hv, err, have = c.plat.hyperv.Get(ctx, true)
+	}
+	if have {
+		out = append(out, hyperv.Checks(hv, err, time.Now())...)
+	}
 	return out
+}
+
+// hvRecheck is how long a host without the Hyper-V module is not asked again.
+const hvRecheck = 6 * time.Hour
+
+// queryHyperV lists the VMs of the host (hyperv.Script).
+func (p *platformState) queryHyperV(ctx context.Context) (hyperv.Report, error) {
+	p.hvMu.Lock()
+	absent := !p.hvAbsent.IsZero() && time.Since(p.hvAbsent) < hvRecheck
+	p.hvMu.Unlock()
+	if absent {
+		return hyperv.Report{}, nil
+	}
+	out, err := powershell(ctx, hyperv.Script)
+	if err != nil {
+		return hyperv.Report{}, err
+	}
+	r, err := hyperv.Parse(out)
+	if err != nil {
+		return hyperv.Report{}, fmt.Errorf("unerwartete Ausgabe %q", truncate(out, 100))
+	}
+	if !r.Available {
+		p.hvMu.Lock()
+		p.hvAbsent = time.Now()
+		p.hvMu.Unlock()
+	}
+	return r, nil
 }
 
 // powershell runs a script hidden (no console window) and returns its standard output.
