@@ -786,9 +786,7 @@ function alertHref(a) {
 }
 
 function bindAck(root, after) {
-  qsa("[data-ack]", root).forEach((b) => b.onclick = () => run(b, async () => {
-    await POST(`/api/alerts/${enc(b.dataset.ack)}/ack`);
-    toast("Alarm quittiert – bis er schlimmer wird.");
+  qsa("[data-ack]", root).forEach((b) => b.onclick = () => ackDialog([b.dataset.ack], b.dataset.ackLabel || "", async () => {
     state.ovAt = 0;
     await Promise.all([after ? after() : null, loadOverview().catch(() => {})]);
   }));
@@ -823,21 +821,24 @@ PAGES["/"] = async (el, token) => {
       return;
     }
     const t = r.totals || {}, offline = r.offline || [], problems = r.problems || [], recent = r.recent || [];
-    const open = problems.filter((p) => !p.acked), ackedN = problems.length - open.length;
+    // acknowledged problems count as OK: they are listed apart (green "Quittiert"), not as errors
+    const open = problems.filter((p) => !p.acked), ackedProb = problems.filter((p) => p.acked);
+    const openOff = offline.filter((p) => !p.acked), ackedOff = offline.filter((p) => p.acked);
+    const ackedN = ackedProb.length + ackedOff.length;
     const nCrit = open.filter((p) => p.state === "crit").length, nWarn = open.length - nCrit;
-    const tone = offline.length || nCrit ? "error" : nWarn ? "warning" : "ok";
+    const tone = openOff.length || nCrit ? "error" : nWarn ? "warning" : "ok";
     const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-    const headline = tone === "ok" ? "Alles in Ordnung" : [offline.length ? `${plural(offline.length, "Gerät", "Geräte")} offline` : "", nCrit ? plural(nCrit, "Fehler", "Fehler") : "", nWarn ? plural(nWarn, "Warnung", "Warnungen") : ""].filter(Boolean).join(" · ");
+    const headline = tone === "ok" ? "Alles in Ordnung" : [openOff.length ? `${plural(openOff.length, "Gerät", "Geräte")} offline` : "", nCrit ? plural(nCrit, "Fehler", "Fehler") : "", nWarn ? plural(nWarn, "Warnung", "Warnungen") : ""].filter(Boolean).join(" · ");
     const lastPoll = devs.reduce((a, d) => Math.max(a, d.last_poll || 0), 0);
     // the open alert of a line (device and check), to acknowledge it from here
     const alertOf = new Map(alerts.map((a) => [`${a.device_id}|${a.check_key}`, a]));
-    const ackBtn = (p) => { const a = alertOf.get(`${p.device_id}|${p.key}`); return a && !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}">${icon("check")} Quittieren</button>` : ""; };
+    const ackBtn = (p) => { const a = alertOf.get(`${p.device_id}|${p.key}`); return a && !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}" data-ack-label="${esc(`${p.device} · ${p.key === "reach" ? "Erreichbarkeit" : p.name}`)}">${icon("check")} Quittieren</button>` : ""; };
     const devLabel = (p) => `${icon(TYPE_ICONS[p.device_type] || "box", "sm")}<b>${esc(p.device)}</b>`;
     const fact = (label, value, sub) => `<div class="hero-fact"><dt>${esc(label)}</dt><dd>${value}</dd>${sub ? `<div class="hero-fact-sub">${sub}</div>` : ""}</div>`;
     const hero = `<section class="hero ${tone}" aria-live="polite">
         <div class="hero-main"><span class="hero-ic">${icon(tone === "ok" ? "check" : tone === "error" ? "x" : "warn")}</span>
           <div class="hero-text"><h2>${esc(headline)}</h2>
-            <p>${tone === "ok" ? "Alle Geräte sind erreichbar, alle Dienste liegen innerhalb der Schwellwerte." : "Details unten – offline Geräte zuerst, dann die Dienste mit Fehler oder Warnung."}${ackedN ? ` ${plural(ackedN, "Problem ist", "Probleme sind")} quittiert.` : ""}</p></div></div>
+            <p>${tone === "ok" ? (ackedN ? "Keine offenen Probleme." : "Alle Geräte sind erreichbar, alle Dienste liegen innerhalb der Schwellwerte.") : "Details unten – offline Geräte zuerst, dann die Dienste mit Fehler oder Warnung."}${ackedN ? ` ${plural(ackedN, "Problem ist", "Probleme sind")} quittiert.` : ""}</p></div></div>
         <dl class="hero-facts">
           ${fact("Geräte überwacht", String(int(t.devices)), int(t.agents) ? `davon ${int(t.agents)} mit Agent` : "")}
           ${fact("Dienste überwacht", String(int(t.checks)), `${int(t.checks_ok)} in Ordnung`)}
@@ -845,21 +846,30 @@ PAGES["/"] = async (el, token) => {
         </dl></section>`;
     const tile = (n, ic, label, tn, href, title) => `<a class="tile ${n ? tn : ""}" href="${href}" ${href.startsWith("#") ? "data-jump" : "data-go"} title="${esc(title)}"><span class="ti">${icon(ic)}</span><span class="tx"><span class="tv">${n}</span><span class="tl">${label}</span></span></a>`;
     const tiles = `<div class="tiles six">
-      ${tile(offline.length, "power", "Geräte offline", "red", "#dash-offline", "Geräte, die nicht erreichbar sind")}
+      ${tile(openOff.length, "power", "Geräte offline", "red", "#dash-offline", "Geräte, die nicht erreichbar sind (nicht quittiert)")}
       ${tile(nCrit, "x", "Dienste mit Fehler", "red", "#dash-problems", "Offene Fehler (nicht quittiert)")}
       ${tile(nWarn, "warn", "Dienste mit Warnung", "amber", "#dash-problems", "Offene Warnungen (nicht quittiert)")}
       ${tile(int(t.checks_unknown), "info", "Dienste unbekannt", "", "/devices", "Dienste ohne aktuelle Werte")}
       ${tile(int(t.maintenance), "wrench", "Geräte in Wartung", "blue", "/devices?state=maintenance", "Geräte in Wartung")}
       ${tile(int(t.disabled), "power", "Geräte deaktiviert", "", "/devices?state=disabled", "Abgeschaltete Geräte")}</div>`;
 
-    const offRows = offline.map((p) => `<div class="row al-row"><span class="al-sev">${pill("Offline", "rose")}</span><div class="grow">
+    // an acknowledged line: green "Quittiert", what it is and who acknowledged it
+    const ackedRow = (p, what, title) => { const a = alertOf.get(`${p.device_id}|${p.key}`);
+      return `<div class="row al-row dash-acked"><span class="al-sev">${pill("Quittiert", "green")}</span><div class="grow">
+        <div class="title"><a href="${title ? checkPath(p.device_id, p.key) : `/devices/${enc(p.device_id)}`}" data-go class="dash-dev">${devLabel(p)}${title ? ` · ${esc(p.name)}` : ""}</a></div>
+        ${p.message ? `<div class="body">${esc(p.message)}</div>` : ""}
+        <div class="t-sub">${esc(what)} <span title="Seit ${esc(fmtTime(p.since, true))}">${esc(fmtSince(p.since))}</span> · quittiert${a && a.acked_by ? ` von ${esc(a.acked_by)} ${esc(ackWhen(a))}` : ""}</div>${ackNoteHTML(a)}</div></div>`; };
+    const ackedPart = (rows) => (rows.length ? `<div class="row dash-sub">${icon("check", "sm")} Quittiert · ${rows.length}</div>${rows.join("")}` : "");
+    const offRows = openOff.map((p) => `<div class="row al-row"><span class="al-sev">${pill("Offline", "rose")}</span><div class="grow">
         <div class="title"><a href="/devices/${enc(p.device_id)}" data-go class="dash-dev">${devLabel(p)}</a>${p.folder ? ` <span class="muted small">${esc(p.folder)}</span>` : ""}</div>
         ${p.message ? `<div class="body">${esc(p.message)}</div>` : ""}
         <div class="t-sub"><span title="Seit ${esc(fmtTime(p.since, true))}">${esc(fmtSince(p.since))}</span>${p.last_ok ? ` · letzter Kontakt <span title="${esc(fmtTime(p.last_ok, true))}">${esc(fmtAgo(p.last_ok))}</span>` : ""}</div></div>${ackBtn(p)}</div>`).join("");
-    const probRows = problems.map((p) => `<div class="row al-row${p.acked ? " dash-acked" : ""}"><span class="al-sev">${sevPill(p.state)}</span><div class="grow">
+    const probRows = open.map((p) => `<div class="row al-row"><span class="al-sev">${sevPill(p.state)}</span><div class="grow">
         <div class="title"><a href="${checkPath(p.device_id, p.key)}" data-go class="dash-dev">${devLabel(p)} · ${esc(p.name)}</a></div>
         ${p.message ? `<div class="body">${esc(p.message)}</div>` : ""}
-        <div class="t-sub"><span title="Seit ${esc(fmtTime(p.since, true))}">${esc(fmtSince(p.since))}</span>${p.group ? ` · ${esc(p.group)}` : ""}${p.acked ? ` · ${icon("check", "sm")} quittiert` : ""}</div></div>${ackBtn(p)}</div>`).join("");
+        <div class="t-sub"><span title="Seit ${esc(fmtTime(p.since, true))}">${esc(fmtSince(p.since))}</span>${p.group ? ` · ${esc(p.group)}` : ""}</div></div>${ackBtn(p)}</div>`).join("");
+    const offAcked = ackedPart(ackedOff.map((p) => ackedRow(p, "Offline", false)));
+    const probAcked = ackedPart(ackedProb.map((p) => ackedRow(p, p.state === "crit" ? "Fehler" : "Warnung", true)));
     const evList = recent.filter((ev) => evFilter === "all" || ["warning", "critical"].includes(ev.severity));
     const evPanel = `<div class="panel flush"><div class="panel-head"><div class="panel-title">Letzte 12 Stunden <span class="muted small">${evList.length}</span></div>
         <div class="actions"><div class="seg" role="group" aria-label="Ereignisse filtern">${[["all", "Alle"], ["warn", "Warnungen und Fehler"]].map(([k, l]) => `<button type="button" data-evf="${k}" aria-pressed="${evFilter === k}">${l}</button>`).join("")}</div><a class="btn gray sm" href="/events" data-go>Alle</a></div></div>
@@ -868,10 +878,10 @@ PAGES["/"] = async (el, token) => {
     el.innerHTML = `<div class="dash">` + head(`${state.instance ? esc(state.instance) + " · " : ""}Stand ${fmtTime(Math.floor(state.ovAt / 1000))} · aktualisiert sich alle 15 Sekunden`) + hero + tiles +
       `<div class="dash-cols">
         <div class="dash-col">
-          <div class="panel flush" id="dash-offline"><div class="panel-head"><div class="panel-title">Geräte offline <span class="muted small">${offline.length}</span></div><a class="btn gray sm" href="/devices" data-go>Alle Geräte</a></div>
-            <div class="rows">${offRows || `<div class="row muted">${icon("check", "sm")} Alle Geräte sind erreichbar.</div>`}</div></div>
-          <div class="panel flush" id="dash-problems"><div class="panel-head"><div class="panel-title">Dienste mit Fehler oder Warnung <span class="muted small">${problems.length}</span></div><a class="btn gray sm" href="/alerts" data-go>Alarme</a></div>
-            <div class="rows">${probRows || `<div class="row muted">${icon("check", "sm")} Kein Dienst hat eine Warnung oder einen Fehler.</div>`}</div></div>
+          <div class="panel flush" id="dash-offline"><div class="panel-head"><div class="panel-title">Geräte offline <span class="muted small">${openOff.length}</span></div><a class="btn gray sm" href="/devices" data-go>Alle Geräte</a></div>
+            <div class="rows">${offRows || `<div class="row muted">${icon("check", "sm")} ${ackedOff.length ? "Kein offener Ausfall." : "Alle Geräte sind erreichbar."}</div>`}${offAcked}</div></div>
+          <div class="panel flush" id="dash-problems"><div class="panel-head"><div class="panel-title">Dienste mit Fehler oder Warnung <span class="muted small">${open.length}</span></div><a class="btn gray sm" href="/alerts" data-go>Alarme</a></div>
+            <div class="rows">${probRows || `<div class="row muted">${icon("check", "sm")} ${ackedProb.length ? "Keine offenen Fehler oder Warnungen." : "Kein Dienst hat eine Warnung oder einen Fehler."}</div>`}${probAcked}</div></div>
         </div>
         <div class="dash-col">${evPanel}</div></div></div>`;
     qsa("[data-evf]", el).forEach((b) => b.onclick = () => { evFilter = b.dataset.evf; lsSet("pk95mon-dash-ev", evFilter); draw(false); });
@@ -1855,7 +1865,9 @@ PAGES["/devices/:id"] = async (el, token) => {
     const st = view();
     const att = attachedViews();
     const list = ckViewMode() === "list";
+    ckAlerts = new Map((data.alerts || []).filter((a) => !a.ended && !a.acked_by && a.device_id === id).map((a) => [a.check_key, a]));
     body.innerHTML = list ? svcList(data.device, st, att, data.alerts || []) : checksView(data.device, st, att);
+    ckAlerts = new Map(); // only for this render: other pages show modeBtn, too
     bindCopy(body);
     qsa("[data-keep-scroll]", body).forEach((x) => { if (scroll[x.dataset.keepScroll]) x.scrollTop = scroll[x.dataset.keepScroll]; });
     // panels keep the state the user gave them (open by default or closed by default)
@@ -1879,6 +1891,7 @@ PAGES["/devices/:id"] = async (el, token) => {
   };
   const bindOverview = (st) => {
     const dv = data.device;
+    bindAck(body, reload);
     const byKey = new Map([...(st.checks || []), ...(st.hidden || [])].map((c) => [c.key, c]));
     // per check
     qsa("[data-mode-key]", body).forEach((b) => b.onclick = () => {
@@ -1938,13 +1951,12 @@ PAGES["/devices/:id"] = async (el, token) => {
       if (ackB) ackB.onclick = () => {
         const ids = qsa("tr.sv-row[data-ack-id]", body).filter((tr) => { const b = qs("input[data-sel]", tr); return b && sel.has(b.dataset.sel); }).map((tr) => tr.dataset.ackId);
         if (!ids.length) return;
-        wantFocus = "svq";
-        run(ackB, async () => {
-          for (const aid of ids) await POST(`/api/alerts/${enc(aid)}/ack`);
+        ackDialog(ids, "", async () => {
+          wantFocus = "svq";
           sel.clear(); state.ovAt = 0;
           await reload();
           loadOverview().catch(() => {});
-        }, ids.length === 1 ? "Alarm quittiert – bis er schlimmer wird." : `${ids.length} Alarme quittiert – bis sie schlimmer werden.`);
+        });
       };
       const clear = qs("[data-bulk-clear]", body);
       if (clear) clear.onclick = () => { sel.clear(); syncSel(body, sel); const n = qs("[data-svq]", body); if (n) n.focus(); };
@@ -2029,6 +2041,46 @@ PAGES["/devices/:id"] = async (el, token) => {
 function localInput(ts) {
   const d = new Date(ts * 1000), p = (x) => String(x).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// ackWhen says how long an acknowledgement holds; ackSummary is the plain text of an
+// acknowledged alert (titles); ackNoteHTML its note as a line.
+const ackWhen = (a) => (a.ack_until ? `bis ${fmtTime(a.ack_until, true)}` : "bis es schlimmer wird");
+const ackSummary = (a) => `Quittiert von ${a.acked_by} am ${fmtTime(a.acked_at, true)}, ${ackWhen(a)}${a.ack_note ? ` – Notiz: ${a.ack_note}` : ""}`;
+const ackNoteHTML = (a) => (a && a.ack_note ? `<div class="ack-note">${icon("pencil", "sm")}<span>${esc(a.ack_note)}</span></div>` : "");
+
+// ackDialog acknowledges alerts: until they get worse or for a period, with an optional note.
+// Getting worse (warning → critical) opens an alert again in any case.
+function ackDialog(ids, label, done) {
+  const many = ids.length > 1;
+  formDialog({
+    title: many ? `${ids.length} Alarme quittieren` : label ? `Quittieren: ${label}` : "Alarm quittieren", ic: "check", button: "Quittieren", cls: "",
+    text: "Quittierte Alarme zählen als in Ordnung und erinnern nicht mehr. Wird es schlimmer (Warnung → Kritisch), ist der Alarm sofort wieder offen; nach Ablauf der Zeit ebenfalls, mit einer Benachrichtigung.",
+    fields: [
+      { name: "dur", type: "radio", label: "Wie lange?", value: "worse", options: [["worse", "Bis es schlimmer wird", "ohne Ablauf"], ["86400", "1 Tag"], ["604800", "1 Woche"], ["2592000", "30 Tage"], ["until", "Bis …"]] },
+      { name: "until", label: "Bis", type: "datetime-local", value: localInput(nowSec() + 3 * 86400), wide: true },
+      { name: "note", label: "Notiz", type: "textarea", rows: 2, placeholder: "z. B. Ersatzplatte ist bestellt, kommt Donnerstag", wide: true, hint: "Steht beim Alarm und im Ereignisprotokoll (höchstens 500 Zeichen)." },
+    ],
+    onMount: (dl) => {
+      const show = () => { qs('[data-field="until"]', dl).hidden = formValues(qs("form", dl)).dur !== "until"; };
+      qsa('[name="dur"]', dl).forEach((x) => x.onchange = show);
+      show();
+      qs('[name="dur"]:checked', dl).focus();
+    },
+    submit: async (v) => {
+      let until = 0;
+      if (v.dur === "until") {
+        until = Math.floor(new Date(v.until).getTime() / 1000);
+        if (!until || until <= nowSec()) throw Object.assign(new Error("Bitte einen Zeitpunkt in der Zukunft wählen."), { fields: { until: "Liegt in der Vergangenheit." } });
+      } else if (v.dur !== "worse") until = nowSec() + Number(v.dur);
+      const note = (v.note || "").trim();
+      if (note.length > 500) throw Object.assign(new Error("Die Notiz ist zu lang."), { fields: { note: "Höchstens 500 Zeichen." } });
+      for (const id of ids) await POST(`/api/alerts/${enc(id)}/ack`, { until, note });
+      const what = many ? `${ids.length} Alarme quittiert` : "Alarm quittiert";
+      toast(until ? `${what} bis ${fmtTime(until, true)}.` : `${what} – bis es schlimmer wird.`);
+      await done();
+    },
+  });
 }
 
 function maintenanceDialog(dv, done) {
@@ -2397,10 +2449,17 @@ function reasonHTML(c, fallback = "") {
   return esc(t);
 }
 // modeBtn opens the mode menu of a check (not for the reachability check).
+// ckAlerts: the open, unacknowledged alerts of the device page shown, by check key; ackBtn puts a
+// "Quittieren" button next to the mode button of such a check (cards, tables and the list).
+let ckAlerts = new Map();
+function ackBtn(c) {
+  const a = ckAlerts.get(c.key);
+  return a ? `<button class="ib sm-ib ck-ack" type="button" data-ack="${esc(a.id)}" data-ack-label="${esc(c.name)}" data-fk="a:${esc(c.key)}" title="Quittieren – bis es schlimmer wird oder für eine Zeit, mit Notiz" aria-label="${esc(c.name)} quittieren">${icon("check")}</button>` : "";
+}
 function modeBtn(c) {
-  if (c.key === REACH_KEY) return "";
+  if (c.key === REACH_KEY) return ackBtn(c);
   const q = isQuiet(c);
-  return `<button class="ib sm-ib ck-mode ${q ? "quiet" : ""}" type="button" data-mode-key="${esc(c.key)}" data-fk="m:${esc(c.key)}" aria-haspopup="menu" aria-expanded="false" title="Überwachung: ${isNew(c) ? "neu, noch nicht entschieden" : q ? "nur anzeigen" : "überwachen"}" aria-label="Überwachung von ${esc(c.name)} einstellen">${icon("eye")}</button>`;
+  return ackBtn(c) + `<button class="ib sm-ib ck-mode ${q ? "quiet" : ""}" type="button" data-mode-key="${esc(c.key)}" data-fk="m:${esc(c.key)}" aria-haspopup="menu" aria-expanded="false" title="Überwachung: ${isNew(c) ? "neu, noch nicht entschieden" : q ? "nur anzeigen" : "überwachen"}" aria-label="Überwachung von ${esc(c.name)} einstellen">${icon("eye")}</button>`;
 }
 // cardTone: colour of a check card, its left bar and its sparkline.
 const cardTone = (c) => (isQuiet(c) ? "quiet" : c.acked ? "ok" : ["ok", "warn", "crit"].includes(c.state) ? c.state : "unknown");
@@ -2975,7 +3034,7 @@ const svcSort = (list) => [...list].sort((a, b) => {
 const selBox = (attrs, label) => `<label class="sv-cb"><input type="checkbox" ${attrs} aria-label="${esc(label)}"></label>`;
 // svcRow: one check; sel = the checked keys (null: no checkbox), mode: with the mode button.
 // ackTag marks a check whose open alert is acknowledged.
-const ackTag = (a) => (a && a.acked_by ? `<span class="tag ack-tag" title="Quittiert von ${esc(a.acked_by)} am ${esc(fmtTime(a.acked_at, true))} – keine Erinnerungen, bis es schlimmer wird">${icon("check")}quittiert</span>` : "");
+const ackTag = (a) => (a && a.acked_by ? `<span class="tag ack-tag" title="${esc(ackSummary(a))}">${icon("check")}quittiert${a.ack_note ? ` ${icon("pencil", "sm")}` : ""}</span>` : "");
 function svcRow(c, devId, sel, mode, alert) {
   const tone = cardTone(c), s = svcSummary(c), cv = cardValue(c), on = !!sel && sel.has(c.key);
   const ackable = alert && !alert.ended && !alert.acked_by ? ` data-ack-id="${esc(alert.id)}"` : "";
@@ -3127,8 +3186,8 @@ function alertsTable(list, opts) {
       ${td("Meldung", `<span class="small">${esc(a.message || "")}</span>`)}
       ${td("Beginn", `<span class="nowrap">${esc(fmtTime(a.started, true))}</span><div class="t-sub">${esc(fmtAgo(a.started))}</div>`)}
       ${td("Ende / Dauer", a.ended ? `<span class="nowrap">${esc(fmtTime(a.ended, true))}</span><div class="t-sub">Dauer ${esc(fmtUptime(a.ended - a.started))}</div>` : `${pill("aktiv", a.severity === "crit" ? "rose" : "amber", true, true)}<div class="t-sub">seit ${esc(fmtUptime(now - a.started))}</div>`)}
-      ${td("Quittiert", a.acked_by ? `${esc(a.acked_by)}<div class="t-sub">${esc(fmtTime(a.acked_at, true))}</div>` : '<span class="muted">—</span>', "small")}
-      <td class="act">${a.ended ? "" : !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}">${icon("check")} Quittieren</button>`
+      ${td("Quittiert", a.acked_by ? `${esc(a.acked_by)}<div class="t-sub">${esc(fmtTime(a.acked_at, true))}${a.ended ? "" : ` · ${esc(ackWhen(a))}`}</div>${a.ack_note ? `<div class="t-sub ack-note-cell">„${esc(a.ack_note)}“</div>` : ""}` : '<span class="muted">—</span>', "small")}
+      <td class="act">${a.ended ? "" : !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}" data-ack-label="${esc(`${a.device_name} · ${a.check_name || a.check_key}`)}">${icon("check")} Quittieren</button>`
         : `<button class="btn ghost sm" type="button" data-unack="${esc(a.id)}" title="Der Alarm zählt wieder als offen und erinnert wieder">${icon("restore")} Aufheben</button>`}</td></tr>`).join("")}
   </tbody></table></div></div>`;
 }
@@ -3995,8 +4054,8 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     const pillH = c ? ckPill(c) : hidden ? pill("Ausgeblendet") : pill("Nicht vorhanden");
     // the open alert of this check: "Quittieren" stops reminders until it gets worse
     const alert = (data.alerts || []).find((a) => !a.ended && a.check_key === key && a.device_id === id);
-    const ackB = alert && !alert.acked_by ? `<button class="btn" type="button" data-ack-alert="${esc(alert.id)}" data-fk="ack" title="Keine Erinnerungen mehr, bis der Alarm schlimmer wird (Warnung → Kritisch)">${icon("check")} Quittieren</button>` : "";
-    const ackInfo = alert && alert.acked_by ? `<div class="ckd-ack">${icon("check")}<span>Quittiert von <b>${esc(alert.acked_by)}</b> am ${esc(fmtTime(alert.acked_at, true))} – keine Erinnerungen, bis es schlimmer wird.</span></div>` : "";
+    const ackB = alert && !alert.acked_by ? `<button class="btn" type="button" data-ack-alert="${esc(alert.id)}" data-fk="ack" title="Bis es schlimmer wird oder für eine Zeit, mit Notiz">${icon("check")} Quittieren</button>` : "";
+    const ackInfo = alert && alert.acked_by ? `<div class="ckd-ack">${icon("check")}<span>Quittiert von <b>${esc(alert.acked_by)}</b> am ${esc(fmtTime(alert.acked_at, true))} – keine Erinnerungen ${alert.ack_until ? `bis <b>${esc(fmtTime(alert.ack_until, true))}</b>, außer es wird schlimmer` : "bis es schlimmer wird"}.${alert.ack_note ? `<br>Notiz: ${esc(alert.ack_note)}` : ""}</span></div>` : "";
     let top = "";
     if (c) {
       const v = cardValue(c), tone = cardTone(c), msg = reasonText(c);
@@ -4032,12 +4091,11 @@ PAGES["/devices/:id/checks/:key"] = async (el, token) => {
     const ub = qs("[data-unhide]", head);
     if (ub) ub.onclick = () => saveRules(ub, (rs) => setExactRule(rs, key, "alert"));
     const ab = qs("[data-ack-alert]", head);
-    if (ab) ab.onclick = () => run(ab, async () => {
-      await POST(`/api/alerts/${enc(ab.dataset.ackAlert)}/ack`);
+    if (ab) ab.onclick = () => ackDialog([ab.dataset.ackAlert], (check().c || {}).name || key, async () => {
       state.ovAt = 0;
       await reload();
       loadOverview().catch(() => {});
-    }, "Alarm quittiert – bis er schlimmer wird.");
+    });
     drawExplain();
   };
 

@@ -1,12 +1,18 @@
 package api
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"pk95monitoring/internal/collect/nut"
 	"pk95monitoring/internal/collect/proxmox"
@@ -50,11 +56,19 @@ func (s *Server) getDevice(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	// every open alert (the page acknowledges them per check) and the last 20 for the history:
+	// a device with many newer alerts (one per guest backup) must not hide an older open one
 	alerts, err := s.C.St.Alerts(r.Context(), store.AlertQuery{DeviceID: id, Limit: 20})
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	open, err := s.C.St.Alerts(r.Context(), store.AlertQuery{DeviceID: id, ActiveOnly: true, Limit: 1000})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	alerts = mergeAlerts(open, alerts)
 	out := map[string]any{"device": redactDevice(d), "status": s.C.Status(id), "alerts": alertList(alerts),
 		"windows": s.C.DeviceWindows(id)}
 	if d.Type != model.TypeAgent {
@@ -512,12 +526,48 @@ func (s *Server) ackAlert(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "Nicht gefunden.")
 		return
 	}
-	if err := s.C.AckAlert(id, currentUser(r).Username); err != nil {
+	// the body is optional: without one the acknowledgement holds until the alert gets worse
+	var in struct {
+		Until int64  `json:"until"` // unix seconds, 0 = until it gets worse
+		Note  string `json:"note"`
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil {
+		writeErr(w, http.StatusRequestEntityTooLarge, "Anfrage zu groß.")
+		return
+	}
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &in); err != nil {
+			writeErr(w, http.StatusBadRequest, badJSON(err))
+			return
+		}
+	}
+	now := s.C.Now().Unix()
+	errs := map[string]string{}
+	switch {
+	case in.Until < 0 || (in.Until > 0 && in.Until <= now):
+		errs["until"] = "Der Zeitpunkt muss in der Zukunft liegen."
+	case in.Until > now+maxAckDays*86400:
+		errs["until"] = "Höchstens ein Jahr."
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(in.Note)) > maxAckNote {
+		errs["note"] = "Höchstens 500 Zeichen."
+	}
+	if fieldErrs(w, errs) {
+		return
+	}
+	if err := s.C.AckAlert(id, currentUser(r).Username, core.AckOptions{Until: in.Until, Note: in.Note}); err != nil {
 		fail(w, err)
 		return
 	}
 	ok(w)
 }
+
+// maxAckDays and maxAckNote bound an acknowledgement's period and note.
+const (
+	maxAckDays = 366
+	maxAckNote = 500
+)
 
 // availability returns the availability of all devices from `from` to `to` (unix seconds; default:
 // the last 30 days). Also served to API tokens at /api/v1/report.
@@ -901,4 +951,20 @@ func (s *Server) testM365(w http.ResponseWriter, r *http.Request) {
 // backups lists the backups of all devices (page "Sicherungen").
 func (s *Server) backups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.C.Backups())
+}
+
+// mergeAlerts joins two alert lists without duplicates, newest (highest id) first.
+func mergeAlerts(a, b []model.Alert) []model.Alert {
+	seen := make(map[int64]bool, len(a)+len(b))
+	out := make([]model.Alert, 0, len(a)+len(b))
+	for _, l := range [][]model.Alert{a, b} {
+		for _, al := range l {
+			if !seen[al.ID] {
+				seen[al.ID] = true
+				out = append(out, al)
+			}
+		}
+	}
+	slices.SortFunc(out, func(x, y model.Alert) int { return cmp.Compare(y.ID, x.ID) })
+	return out
 }

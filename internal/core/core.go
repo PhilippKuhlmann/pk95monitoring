@@ -218,6 +218,7 @@ func (c *Core) Run(ctx context.Context) {
 			c.checkSilence()
 			c.applyWindows()
 			c.syncAllAlerts()
+			c.expireAcks()
 			c.renotify()
 			c.notifyTick()
 			c.updateTick(ctx)

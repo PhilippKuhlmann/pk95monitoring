@@ -118,6 +118,11 @@ CREATE TABLE agent_tokens (
 	created    INTEGER NOT NULL
 );
 `,
+	// acknowledgement for a period and with a note
+	`
+ALTER TABLE alerts ADD COLUMN ack_until INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE alerts ADD COLUMN ack_note  TEXT    NOT NULL DEFAULT '';
+`,
 }
 
 // ErrNotFound is returned when an object does not exist.

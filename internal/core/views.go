@@ -296,14 +296,21 @@ func (c *Core) DeviceSummary(id string) (model.DeviceSummary, error) {
 	return c.deviceSummary(d, c.childrenOf(d.ID), c.Now().Unix()), nil
 }
 
+// AckOptions are the period and the note of an acknowledgement.
+type AckOptions struct {
+	Until int64  // end of the acknowledgement (unix seconds); 0 = until the alert gets worse
+	Note  string // free text, shown with the alert
+}
+
 // AckAlert acknowledges an alert: no reminders, the check counts as ok for its device until
-// the alert gets worse.
-func (c *Core) AckAlert(id int64, user string) error {
+// the alert gets worse or, with o.Until, until that time (whichever comes first).
+func (c *Core) AckAlert(id int64, user string, o AckOptions) error {
 	now := c.Now().Unix()
-	if err := c.St.AckAlert(id, user, now); err != nil {
+	o.Note = strings.TrimSpace(o.Note)
+	if err := c.St.AckAlert(id, user, now, o.Until, o.Note); err != nil {
 		return err
 	}
-	c.setAck(id, user, now, user)
+	c.setAck(id, user, now, o, user)
 	return nil
 }
 
@@ -312,13 +319,25 @@ func (c *Core) UnackAlert(id int64, user string) error {
 	if err := c.St.UnackAlert(id); err != nil {
 		return err
 	}
-	c.setAck(id, "", 0, user)
+	c.setAck(id, "", 0, AckOptions{}, user)
 	return nil
+}
+
+// ackText describes an acknowledgement for events and notifications.
+func (c *Core) ackText(actor string, o AckOptions) string {
+	t := "Quittiert von " + actor + ". Keine Erinnerungen, bis es schlimmer wird."
+	if o.Until > 0 {
+		t = "Quittiert von " + actor + " bis " + c.fmtTime(o.Until) + " Uhr. Keine Erinnerungen bis dahin, außer es wird schlimmer."
+	}
+	if o.Note != "" {
+		t += "\nNotiz: " + o.Note
+	}
+	return t
 }
 
 // setAck updates an open alert in memory, re-derives its device state (an acknowledged
 // problem counts as ok) and logs the change.
-func (c *Core) setAck(id int64, ackedBy string, at int64, actor string) {
+func (c *Core) setAck(id int64, ackedBy string, at int64, o AckOptions, actor string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.Now().Unix()
@@ -326,7 +345,7 @@ func (c *Core) setAck(id int64, ackedBy string, at int64, actor string) {
 		if oa.a.ID != id {
 			continue
 		}
-		oa.a.AckedBy, oa.a.AckedAt = ackedBy, at
+		oa.a.AckedBy, oa.a.AckedAt, oa.a.AckUntil, oa.a.AckNote = ackedBy, at, o.Until, o.Note
 		d, ok := c.devices[oa.a.DeviceID]
 		if !ok || c.rt[d.ID] == nil {
 			break
@@ -335,7 +354,7 @@ func (c *Core) setAck(id int64, ackedBy string, at int64, actor string) {
 		c.finish(d, rt, rt.st.Checks, now)
 		name := c.displayName(d)
 		if ackedBy != "" {
-			c.Event("info", name, fmt.Sprintf("Alarm quittiert: %s – %s", name, oa.a.CheckName), "Quittiert von "+actor+". Keine Erinnerungen, bis es schlimmer wird.", nil, false)
+			c.Event("info", name, fmt.Sprintf("Alarm quittiert: %s – %s", name, oa.a.CheckName), c.ackText(actor, o), nil, false)
 		} else {
 			c.Event("info", name, fmt.Sprintf("Quittierung aufgehoben: %s – %s", name, oa.a.CheckName), "Aufgehoben von "+actor+". Der Alarm zählt wieder als offen.", nil, false)
 		}

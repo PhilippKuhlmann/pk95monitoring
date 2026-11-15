@@ -699,7 +699,7 @@ run automatically on start), plus:
 - `series(id INTEGER PK, device_id, name, instance, unit, check_key, last_ts, last_value, UNIQUE(device_id,name,instance))`
 - `samples(series_id, ts, value, PRIMARY KEY(series_id, ts)) WITHOUT ROWID` – raw, default 2 days
 - `rollups(series_id, res, ts, min, max, avg, cnt, PRIMARY KEY(series_id,res,ts)) WITHOUT ROWID` – res 300 (default 35 days) and 3600 (default 400 days)
-- `alerts(id PK, device_id, device_name, check_key, check_name, severity, message, started, ended, acked_by, acked_at)`
+- `alerts(id PK, device_id, device_name, check_key, check_name, severity, message, started, ended, acked_by, acked_at, ack_until, ack_note)` (`ack_until`/`ack_note`: migration 2)
 - `statuses(device_id PK, data TEXT)` – persisted DeviceStatus JSON
 - `api_tokens(id PK, name, token_hash UNIQUE, prefix, created, last_used)`
 - `agent_tokens(device_id PK, token_hash UNIQUE, created)`
@@ -735,11 +735,13 @@ Authenticated:
   (`core/dashboard.go`). `Totals` = `{devices, agents, disabled, checks, checks_ok, checks_warn, checks_crit, checks_unknown, offline, maintenance}`:
   devices as in the device list (enabled, attached agents belong to their device), checks of all enabled devices
   without `reach` and `discovery` (quiet ones included). `DashCheck` = `{device_id, device, device_type, folder?, key, name, group?, state, message, since, last_ok?, acked?}`:
-  `offline` = devices whose `reach` is crit (longest outage first); `problems` = warn/crit checks in mode alert
+  `offline` = devices whose `reach` is crit (open before acknowledged, longest outage first); `problems` = warn/crit checks in mode alert
   (inventory included), open before acknowledged, crit before warn, newest first. Devices that are disabled or in
   maintenance are counted but not listed; the checks of an offline device are left out (stale).
   The Übersicht page shows these (no device cards): totals, offline devices, problem checks with "Quittieren"
   (via the open alert of device and check) and the last 12 hours of events (filter all / warnings and errors).
+  Acknowledged lines count as OK there: not in the headline, tone, tiles or panel counts, but listed below the open
+  ones under "Quittiert · n" with a green "Quittiert" pill, what it was (Offline/Fehler/Warnung) and who acknowledged.
 - `DeviceRow` = `{id, name, type, host, group, enabled, no_alerts, maintenance_until, state, message, since, last_poll, os, platform, agent_version, checks:{ok,warn,crit,unknown}, cpu, mem, disk, parent_id?, parent_name?, attached}` (cpu/mem/disk: latest % or null; disk = max disk.usage; a parent without own values shows the highest of its agents; `attached` = number of attached agents)
 - `GET /api/devices` → `{devices:[DeviceRow], groups:[string]}` (overview and list: top-level devices only, see "Attached agents")
 - `POST /api/devices` (Device) → Device; `PUT /api/devices/{id}` → Device; `DELETE /api/devices/{id}` → `{ok}`
@@ -748,7 +750,7 @@ Authenticated:
   a poll (422 on `group` when too long; unknown ids are skipped; event "Ordner geändert"). Folders are the device `group`:
   `/` separates levels ("Server/Standort Nord"), `core.NormalizeGroup` trims the parts and drops empty ones, at
   most 60 characters. Renaming a folder in the UI moves every device of it and its subfolders.
-- `GET /api/devices/{id}` → `{device: Device (redacted), status: DeviceStatus, alerts:[Alert ×20]}` plus, for a
+- `GET /api/devices/{id}` → `{device: Device (redacted), status: DeviceStatus, alerts:[every open Alert + the last 20, newest first]}` plus, for a
   non-agent device, `attached: [{device, status}]` (sorted by node, name; `[]` when none); for an attached agent
   `parent: {id, name, type}`; for an unattached agent `suggest: [{id, name, type, node}]`
 - `POST /api/devices/{id}/attach {agent_id, node}` → `{device}` (the parent; 422 with German field errors on
@@ -852,7 +854,7 @@ Authenticated:
 - `POST /api/test/nut {id?, host, nut}` → `{ok, server, ups:[{name, desc, model, status}], message}` (empty
   `nut.password` with `id` = the stored password; `status` is German text)
 - `POST /api/test/netcheck {host, check}` → `Check`
-- `GET /api/alerts?state=active|open|acked|all&before=&limit=&device=` (open = active and not acknowledged, acked = active and acknowledged; limit default 50, max 500) → `{alerts, more}`; `POST /api/alerts/{id}/ack` and `POST /api/alerts/{id}/unack` → `{ok}`
+- `GET /api/alerts?state=active|open|acked|all&before=&limit=&device=` (open = active and not acknowledged, acked = active and acknowledged; limit default 50, max 500) → `{alerts, more}`; `POST /api/alerts/{id}/ack` (optional body `{until, note}`: until unix seconds, 0 = until it gets worse, at most 366 days ahead; note at most 500 characters; 422 with `fields`) and `POST /api/alerts/{id}/unack` → `{ok}`
 - `GET /api/events?severity=&before=&limit=` (limit default 50, max 500) → `{events, more}` (Event as in ProxBackup: `{id, ts, severity, source, title, body, details}`)
 - `GET /api/agents[?device=<id>&node=<node>]` → `{enroll_key, server_url, fingerprint, version, auto_update, linux_cmd, windows_cmd, binaries:[{os, arch, file, size, sha256, available}], agents:[DeviceRow]}` (`linux_cmd`/`windows_cmd` empty when the binary is missing; see Agent → one-liners; with `device` the commands include `--device <id> [--node <node>]`, 404 for an unknown device, 400 for an agent; `agents` = all agent devices incl. attached ones)
 - `POST /api/agents/key` → `{enroll_key}` (rotate)
@@ -1018,8 +1020,15 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   checked checks (pattern rules where a whole key family is checked, exact rules otherwise).
 - Acknowledging ("Quittieren", `POST /api/alerts/{id}/ack`): on the check page (head button, "Quittiert von …"
   line), in the device's service list (tag "quittiert", bulk bar "Quittieren" for checked checks with an open
-  unacknowledged alert), on the alerts pages. An acknowledged alert gets no reminders (re-notify) until it gets
-  worse: an escalation warn → crit clears the acknowledgement (`Store.UnackAlert`) and notifies. The bell counts
+  unacknowledged alert), next to the mode button of every check with an open unacknowledged alert on the device
+  page (✓ button `ckAlerts`/`ackBtn`, cards, tables and list; not on attached agents' cards), on the dashboard and
+  on the alerts pages. Every one opens `ackDialog`: how long ("Bis es schlimmer wird", 1 Tag, 1 Woche, 30 Tage,
+  "Bis …" with date and time) and a note (`Alert.AckUntil`, `Alert.AckNote`; shown with the dashboard line, the
+  tag title, the alerts table, the check page and the "Alarm quittiert" event). An acknowledged alert gets no
+  reminders (re-notify) until it gets worse: an escalation warn → crit clears the acknowledgement, a timed one
+  too (`Store.UnackAlert`), and notifies. `expireAcks` (every tick, before `renotify`) ends timed ones at
+  `AckUntil`: the alert is open again, colours its device, logs and notifies "Quittierung abgelaufen: …" (not
+  while the device is muted). The bell counts
   open alerts nobody acknowledged. The check keeps its state but gets `CheckStatus.Acked`: it counts as ok for the
   device state, the device message and the check counts (`CheckCounts.Acked` = how many), and shows a green
   "Quittiert" pill. `POST /api/alerts/{id}/unack` takes it back ("Aufheben"); both log an event ("Alarm

@@ -19,7 +19,7 @@ func TestAlertLifecycle(t *testing.T) {
 	if err := s.UpdateAlert(id, model.StateCrit, "Festplatte / 97 % ≥ 95 %"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AckAlert(id, "admin", 1100); err != nil {
+	if err := s.AckAlert(id, "admin", 1100, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	active, err := s.ActiveAlerts()
@@ -44,7 +44,7 @@ func TestAlertLifecycle(t *testing.T) {
 	if len(all) != 1 || all[0].Ended != 1200 {
 		t.Fatalf("closed alert = %+v", all)
 	}
-	for _, err := range []error{s.UpdateAlert(999, "crit", ""), s.AckAlert(999, "x", 1)} {
+	for _, err := range []error{s.UpdateAlert(999, "crit", ""), s.AckAlert(999, "x", 1, 0, "")} {
 		if !errors.Is(err, ErrNotFound) {
 			t.Errorf("unknown alert: %v", err)
 		}

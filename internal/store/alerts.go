@@ -12,7 +12,7 @@ import (
 
 // ---- alerts ----
 
-const alertCols = "id, device_id, device_name, check_key, check_name, severity, message, started, ended, acked_by, acked_at"
+const alertCols = "id, device_id, device_name, check_key, check_name, severity, message, started, ended, acked_by, acked_at, ack_until, ack_note"
 
 // OpenAlert stores a new active alert (Started 0 = now) and returns its id.
 func (s *Store) OpenAlert(a model.Alert) (int64, error) {
@@ -55,15 +55,16 @@ func (s *Store) CloseAlert(id, ended int64) error {
 
 // UnackAlert removes the acknowledgement of an alert (it got worse).
 func (s *Store) UnackAlert(id int64) error {
-	return affected(s.db.Exec("UPDATE alerts SET acked_by = '', acked_at = 0 WHERE id = ?", id))
+	return affected(s.db.Exec("UPDATE alerts SET acked_by = '', acked_at = 0, ack_until = 0, ack_note = '' WHERE id = ?", id))
 }
 
-// AckAlert marks an alert as acknowledged by user at time at (0 = now).
-func (s *Store) AckAlert(id int64, user string, at int64) error {
+// AckAlert marks an alert as acknowledged by user at time at (0 = now), until the time until
+// (0 = until it gets worse) with a note.
+func (s *Store) AckAlert(id int64, user string, at, until int64, note string) error {
 	if at == 0 {
 		at = time.Now().Unix()
 	}
-	return affected(s.db.Exec("UPDATE alerts SET acked_by = ?, acked_at = ? WHERE id = ?", user, at, id))
+	return affected(s.db.Exec("UPDATE alerts SET acked_by = ?, acked_at = ?, ack_until = ?, ack_note = ? WHERE id = ?", user, at, until, note, id))
 }
 
 func (s *Store) queryAlerts(ctx context.Context, q string, args ...any) ([]model.Alert, error) {
@@ -76,7 +77,7 @@ func (s *Store) queryAlerts(ctx context.Context, q string, args ...any) ([]model
 	for rows.Next() {
 		var a model.Alert
 		if err := rows.Scan(&a.ID, &a.DeviceID, &a.DeviceName, &a.CheckKey, &a.CheckName, &a.Severity, &a.Message,
-			&a.Started, &a.Ended, &a.AckedBy, &a.AckedAt); err != nil {
+			&a.Started, &a.Ended, &a.AckedBy, &a.AckedAt, &a.AckUntil, &a.AckNote); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

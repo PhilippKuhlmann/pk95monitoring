@@ -335,7 +335,7 @@ func TestAlertLifecycle(t *testing.T) {
 	if got := e.rec.titles(); len(got) != 3 || got[2] != "Weiterhin Warnung: web01 – Festplatte /" {
 		t.Fatalf("renotify: %v", got)
 	}
-	if err := e.c.AckAlert(active[0].ID, "admin"); err != nil {
+	if err := e.c.AckAlert(active[0].ID, "admin", AckOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	e.clk.Add(2 * time.Hour)
@@ -396,7 +396,7 @@ func TestAlertsMaintenanceAndRemoval(t *testing.T) {
 	}
 	for _, a := range active {
 		if a.CheckKey == "svc:Spooler" {
-			if err := e.c.AckAlert(a.ID, "admin"); err != nil {
+			if err := e.c.AckAlert(a.ID, "admin", AckOptions{}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -517,7 +517,7 @@ func TestAckHoldsUntilWorse(t *testing.T) {
 	if len(active) != 1 {
 		t.Fatalf("alerts %+v", active)
 	}
-	if err := e.c.AckAlert(active[0].ID, "admin"); err != nil {
+	if err := e.c.AckAlert(active[0].ID, "admin", AckOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// Acknowledged: the check keeps its state, the device counts it as ok.
@@ -564,7 +564,7 @@ func TestUnackAlert(t *testing.T) {
 	e.report(t, id, diskCheck(91))
 	e.wait()
 	active, _ := e.st.ActiveAlerts()
-	if err := e.c.AckAlert(active[0].ID, "admin"); err != nil {
+	if err := e.c.AckAlert(active[0].ID, "admin", AckOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -620,5 +620,59 @@ func TestSetGroup(t *testing.T) {
 	}
 	if body := lastEventBody(t, e, "Ordner geändert"); body != "1 Gerät nach „ohne Ordner“ verschoben." {
 		t.Fatalf("event %q", body)
+	}
+}
+
+// A timed acknowledgement with a note ends at its time: the alert is open again, colours the
+// device and notifies once; getting worse ends it earlier (see TestAckHoldsUntilWorse).
+func TestAckForPeriod(t *testing.T) {
+	e := newEnv(t, Options{})
+	id := e.agentDevice(t, "web01", nil)
+	e.report(t, id, diskCheck(91))
+	e.wait()
+	active, _ := e.st.ActiveAlerts()
+	if len(active) != 1 {
+		t.Fatalf("alerts %+v", active)
+	}
+	until := e.clk.Now().Add(24 * time.Hour).Unix()
+	if err := e.c.AckAlert(active[0].ID, "admin", AckOptions{Until: until, Note: "  Platte ist bestellt  "}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := e.st.ActiveAlerts()
+	if a[0].AckUntil != until || a[0].AckNote != "Platte ist bestellt" {
+		t.Fatalf("stored ack %+v", a[0])
+	}
+	if st := e.c.Status(id); st.State != model.StateOK {
+		t.Fatalf("device while acknowledged: %s", st.State)
+	}
+	if ov, _ := e.c.Overview(context.Background()); ov.Alerts[0].AckNote != "Platte ist bestellt" || ov.Alerts[0].AckUntil != until {
+		t.Fatalf("overview alert %+v", ov.Alerts[0])
+	}
+	// before the end nothing changes
+	e.clk.Add(23 * time.Hour)
+	e.c.expireAcks()
+	if a, _ := e.st.ActiveAlerts(); a[0].AckedBy != "admin" {
+		t.Fatalf("ack ended early: %+v", a[0])
+	}
+	sent := len(e.rec.titles())
+	// after it the alert is open again and notifies
+	e.clk.Add(2 * time.Hour)
+	e.c.expireAcks()
+	e.wait()
+	a, _ = e.st.ActiveAlerts()
+	if a[0].AckedBy != "" || a[0].AckUntil != 0 || a[0].AckNote != "" {
+		t.Fatalf("after the end: %+v", a[0])
+	}
+	if st := e.c.Status(id); st.State != model.StateWarn || mustCheck(t, st, "disk:/").Acked {
+		t.Fatalf("device after the end: %s", st.State)
+	}
+	got := e.rec.titles()
+	if len(got) != sent+1 || !strings.HasPrefix(got[len(got)-1], "Quittierung abgelaufen: ") {
+		t.Fatalf("notifications %v", got)
+	}
+	e.c.expireAcks() // once only
+	e.wait()
+	if len(e.rec.titles()) != sent+1 {
+		t.Fatalf("notified twice: %v", e.rec.titles())
 	}
 }

@@ -132,7 +132,13 @@ func (c *Core) dashboard(now int64) (Totals, []DashCheck, []DashCheck) {
 		off[o.DeviceID] = true
 	}
 	problems = slices.DeleteFunc(problems, func(p DashCheck) bool { return off[p.DeviceID] })
-	slices.SortFunc(offline, func(a, b DashCheck) int { // longest outage first
+	slices.SortFunc(offline, func(a, b DashCheck) int { // open before acknowledged, longest outage first
+		if a.Acked != b.Acked {
+			if a.Acked {
+				return 1
+			}
+			return -1
+		}
 		if a.Since != b.Since {
 			return cmpInt(a.Since, b.Since)
 		}

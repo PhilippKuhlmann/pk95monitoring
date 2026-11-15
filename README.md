@@ -45,6 +45,7 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   Repositories) und eine eigene Seite mit allen Sicherungen.
 - **Übersicht (Dashboard):** wie viele Geräte und Dienste überwacht werden, welche Geräte offline sind, welche
   Dienste eine Warnung oder einen Fehler haben (direkt quittierbar) und was in den letzten 12 Stunden passiert ist.
+  Quittierte Probleme zählen dort nicht mehr als Fehler: Sie stehen grün als „Quittiert“ unter den offenen.
 - **Übersichten:** Update-Stand aller Server, Systemprotokolle (Windows und Linux) mit Regeln und Ausnahmen, Ablaufdaten aller Zertifikate und Domains samt Speicherprognose („voll in 23 Tagen“), Verfügbarkeitsberichte
   (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,
@@ -788,7 +789,10 @@ Einstellungen → Standard.
   ausgefallen, wenn er sich `max(3 × Intervall, 180 s)` nicht meldet.
 - **Alarme:** Wird ein Check Warnung oder Kritisch, öffnet sich ein Alarm mit Benachrichtigung; steigt er auf
   Kritisch, kommt eine weitere. Zurück auf OK schließt den Alarm („Wieder OK“). Offene, nicht quittierte Alarme
-  können alle N Stunden erneut melden (Einstellungen → Allgemein).
+  können alle N Stunden erneut melden (Einstellungen → Allgemein). Quittieren geht in der Übersicht, unter
+  *Alarme*, auf der Seite eines Checks und direkt auf der Geräteseite (Haken neben dem Auge, in Kacheln und Liste):
+  bis es schlimmer wird oder für eine Zeit (1 Tag, 1 Woche, 30 Tage, bis Datum und Uhrzeit), mit Notiz. Läuft die
+  Zeit ab, ist der Alarm wieder offen und meldet sich; wird es vorher schlimmer (Warnung → Kritisch), sofort.
 - **Wartung:** Am Gerät „Wartung“ starten (Dauer oder bis Zeitpunkt, mit Notiz) – bis dahin keine neuen Alarme und
   keine Benachrichtigungen, die Werte werden weiter aufgezeichnet. Schon offene Alarme bleiben bestehen, samt
   Quittierung, und laufen nach der Wartung weiter; was in der Wartung wieder in Ordnung kommt, endet ohne

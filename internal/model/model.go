@@ -722,6 +722,10 @@ type Alert struct {
 	Ended      int64  `json:"ended,omitempty"` // 0 = still active
 	AckedBy    string `json:"acked_by,omitempty"`
 	AckedAt    int64  `json:"acked_at,omitempty"`
+	// AckUntil ends the acknowledgement at that time (0 = until the alert gets worse; getting
+	// worse ends a timed one, too); AckNote is the note written with it.
+	AckUntil int64  `json:"ack_until,omitempty"`
+	AckNote  string `json:"ack_note,omitempty"`
 }
 
 // ---- agent protocol (HTTPS, JSON) ----

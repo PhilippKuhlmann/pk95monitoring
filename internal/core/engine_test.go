@@ -580,7 +580,7 @@ func TestDashboard(t *testing.T) {
 	// acknowledged problems go last
 	for _, al := range ov.Alerts {
 		if al.DeviceID == b {
-			if err := e.c.AckAlert(al.ID, "admin"); err != nil {
+			if err := e.c.AckAlert(al.ID, "admin", AckOptions{}); err != nil {
 				t.Fatal(err)
 			}
 		}

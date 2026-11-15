@@ -344,7 +344,7 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 					if err := c.St.UnackAlert(oa.a.ID); err != nil {
 						log.Printf("unack alert: %v", err)
 					} else {
-						oa.a.AckedBy, oa.a.AckedAt = "", 0
+						oa.a.AckedBy, oa.a.AckedAt, oa.a.AckUntil, oa.a.AckNote = "", 0, 0, ""
 					}
 				}
 				oa.notified, oa.peak = now, model.Worst(oa.peak, cs.State)
@@ -425,6 +425,47 @@ func (c *Core) syncAllAlerts() {
 	for id, d := range c.devices {
 		if rt := c.rt[id]; rt != nil {
 			c.syncAlerts(d, rt, now)
+		}
+	}
+}
+
+// expireAcks ends acknowledgements whose period is over: the alert is open again, colours its
+// device and notifies (not while the device is muted, e.g. in maintenance).
+func (c *Core) expireAcks() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.Now().Unix()
+	for _, oa := range c.open {
+		if oa.a.AckedBy == "" || oa.a.AckUntil == 0 || now < oa.a.AckUntil {
+			continue
+		}
+		if err := c.St.UnackAlert(oa.a.ID); err != nil {
+			log.Printf("expire ack: %v", err)
+			continue
+		}
+		by := oa.a.AckedBy
+		oa.a.AckedBy, oa.a.AckedAt, oa.a.AckUntil, oa.a.AckNote = "", 0, 0, ""
+		d, ok := c.devices[oa.a.DeviceID]
+		rt := c.rt[oa.a.DeviceID]
+		if !ok || rt == nil {
+			continue
+		}
+		c.finish(d, rt, rt.st.Checks, now)
+		var cs model.CheckStatus
+		for _, x := range rt.st.Checks {
+			if x.Key == oa.a.CheckKey {
+				cs = x
+			}
+		}
+		name := c.displayName(d)
+		title := fmt.Sprintf("Quittierung abgelaufen: %s – %s", name, oa.a.CheckName)
+		body := "Die Quittierung von " + by + " ist abgelaufen, der Alarm ist wieder offen (" + stateWord(oa.a.Severity) + "): " + oa.a.Message
+		sev := sevName(oa.a.Severity)
+		det := c.alertDetails(d, rt, cs, "")
+		c.Event(sev, name, title, body, det, false)
+		if muteReason(d, now) == "" {
+			oa.notified = now
+			c.notifyAlert(oa, d, c.message(sev, name, title, body, det), sev, false)
 		}
 	}
 }
