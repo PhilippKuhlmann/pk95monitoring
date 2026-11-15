@@ -187,6 +187,11 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | snmp (sophos) | `snmp:ha` | Hochverfügbarkeit | SFOS `sfosHAStatus` enabled only: this or peer HaState faulty, standalone or no peer = crit, ready = warn |
 | snmp (sophos) | `snmp:lic:<module>` | Lizenz <module> | Lizenzen: subscriptions with status trial/subscribed/expired/deactivated (none and notsubscribed skipped); expiry DisplayString parsed in several layouts, "Perpetual" = unbefristet; `license.days` (threshold below 30/7); expired = crit, deactivated = warn; facts Status, Produkt, Läuft ab (expiry page kind license) |
 | snmp (sophos) | `snmp:vpn:<name>` | VPN <name> | VPN: `sfosIPSecVpnTunnelTable` – not activated = ok, active = ok, partially-active = warn, inactive = crit for site-to-site / tunnel interface, ok for host-to-host |
+| snmp (securepoint) | `snmp:lic:UTM` | Lizenz UTM | comLicDaysLeft → `license.days` (expiry page), ≤ 0 = crit, unlimited = ok |
+| snmp (securepoint) | `snmp:cluster` | Hochverfügbarkeit (Cluster) | only when enabled: sync error = crit, pending or maintenance = warn |
+| snmp (securepoint) | `snmp:vpn:<name>`, `snmp:ipsec-subnets` | VPN <name>, IPsec-Subnetze | IPsec status 2 = crit, 0 = unknown; any subnet pair down = crit (listed) |
+| snmp (securepoint) | `snmp:wg:<peer>` | WireGuard <peer> | handshake older than 5 min = warn, none = ok "noch nie verbunden" |
+| snmp (securepoint) | `snmp:services`, `snmp:av`, `snmp:conntrack` | UTM-Dienste, Virenmuster, Verbindungstabelle | apps in error(4) = warn (unlicensed AV scanner and eNoService(9) skipped); AV pattern state fail = warn; `conntrack.usage` (80/95), `conntrack.count` |
 | snmp (sophos) | `snmp:services` | Firewall-Dienste | Dienste: `sfosXGServiceStatus` dead/frozen = crit, core services (Apache, Database, Network, Garner) stopped/exiting = warn; `services.failed` |
 | m365 | `m365:tenant` | Mandant | Microsoft 365: name, default domain, verified domains; an unverified domain = warn |
 | m365 | `m365:sync` | Entra Connect Sync | Microsoft 365 (only with `onPremisesSyncEnabled`): `m365.sync_age`; never synced = warn |
@@ -282,7 +287,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `power.watts` | W | – | redfish (power consumption) |
 | `gw.latency` | ms | gateway name | OPNsense gateway monitoring delay |
 | `gw.loss` | % | gateway name | OPNsense gateway monitoring packet loss |
-| `license.days` | d | module | Sophos subscription days left (default threshold below 30/7) |
+| `license.days` | d | module | Sophos subscription / Securepoint license days left (default threshold below 30/7) |
+| `conntrack.usage` | % | – | Securepoint connection tracking table in use (default threshold 80/95) |
+| `conntrack.count` | "" | – | Securepoint tracked connections |
 | `unifi.clients` | – | – | UniFi device clients |
 | `unifi.latency` | ms | – | UniFi internet latency (health `www`) |
 | `unifi.storage_usage` | % | – | UniFi Protect recording storage (no default threshold: full is normal) |
@@ -485,12 +492,25 @@ messages are picked by text since their priority is unreliable):
 
 ## SNMP profiles
 
-`SNMPConfig.Profile`: `auto` (default), `generic`, `switch`, `unifi`, `ups`, `printer`, `nas`, `sophos`.
+`SNMPConfig.Profile`: `auto` (default), `generic`, `switch`, `unifi`, `ups`, `printer`, `nas`, `sophos`, `securepoint`.
 
 - `sophos` (Sophos Firewall SFOS): detected by enterprise 2604; reads HOST-RESOURCES-MIB (CPU) and
   SFOS-FIREWALL-MIB `1.3.6.1.4.1.2604.5.1`: device type, firmware, appliance key, live users into `snmp:system`;
   memory/swap and disk percentages as `snmp:mem` / `snmp:storage:Firewall` when HOST-RESOURCES had none; HA, licenses,
-  IPsec tunnels and services (see the check table). Securepoint UTM has no MIB with VPN state: profile auto/generic.
+  IPsec tunnels and services (see the check table).
+- `securepoint` (Securepoint UTM): detected by enterprise 28553 or `comProdName` (`1.3.6.1.4.1.28553.1.1`, read with
+  the system group, also as `.1.1.0`); per the Securepoint wiki (UTM/NET/SNMP-OIDs, 14.0.1), checked against a UTM
+  14.1.9 (net-snmp sysObjectID 8072.3.2.10, scalars served without the `.0` suffix). Firmware `comVersion.7`
+  (`…28553.1.2.7`, else epoch.major.minor); license subtree `…1.3` read in OID order (Licensee, Email, Type, UsersMax,
+  DaysLeft, Serial; DaysLeft ≥ 2^31 = unlimited); UCD-SNMP CPU idle / load / memory when HOST-RESOURCES had none;
+  storages with the same size and used bytes (> 0) are bind mounts (`/data`, `/home`, `/root`): only the shortest path
+  stays, fact "Auch eingehängt unter"; cluster `…2.1.12` (enabled int, the strings HIGH/LOW, master/backup,
+  synchronized/pending/error, true/false recognised by content); IPsec `…2.1.2.1.1` (2 name, 3 status 0/1/2), subnets
+  `…2.1.2.2.1.6` up/down; WireGuard peers `…2.1.11.2.1` (name, endpoint and handshake Unix time recognised by content,
+  keys skipped); apps entry `…2.1.1.1.1` (2 name, 3 status: 1 running, 2 stopped, 4 error, 9 no service; only running
+  and failed ones become facts); AV pattern entry `…2.1.5.1.1` (2 product, 3 last update, 4 last run, 5 state 2 = fail;
+  a row without update and run is a scanner without license – no snmp:av row, and its app error(4) is "nicht
+  lizenziert", no warning); conntrack `…2.1.10.1` max, `.2` count.
 
 - `auto` detects from sysObjectID/sysDescr; `unifi` before the "more than 4 Ethernet ports → switch" rule:
   sysDescr `^(US|USW)[ -]`, `^UBNT US`, `^USW GigaBit`, `^USW-`; sysObjectID `1.3.6.1.4.1.4413` with
@@ -955,7 +975,8 @@ a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port 
 server `demo-veeam` on `fakeveeam` (jobs with success, warning, failure and a disabled one; a NAS and an S3
 repository; config updated on every start), an OPNsense `demo-opnsense` on `fakeopnsense` (group Netzwerk: two WAN gateways, IPsec, WireGuard, CARP master, 3 pending
 updates), a Sophos XGS 2100 `demo-sophos` (10.0.0.1, SNMP profile auto → sophos: HA cluster, three IPsec tunnels, Web
-Protection ending in 20 days), a UniFi Dream Machine Pro `demo-udm` on `fakeunifi` (group Netzwerk: 5 devices, AP "AP Lager" offline, 5 cameras –
+Protection ending in 20 days), a Securepoint UTM `demo-securepoint` (10.0.0.250, profile auto → securepoint: cluster
+master, two IPsec tunnels, three subnet pairs, WireGuard peers, license 120 days), a UniFi Dream Machine Pro `demo-udm` on `fakeunifi` (group Netzwerk: 5 devices, AP "AP Lager" offline, 5 cameras –
 "Lager" disconnected, "Parkplatz" not recording –, 89 % recording storage), a Microsoft 365 tenant `demo-m365` on `fakegraph` (group Cloud; Entra Connect, an unverified domain, Entra ID P1 in its grace period, a Copilot trial ending in 9 days, an app secret expiring in 12 days, one expired 3 days ago, an Exchange Online incident), a Dell iDRAC `demo-idrac` on `fakeredfish` (PowerEdge R650: power supply 2 without input, redundancy lost,
 an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a

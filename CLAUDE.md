@@ -2,7 +2,7 @@
 
 Monitoring server (one Docker container per customer): Proxmox VE over its API, Linux/Windows
 hosts via pk95agent (push over HTTPS, optionally attached to an API/SNMP device), SNMP devices
-(incl. UniFi switches and Sophos firewalls), OPNsense firewalls over its API, Docker/Podman containers via the Linux agent, server hardware over Redfish, UPS over NUT, backup servers (Veeam, PBS), UniFi consoles (Network, Protect), Microsoft 365 /
+(incl. UniFi switches, Sophos and Securepoint firewalls), OPNsense firewalls over its API, Docker/Podman containers via the Linux agent, server hardware over Redfish, UPS over NUT, backup servers (Veeam, PBS), UniFi consoles (Network, Protect), Microsoft 365 /
 Entra ID over Microsoft Graph and network checks, plus a public status page for the customer. Single Go binary,
 SQLite, embedded vanilla-JS SPA in the PK95 Core design (same as `~/code/pk95proxbackup`).
 Architecture, keys, metrics and the REST contract: `DESIGN.md`. Shared types: `internal/model`.

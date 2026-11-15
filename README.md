@@ -29,8 +29,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   (offline, Firmware-Updates), Internetverbindung und WAN-Ausfallleitung, UniFi-Protect-Kameras (getrennt, nimmt
   nicht auf), Aufnahmespeicher und Festplatten.
 - **Firewalls:** OPNsense über die API (Gateways und WAN-Ausfall, IPsec- und WireGuard-Tunnel, CARP-Hochverfügbarkeit,
-  Dienste, Firmware-Updates) und Sophos Firewall per SNMP (VPN-Tunnel, HA-Cluster, ablaufende Lizenzen, Dienste);
-  Securepoint UTM wie jedes SNMP-Gerät.
+  Dienste, Firmware-Updates), Sophos Firewall und Securepoint UTM per SNMP (VPN-Tunnel, HA-Cluster, ablaufende
+  Lizenzen, Dienste).
 - **Microsoft 365 / Entra ID** über Microsoft Graph: Entra-Connect-Synchronisierung, Lizenzen (frei, überbelegt,
   Kulanzzeit, Testversionen), ablaufende Geheimnisse und Zertifikate von App-Registrierungen, Domains und der
   Microsoft-Dienststatus.
@@ -541,9 +541,22 @@ Zone). Das Profil „Sophos Firewall“ wird automatisch erkannt und liest die S
   Netzwerk, Protokollierung) = Warnung.
 - **System:** Modell, Firmware, angemeldete Benutzer, CPU, Arbeitsspeicher, Auslagerung, Speicher und alle Ports.
 
-**Securepoint UTM** hat keine eigene MIB mit VPN-Status; sie wird wie jedes SNMP-Gerät überwacht (Ports, Verkehr,
-CPU, Speicher, Laufzeit). VPN-Gegenstellen lassen sich zusätzlich mit Netzwerk-Checks (Ping auf eine Adresse hinter
-dem Tunnel) prüfen. Der Netzwerk-Scan erkennt alle drei Firewalls und schlägt das passende Vorgehen vor.
+**Securepoint UTM** wird ebenfalls per SNMP überwacht: an der UTM unter *Netzwerk → SNMP* den Dienst einschalten
+(SNMPv3 oder Community) und dem Monitoring den Zugriff erlauben. Das Profil „Securepoint UTM“ wird automatisch erkannt
+(SECUREPOINT-MIB, getestet mit UTM 14.1):
+
+- **VPN:** jeder IPsec-Tunnel (getrennt = kritisch), alle IPsec-Subnetzpaare zusammen (eines getrennt = kritisch, ab
+  UTM 12.6.2) und jeder WireGuard-Peer (letzter Handshake älter als 5 Minuten = Warnung; nie verbunden = OK).
+- **Cluster:** Master/Backup und Synchronisierung – Fehler = kritisch, ausstehend oder Wartungsmodus = Warnung
+  (ab UTM 14.0.2).
+- **Lizenz:** Restlaufzeit (`license.days`, auch unter *Ablaufdaten*), abgelaufen = kritisch.
+- **Dienste und Virenmuster:** Dienste im Fehlerzustand und fehlgeschlagene Virenmuster-Updates = Warnung. Ein
+  Virenscanner ohne Lizenz (Ikarus ohne je geladene Muster) gilt als „nicht lizenziert“, nicht als Fehler.
+- **Verbindungstabelle:** Belegung der conntrack-Tabelle (`conntrack.usage`, Warnung ab 80, kritisch ab 95 %).
+- **System:** Firmware, CPU, Arbeitsspeicher, Last, Speicher (mehrfach eingehängte Dateisysteme wie `/data`, `/home`
+  und `/root` nur einmal) und alle Schnittstellen.
+
+Der Netzwerk-Scan erkennt alle drei Firewalls und schlägt das passende Vorgehen vor.
 
 ## UniFi-Konsole (Network und Protect)
 

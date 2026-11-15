@@ -74,6 +74,8 @@ var metricLabels = map[string][2]string{
 	"m365.sub_days":        {"Restlaufzeit Abonnement", "d"},
 	"m365.lic_free":        {"Freie Lizenzen", ""},
 	"license.days":         {"Restlaufzeit Lizenz", "d"},
+	"conntrack.usage":      {"Verbindungstabelle belegt", "%"},
+	"conntrack.count":      {"Verbindungen", ""},
 	"unifi.clients":        {"WLAN-Clients", ""},
 	"unifi.latency":        {"Internet-Latenz", "ms"},
 	"unifi.storage_usage":  {"Aufnahmespeicher belegt", "%"},

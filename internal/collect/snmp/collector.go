@@ -30,11 +30,14 @@ const (
 	// ProfileSophos is a Sophos Firewall (SFOS, XG/XGS): SFOS-FIREWALL-MIB with HA,
 	// subscriptions, IPsec tunnels and services.
 	ProfileSophos = "sophos"
+	// ProfileSecurepoint is a Securepoint UTM: SECUREPOINT-MIB with license, cluster, IPsec,
+	// WireGuard and services, CPU and memory from UCD-SNMP.
+	ProfileSecurepoint = "securepoint"
 )
 
 func normProfile(p string) string {
 	switch p = strings.ToLower(strings.TrimSpace(p)); p {
-	case ProfileGeneric, ProfileSwitch, ProfileUPS, ProfilePrinter, ProfileNAS, ProfileUniFi, ProfileSophos:
+	case ProfileGeneric, ProfileSwitch, ProfileUPS, ProfilePrinter, ProfileNAS, ProfileUniFi, ProfileSophos, ProfileSecurepoint:
 		return p
 	}
 	return ProfileAuto
@@ -117,14 +120,14 @@ type sysInfo struct {
 	name, descr, location, contact, objectID string
 	uptime                                   float64 // seconds
 	hasUptime                                bool
-	upsMIB, synology                         bool
+	upsMIB, synology, securepoint            bool
 }
 
 // readSystem reads the system group. It fails only when the device does not answer or
 // neither sysDescr nor sysUpTime can be read.
 func readSystem(s Session, host string) (sysInfo, error) {
 	v, err := get(s, oidSysDescr, oidSysObjectID, oidSysUpTime, oidSysContact, oidSysName,
-		oidSysLocation, oidHrSystemUptime, oidUpsIdentManuf, oidSynoModel)
+		oidSysLocation, oidHrSystemUptime, oidUpsIdentManuf, oidSynoModel, spProdName, spProdName+".0")
 	if err != nil {
 		return sysInfo{}, fmt.Errorf("SNMP: keine Antwort von %s: %w", host, err)
 	}
@@ -141,6 +144,8 @@ func readSystem(s Session, host string) (sysInfo, error) {
 		objectID: v.str(oidSysObjectID),
 		upsMIB:   v.str(oidUpsIdentManuf) != "",
 		synology: v.str(oidSynoModel) != "",
+		// comProdName is "utm" on a Securepoint UTM (served without ".0")
+		securepoint: v.str(spProdName) != "" || v.str(spProdName+".0") != "",
 	}
 	// hrSystemUptime is the uptime of the host, sysUpTime only that of the agent.
 	if hr, ok := v.num(oidHrSystemUptime); ok && hr > 0 {
@@ -174,6 +179,11 @@ func detectProfile(s Session, si sysInfo, ifs []iface, ifErr error) (profile str
 		return ProfileNAS, true
 	case 2604:
 		return ProfileSophos, true
+	case 28553:
+		return ProfileSecurepoint, true
+	}
+	if si.securepoint {
+		return ProfileSecurepoint, true
 	}
 	uni, uniOK := isUniFi(s, si)
 	if uni {
@@ -382,6 +392,9 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 	case ProfileSophos:
 		p.hostResources()
 		p.sophos()
+	case ProfileSecurepoint:
+		p.hostResources()
+		p.securepoint()
 	default:
 		p.hostResources()
 	}
@@ -458,13 +471,14 @@ func (p *poll) systemCheck() model.Check {
 }
 
 var profileNames = map[string]string{
-	ProfileGeneric: "Allgemein",
-	ProfileSwitch:  "Switch",
-	ProfileUPS:     "USV",
-	ProfilePrinter: "Drucker",
-	ProfileNAS:     "NAS",
-	ProfileUniFi:   "UniFi-Switch",
-	ProfileSophos:  "Sophos Firewall",
+	ProfileGeneric:     "Allgemein",
+	ProfileSwitch:      "Switch",
+	ProfileUPS:         "USV",
+	ProfilePrinter:     "Drucker",
+	ProfileNAS:         "NAS",
+	ProfileUniFi:       "UniFi-Switch",
+	ProfileSophos:      "Sophos Firewall",
+	ProfileSecurepoint: "Securepoint UTM",
 }
 
 // custom reads the configured extra OIDs (check snmp:custom:<name>, metric "custom").

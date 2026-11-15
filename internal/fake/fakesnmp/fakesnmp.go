@@ -45,6 +45,7 @@ type Device struct {
 	nas     nasState
 	sw      switchState
 	fw      sophosState
+	sp      securepointState
 }
 
 func newDevice(name string) *Device {

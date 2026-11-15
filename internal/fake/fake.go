@@ -52,6 +52,7 @@ const (
 	hostPrinter = "10.0.0.20"
 	hostNAS     = "10.0.0.30"
 	hostSophos  = "10.0.0.1"
+	hostUTM     = "10.0.0.250"
 )
 
 // BackfillDays is the history written on the first start (tests shorten it).
@@ -76,6 +77,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 		hostPrinter: fakesnmp.NewPrinter(),
 		hostNAS:     fakesnmp.NewNAS(),
 		hostSophos:  fakesnmp.NewSophos(),
+		hostUTM:     fakesnmp.NewSecurepoint(),
 	}
 	fakeDial := fakesnmp.Dialer(devs)
 	realDial := c.SNMP.Dial
@@ -349,6 +351,8 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 		snmpDev("demo-nas", "NAS Sicherung", hostNAS, groupServer, snmp.ProfileAuto),
 		withNotes(snmpDev("demo-sophos", "Firewall Zentrale", hostSophos, groupNet, snmp.ProfileAuto),
 			"Simulierte Sophos XGS 2100 (Demo, SNMP): HA-Cluster, drei IPsec-Tunnel, Web Protection läuft in 20 Tagen ab."),
+		withNotes(snmpDev("demo-securepoint", "Firewall Lager", hostUTM, groupNet, snmp.ProfileAuto),
+			"Simulierte Securepoint UTM 14 (Demo, SNMP): Cluster-Master, zwei IPsec-Tunnel mit drei Subnetzpaaren, WireGuard, Lizenz noch 120 Tage."),
 	} {
 		if err := importOrUpgrade(c, d, ts); err != nil {
 			return err

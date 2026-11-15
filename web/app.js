@@ -294,6 +294,8 @@ const METRIC_LABELS = {
   "m365.lic_free": ["Freie Lizenzen", ""],
   "license.days": ["Restlaufzeit Lizenz", "d"],
   "gw.latency": ["Gateway-Latenz", "ms"],
+  "conntrack.usage": ["Verbindungstabelle belegt", "%"],
+  "conntrack.count": ["Verbindungen", ""],
   "gw.loss": ["Gateway-Paketverlust", "%"],
   "unifi.clients": ["WLAN-Clients", ""],
   "unifi.latency": ["Internet-Latenz", "ms"],
@@ -1245,7 +1247,7 @@ function interfacePicker(box, chosen) {
 }
 
 // SNMP_PROFILES: values of model.SNMPConfig.Profile with their labels.
-const SNMP_PROFILES = { auto: "Automatisch erkennen", generic: "Allgemein (nur Standardwerte)", switch: "Switch", unifi: "UniFi-Switch", ups: "USV", printer: "Drucker", nas: "NAS", sophos: "Sophos Firewall" };
+const SNMP_PROFILES = { auto: "Automatisch erkennen", generic: "Allgemein (nur Standardwerte)", switch: "Switch", unifi: "UniFi-Switch", ups: "USV", printer: "Drucker", nas: "NAS", sophos: "Sophos Firewall", securepoint: "Securepoint UTM" };
 
 const PVE_TOKEN_CMDS = `pveum user add pk95mon@pve --comment "PK95 Monitoring"
 pveum acl modify / --users pk95mon@pve --roles PVEAuditor
@@ -2528,7 +2530,7 @@ function cardValue(c) {
     return has("gw.latency") && c.state !== "crit" ? { text: fmtVal(v("gw.latency"), "ms"), sub: [head, ...rest.slice(1)].join(" · "), spark: sp("gw.latency") } : { word: true, text: head || "—", sub: rest.join(" · ") };
   }
   if (has("license.days")) return { text: `${Math.max(0, Math.round(v("license.days")))} Tage`, sub: fa["Läuft ab"] ? `gültig bis ${fa["Läuft ab"]}` : "Restlaufzeit", spark: sp("license.days") };
-  if (/^(opn:(ipsec|wg|carp|svc|perm)|snmp:(vpn|ha|lic|services)):?/.test(c.key)) {
+  if (/^(opn:(ipsec|wg|carp|svc|perm)|snmp:(vpn|ha|lic|services|cluster|wg|av|ipsec-subnets)):?/.test(c.key)) {
     const [head, ...rest] = String(c.msg || "").split(" · ");
     return { word: true, text: head || "—", sub: rest.join(" · ") };
   }
@@ -3750,6 +3752,7 @@ const EXPLAIN = {
   "ad.repl_age": { what: "Wie viele Stunden die letzte erfolgreiche eingehende Replikation von diesem Partner-Domänencontroller zurückliegt (älteste Partition).", why: "Repliziert ein DC nicht mehr, laufen Kennwörter, Konten und Gruppenrichtlinien auseinander – Anmeldungen schlagen an einem Standort fehl. Nach der Tombstone-Lebensdauer (meist 180 Tage) darf der Partner gar nicht mehr replizieren.", todo: ["Auf dem DC „repadmin /showrepl“ und „repadmin /replsummary“ ausführen.", "Erreichbarkeit, DNS-Auflösung und Firewall (RPC, Port 135 und dynamische Ports) zum Partner prüfen.", "Nach der Ursache „repadmin /syncall /AdeP“ ausführen."] },
   "m365.sync_age": { what: "Wie viele Stunden die letzte Synchronisierung von Entra Connect (oder Cloud Sync) aus dem lokalen Active Directory zurückliegt. Normal läuft sie alle 30 Minuten.", why: "Steht die Synchronisierung, kommen neue Mitarbeiter, Kennwortänderungen, Sperrungen und Gruppenänderungen nicht in Microsoft 365 an – ausgeschiedene Mitarbeiter können sich weiter anmelden.", todo: ["Auf dem Entra-Connect-Server den Dienst „Microsoft Azure AD Sync“ (ADSync) prüfen und starten.", "Im Synchronization Service Manager die letzten Läufe und Fehler ansehen.", "In PowerShell „Start-ADSyncSyncCycle -PolicyType Delta“ ausführen.", "Ist das Konto des Connectors abgelaufen oder gesperrt? Ist der Server aktuell (alte Versionen werden abgeschaltet)?"] },
   "m365.cred_days": { what: "Wie viele Tage das Geheimnis oder Zertifikat der App-Registrierung noch gültig ist (das am längsten gültige zählt).", why: "Läuft es ab, hört die Anwendung schlagartig auf zu funktionieren – Scan-to-Mail, Sicherungen, Schnittstellen oder dieses Monitoring.", todo: ["Im Entra Admin Center unter App-Registrierungen → Zertifikate & Geheimnisse ein neues Geheimnis anlegen.", "Den neuen Wert in der Anwendung eintragen (bei dieser Überwachung: am Gerät unter Bearbeiten).", "Das alte Geheimnis danach löschen. Wird die App nicht mehr gebraucht, die App-Registrierung entfernen."] },
+  "conntrack.usage": { what: "Wie voll die Verbindungstabelle (conntrack) der Firewall ist – jede offene Verbindung belegt einen Eintrag.", why: "Ist die Tabelle voll, verwirft die Firewall neue Verbindungen: Webseiten laden nicht, VPN und Telefonie brechen ab.", todo: ["Prüfen, ob ein Gerät ungewöhnlich viele Verbindungen öffnet (Schadsoftware, falsch konfigurierte Anwendung).", "Bei dauerhaft hoher Last die Tabellengröße der Firewall erhöhen oder eine größere Appliance einplanen."] },
   "gw.latency": { what: "Antwortzeit des Überwachungsziels über diese Leitung, wie die OPNsense-Gateway-Überwachung (dpinger) sie misst.", why: "Steigt die Latenz deutlich, ist die Leitung überlastet oder gestört – Telefonie und Videokonferenzen leiden zuerst.", todo: ["Auslastung der Leitung prüfen (Sicherungen, große Uploads).", "Bei dauerhaft hohen Werten den Anbieter kontaktieren."] },
   "gw.loss": { what: "Anteil der verlorenen Pakete zum Überwachungsziel dieser Leitung.", why: "Paketverlust bremst jede Verbindung; ab einem Grenzwert schaltet OPNsense auf die Ausfallleitung um.", todo: ["Modem bzw. Router des Anbieters und die Kabel prüfen.", "Störung beim Anbieter melden, wenn der Verlust bleibt."] },
   "license.days": { what: "In wie vielen Tagen die Lizenz bzw. das Abonnement der Firewall abläuft (z. B. Sophos Network oder Web Protection).", why: "Läuft ein Abonnement ab, fallen seine Schutzfunktionen weg – IPS, Webfilter, Sandbox oder Support –, ohne dass die Firewall laut meldet.", todo: ["Die Verlängerung beim Händler bzw. im Sophos-Partnerportal bestellen.", "Nach der Verlängerung in der Firewall die Lizenzen synchronisieren (Sophos: Verwaltung → Lizenzierung → „Lizenzen synchronisieren“)."] },

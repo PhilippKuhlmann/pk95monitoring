@@ -18,7 +18,7 @@ import (
 var backfillStep int64 = 300
 
 // demoPolled are the polled demo devices (back-filled from one poll).
-var demoPolled = []string{"demo-pve", "demo-switch", "demo-unifi", "demo-ups", "demo-nut", "demo-printer", "demo-nas", "demo-web", "demo-sophos", "demo-opnsense"}
+var demoPolled = []string{"demo-pve", "demo-switch", "demo-unifi", "demo-ups", "demo-nut", "demo-printer", "demo-nas", "demo-web", "demo-sophos", "demo-securepoint", "demo-opnsense"}
 
 // backfill writes BackfillDays of 5-minute samples for every demo device that has no
 // history yet (all of them on the first start; on later starts the demo devices added by a

@@ -692,6 +692,8 @@ func DefaultThresholds() []Threshold {
 		{Metric: "m365.sub_days", Warn: f(14), Crit: f(3), Below: true},
 		// firewall subscriptions (Sophos): a month to renew, crit in the last week
 		{Metric: "license.days", Warn: f(30), Crit: f(7), Below: true},
+		// connection tracking table of a firewall: full means new connections are dropped
+		{Metric: "conntrack.usage", Warn: f(80), Crit: f(95)},
 		// Proxmox hardware and storage health
 		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
 		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},

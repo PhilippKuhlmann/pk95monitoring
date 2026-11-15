@@ -567,9 +567,9 @@ func Classify(h *Host) {
 		case ent == 2604 || containsAny(descr, "sophos firewall", "sfos", "xgs"):
 			set(KindFirewall, "Sophos Firewall (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (Sophos: VPN-Tunnel, HA, Lizenzen, Dienste)")
 			h.Profile = snmp.ProfileSophos
-		case containsAny(descr, "securepoint"):
-			set(KindFirewall, "Securepoint UTM (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (Ports, Verkehr, CPU, Speicher)")
-			h.Profile = snmp.ProfileAuto
+		case ent == 28553 || containsAny(descr, "securepoint"):
+			set(KindFirewall, "Securepoint UTM (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (Securepoint: VPN-Tunnel, Cluster, Lizenz, Dienste)")
+			h.Profile = snmp.ProfileSecurepoint
 		case ent == 41112 || ent == 4413 || containsAny(descr, "unifi", "usw-", "ubiquiti"):
 			set(KindUniFi, "UniFi-Gerät (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (UniFi)")
 			h.Profile = snmp.ProfileAuto
@@ -594,8 +594,8 @@ func Classify(h *Host) {
 		set(KindFirewall, "Sophos Firewall", model.TypeSNMP, "SNMP an der Firewall einschalten (Verwaltung → SNMP, Zugriff für das Monitoring erlauben), dann als SNMP-Gerät hinzufügen")
 		h.Profile = snmp.ProfileSophos
 	case containsAny(web, "securepoint"):
-		set(KindFirewall, "Securepoint UTM", model.TypeSNMP, "SNMP an der UTM einschalten, dann als SNMP-Gerät hinzufügen")
-		h.Profile = snmp.ProfileAuto
+		set(KindFirewall, "Securepoint UTM", model.TypeSNMP, "SNMP an der UTM einschalten (Netzwerk → SNMP), dann als SNMP-Gerät hinzufügen")
+		h.Profile = snmp.ProfileSecurepoint
 	case has(h, PortHTTPS) && containsAny(web, "unifi os", "unifi network", "unifi protect", "dream machine", "ubiquiti"):
 		set(KindUniFiOS, "UniFi-Konsole", model.TypeUniFi, "Als UniFi-Konsole hinzufügen (lokaler Benutzer mit Leserechten): Geräte, Internet, Kameras")
 		h.Port = PortHTTPS
