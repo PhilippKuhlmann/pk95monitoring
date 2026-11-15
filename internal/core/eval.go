@@ -36,6 +36,7 @@ var metricLabels = map[string][2]string{
 	"job.age":              {"Letzter Lauf vor", "h"},
 	"group.age":            {"Alter der neuesten Sicherung (PBS)", "h"},
 	"checkpoint.age":       {"Ältester Prüfpunkt", "d"},
+	"docker.restarts":      {"Container-Neustarts (letzte Stunde)", ""},
 	"eventlog.errors":      {"Fehler im Ereignisprotokoll (24 Std.)", ""},
 	"events.count":         {"Ereignisse", ""},
 	"guest.cpu":            {"Gast-CPU", "%"},

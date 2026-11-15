@@ -11,6 +11,7 @@ import (
 
 	"pk95monitoring/internal/addc"
 	"pk95monitoring/internal/core"
+	"pk95monitoring/internal/docker"
 	"pk95monitoring/internal/hyperv"
 	"pk95monitoring/internal/model"
 	"pk95monitoring/internal/mssql"
@@ -65,6 +66,7 @@ type simAgent struct {
 	hyperV              []simVM           // windows: VMs of a Hyper-V host
 	dc                  bool              // windows: domain controller (PDC emulator of kunde.local)
 	sql                 bool              // windows: SQL Server (ERP) and an old SQL Server Express
+	docker              bool              // linux: Docker host with Nextcloud, Paperless and Uptime Kuma
 	ref                 int64             // demo start: growing disks are at pct then
 }
 
@@ -114,7 +116,7 @@ func demoAgents(now time.Time) []*simAgent {
 				{mount: "/boot", fs: "ext4", dev: "/dev/sda2", total: 0.5 * gib, pct: 21, amp: 0}},
 			iface: "ens18", rxBase: 420e3, txBase: 1.9e6, services: []string{"nginx"},
 			known: map[string]simService{"nginx": {"nginx", true}, "ssh": {"ssh", true}, "cron": {"cron", true}},
-			boot:  t - 12*day - 2*3600, seed: 3.1,
+			boot:  t - 12*day - 2*3600, seed: 3.1, docker: true,
 			rules: []model.CheckRule{{Match: "disk:/boot*", Mode: model.ModeOff}}},
 		{id: "demo-db01", name: "db01", group: groupServer, ip: "10.0.0.22", os: "linux",
 			platform: "debian", ver: "12.12", kernel: "6.1.0-40-amd64",
@@ -224,6 +226,42 @@ func (a *simAgent) sqlReport(t int64) mssql.Report {
 // adReport is the domain controller state of a demo host at t (what addc.Script would print):
 // dc01 is the PDC emulator of kunde.local; DC02 replicates fine, the branch office DC DC03
 // has not been reachable for three hours (RPC server unavailable).
+// dockerReport is the Docker state of a demo host at t (what docker.Client.Query and
+// docker.Tracker would deliver): a Compose stack with one restarted container and a finished
+// one-off job.
+func (a *simAgent) dockerReport(t int64) docker.Report {
+	ct := func(id, name, image, project string, cpu, memMB, net float64, healthy bool) docker.Container {
+		c := docker.Container{ID: id, Name: name, Image: image, State: "running", Policy: "unless-stopped", Project: project,
+			Created: a.boot - 30*86400, Started: a.boot + 120, HasStats: true, HasRates: true,
+			CPU:     round2(clamp(cpu+cpu*0.4*math.Sin(float64(t)/700+a.seed)+noise(a.seed+cpu, t), 0, 100)),
+			MemUsed: memMB * (1 + 0.05*math.Sin(float64(t)/1900)) * (1 << 20), MemLimit: a.memGB * gib,
+			NetIn: round2(net * (1 + 0.5*math.Sin(float64(t)/600))), NetOut: round2(net * 0.6 * (1 + 0.4*math.Cos(float64(t)/800)))}
+		if project != "" {
+			c.Service = strings.TrimSuffix(strings.TrimPrefix(name, project+"-"), "-1")
+		}
+		if healthy {
+			c.Health = "healthy"
+		}
+		return c
+	}
+	cts := []docker.Container{
+		ct("3f9a1c0e7b21", "nextcloud-app-1", "nextcloud:30-apache", "nextcloud", 6, 610, 180e3, true),
+		ct("3f9a1c0e7b22", "nextcloud-db-1", "mariadb:11.4", "nextcloud", 3, 420, 60e3, true),
+		ct("3f9a1c0e7b23", "nextcloud-redis-1", "redis:7-alpine", "nextcloud", 0.6, 24, 20e3, false),
+		ct("8d2e44b1a901", "paperless-webserver-1", "ghcr.io/paperless-ngx/paperless-ngx:2.13", "paperless", 4, 380, 15e3, true),
+		ct("8d2e44b1a902", "paperless-broker-1", "redis:7-alpine", "paperless", 0.4, 12, 3e3, false),
+		ct("c71b09e3f5aa", "uptime-kuma", "louislam/uptime-kuma:1", "", 1.5, 95, 8e3, true),
+	}
+	cts[0].Ports, cts[5].Ports = "8080→80/tcp", "3001→3001/tcp"
+	cts[5].Policy = "always"
+	// the Paperless webserver crashed twice in the last hour (out of memory while indexing)
+	cts[3].Restarts, cts[3].Restarts1h, cts[3].Started = 2, 2, t-25*60
+	cts = append(cts, docker.Container{ID: "0b5f7d1e2c33", Name: "certbot-renew", Image: "certbot/certbot:v3.0", State: "exited",
+		Policy: "no", Created: t - 40*86400, Started: t - 7*3600, Finished: t - 7*3600 + 18})
+	return docker.Report{Available: true, Engine: "Docker", Version: "27.3.1", API: "1.47", Driver: "overlay2",
+		Root: "/var/lib/docker", NCPU: a.threads, MemTotal: a.memGB * gib, Images: 9, Cts: cts}
+}
+
 func (a *simAgent) adReport(t int64) addc.Report {
 	host := strings.ToUpper(a.name) + ".kunde.local"
 	ntds := func(dc, site string) string {
@@ -493,6 +531,9 @@ func (a *simAgent) checks(c *core.Core, t int64, services []string) []model.Chec
 	}
 	if a.sql {
 		out = append(out, mssql.Checks(a.sqlReport(t), nil, time.Unix(t, 0))...)
+	}
+	if a.docker {
+		out = append(out, docker.Checks(a.dockerReport(t), nil, time.Unix(t, 0))...)
 	}
 	return out
 }

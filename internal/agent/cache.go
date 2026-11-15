@@ -87,3 +87,12 @@ func (p *periodic[T]) refresh() {
 	p.running = false
 	close(p.done)
 }
+
+// firstResult returns the cached result of p, waiting only while there is none yet.
+func firstResult[T any](ctx context.Context, p *periodic[T]) (T, error, bool) {
+	v, err, have := p.Get(ctx, false)
+	if !have {
+		v, err, have = p.Get(ctx, true)
+	}
+	return v, err, have
+}

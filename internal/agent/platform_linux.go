@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"pk95monitoring/internal/docker"
 	"pk95monitoring/internal/eventrules"
 	"pk95monitoring/internal/model"
 )
@@ -24,6 +25,8 @@ const updatesWait = 20 * time.Second
 type platformState struct {
 	updates *periodic[updateCount]
 	events  *periodic[map[string]eventrules.Result]
+	docker  *periodic[docker.Report]
+	dockerT docker.Tracker
 
 	evMu      sync.Mutex
 	evQueries []eventrules.Query
@@ -68,7 +71,35 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 		}
 		out = append(out, eventrules.Evaluate(cfg.EventRules, cfg.EventIgnore, res, time.Now())...)
 	}
+	if c.plat.docker == nil {
+		c.plat.docker = newPeriodic(time.Minute, time.Minute, 45*time.Second, c.plat.queryDocker)
+	}
+	// The first result is waited for: without it an agent restart would drop the container
+	// checks for one report and close their alerts. Later reports use the cache.
+	if r, err, ok := firstResult(ctx, c.plat.docker); ok {
+		if err != nil {
+			r = c.plat.dockerT.Good() // keep the known containers (unknown) while the engine does not answer
+		}
+		out = append(out, docker.Checks(r, err, time.Now())...)
+	}
 	return out
+}
+
+// queryDocker reads the containers of a local Docker or Podman engine; a host without one has
+// an empty report.
+func (p *platformState) queryDocker(ctx context.Context) (docker.Report, error) {
+	sock := docker.Socket()
+	if sock == "" {
+		return docker.Report{}, nil
+	}
+	cl := docker.NewSocket(sock)
+	defer cl.Close()
+	r, err := cl.Query(ctx)
+	if err != nil {
+		return docker.Report{}, err
+	}
+	p.dockerT.Update(&r, time.Now())
+	return r, nil
 }
 
 // systemdBooted reports whether systemd is the running init system (sd_booted): containers

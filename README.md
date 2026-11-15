@@ -16,7 +16,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
   SSH-Anmeldeversuche …). Harmlose Meldungen blendet „Ignorieren“ für ein Gerät oder alle aus. Der Agent schickt seine Werte per HTTPS an den Server – auch hinter einer Firewall, ohne
   offene Ports beim Kunden-Server. Ist der Server kurz nicht erreichbar, puffert er und liefert nach.
   Unter Windows erkennt er außerdem Domänencontroller (Active Directory), Hyper-V-Hosts und **SQL Server**
-  (Instanzen, Datenbanken, Sicherungen, SQL-Agent-Aufträge) und überwacht sie von selbst.
+  (Instanzen, Datenbanken, Sicherungen, SQL-Agent-Aufträge) und überwacht sie von selbst; unter Linux ebenso
+  **Docker- und Podman-Container** (läuft er, Healthcheck, Neustartschleifen, CPU, Arbeitsspeicher, Netzwerk).
 - **SNMP-Geräte (v1, v2c, v3):** Switches (Ports, Verkehr, Fehler, LLDP-Nachbarn, PoE; Diagramme je Port),
   UniFi-Switches mit eigenem Profil (CPU, Arbeitsspeicher, Temperaturen, Lüfter, Netzteile, PoE-Budget), USV
   (Akku, Restlaufzeit, Last, Spannungen; RFC 1628 und APC), Drucker (Toner, Seitenzähler), NAS (Synology:
@@ -353,6 +354,29 @@ Fehlen die Rechte, sagt es der Check der Instanz und zeigt das T-SQL in seinen F
 
 Sicherungen mit Veeam (anwendungsgesteuert) oder einem Wartungsplan stehen in msdb und zählen. Einzelne Datenbanken
 oder Aufträge schaltest du mit einer Check-Regel ab (`mssql:db:<instanz>/<datenbank>`, `mssql:job:*`).
+
+### Docker und Podman
+
+Läuft auf einem Linux-Server Docker (oder Podman mit seinem Docker-kompatiblen Socket), überwacht der Agent alle
+Container von selbst – ohne Einstellung, jede Minute über den lokalen Socket (`/var/run/docker.sock`,
+`/run/podman/podman.sock` oder `DOCKER_HOST=unix://…`). Er liest nur, er startet und ändert nichts.
+
+- **Docker:** Version und wie viele Container laufen. Antwortet der Socket nicht mehr (Docker-Dienst gestoppt), ist
+  das kritisch; die bekannten Container bleiben dann als „unbekannt“ stehen, ihre Alarme offen.
+- **Container:** je Container ein Check mit CPU (100 % = alle Kerne des Hosts bzw. das CPU-Limit), Arbeitsspeicher
+  (ohne freigebbaren Cache, wie `docker stats`; Anteil am Limit oder am RAM des Hosts), Netzwerk und Laufzeit.
+  Kritisch sind: Healthcheck schlägt fehl (mit der letzten Ausgabe), Neustartschleife („restarting“), und ein
+  gestoppter Container, der laufen müsste – Neustart-Richtlinie „always“ oder „unless-stopped“, oder mit Fehlercode
+  beendet bei „on-failure“ und in Compose-Projekten. Vom Kernel wegen vollem Speicher beendet (OOM) steht dabei.
+  Angehalten (pausiert) = Warnung. Einmal-Container (`docker run` ohne Neustart-Richtlinie, `docker compose run`)
+  dürfen beendet sein und bleiben OK.
+- **Neustarts:** automatische Neustarts der letzten Stunde (`docker.restarts`, Warnung ab 1, kritisch ab 5) – jeder
+  ist ein Absturz; ein `docker restart` von Hand zählt nicht.
+
+Die Checks heißen `docker:ct:<Containername>`, damit sie bleiben, wenn Compose einen Container neu erstellt. Neue
+Container erscheinen in der Dienste-Inventur, entfernte als verschwunden. Einzelne Container schaltest du mit einer
+Check-Regel ab oder auf „nur anzeigen“ (`docker:ct:<name>`, alle eines Projekts z. B. mit `docker:ct:paperless-*`).
+Der Agent läuft als root und darf den Socket daher lesen.
 
 ### Agent und API kombinieren
 

@@ -95,15 +95,6 @@ func (c *Collector) platformChecks(ctx context.Context, cfg Config, h HostInfo) 
 	return out
 }
 
-// firstResult returns the cached result of p, waiting only while there is none yet.
-func firstResult[T any](ctx context.Context, p *periodic[T]) (T, error, bool) {
-	v, err, have := p.Get(ctx, false)
-	if !have {
-		v, err, have = p.Get(ctx, true)
-	}
-	return v, err, have
-}
-
 // roleRecheck is how long a server without a role (Hyper-V, domain controller) is not asked
 // again, so ordinary servers do not start PowerShell every few minutes.
 const roleRecheck = 6 * time.Hour

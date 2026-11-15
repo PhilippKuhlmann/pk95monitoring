@@ -37,6 +37,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/netscan` | network scan: expands ranges, pings, tries TCP ports, SNMP v2c system group, web title/certificate, Redfish root; classifies hosts with a suggestion |
 | `internal/mssql` | Microsoft SQL Server: PowerShell query (System.Data.SqlClient, Windows authentication), parser and checks (pure Go; used by the Windows agent and the demo) |
 | `internal/addc` | Active Directory domain controller: PowerShell query, parser and checks (pure Go; used by the Windows agent and the demo) |
+| `internal/docker` | Docker / Podman: Engine API client over the unix socket, `Tracker` (restarts within the last hour, network rates, last good report) and checks (used by the Linux agent and the demo) |
 | `internal/hyperv` | Hyper-V: PowerShell query, parser and checks of the VMs and their replication (pure Go; used by the Windows agent and the demo) |
 | `internal/agentdist` | server side of agent distribution: install scripts (embedded templates), binary catalog with SHA-256 |
 | `internal/core` | scheduler, threshold evaluation, hysteresis, alerts, notifications, agent ingestion, rollup/retention, central push, summary |
@@ -49,6 +50,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/fake/fakeveeam` | simulated Veeam REST API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakepbs` | simulated Proxmox Backup Server API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakeredfish` | simulated Redfish controller shaped like a Dell iDRAC 9 (httptest TLS) – used by tests and demo |
+| `internal/fake/fakedocker` | simulated Docker Engine API (`/version`, `/info`, `/containers/json`, inspect, stats; httptest) – used by tests |
 | `internal/fake/fakeunifi` | simulated UniFi OS console (Dream Machine Pro with Network and Protect, httptest TLS) – used by tests and demo |
 | `internal/fake/fakegraph` | simulated Entra token endpoint + Microsoft Graph (tenant "Muster GmbH", httptest) – used by tests and demo |
 | `web/` | SPA: `index.html`, `app.js`, `style.css` (copied), `theme.js`, `logo.svg`, `fonts/` |
@@ -134,6 +136,8 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | agent | `hv:host` | Hyper-V | Hyper-V (Windows hosts with the Hyper-V module only; `hyperv.Script` every 2 min, hosts without the module asked again after 6 h): "n von m VMs laufen"; query failed before any result = unknown, later errors keep the last result |
 | agent | `hv:vm:<VMId>` | VM <name> | Hyper-V: Running = ok (warn on heartbeat LostCommunication) with `guest.cpu` (%), `guest.mem` (demand / assigned %), `guest.mem_used` (assigned B), instance VM name; Off/Saved = crit when AutomaticStartAction is Start/StartIfRunning and it is no Replica copy, else ok; Paused/PausedCritical = crit; transitional states ok; `checkpoint.age` (d, oldest non-replica checkpoint, threshold 7/30); facts vCPUs, RAM, Generation, Konfigurationsversion, Autostart, Cluster, Replikat, Prüfpunkte, Ältester Prüfpunkt, Status. Not part of the inventory (VMs move between cluster nodes and Replica servers) |
 | agent | `hv:repl:<VMId>` | Replikation <name> | Hyper-V Replikation (only replicated VMs): health Critical / state Error = crit, Suspended / health Warning / resynchronizing = warn, initial replication ok; `repl.age` (min since LastReplicationTime); facts Status, Integrität, Modus, Primärserver, Replikatserver, Letzte Replikation. Not part of the inventory |
+| agent | `docker` | Docker / Podman | Docker (Linux agent, only with a socket: `DOCKER_HOST=unix://…`, `/var/run/docker.sock`, `/run/podman/podman.sock`; queried every minute in the background, the first result is waited for): "Docker 27.3.1 · n von m Containern laufen", facts Version, API, Speichertreiber, Datenverzeichnis, Images. Socket refuses (`docker.ErrDown`) = crit, other errors = unknown; on errors the containers of the last good report are listed unknown |
+| agent | `docker:ct:<name>` | Container <name> | Docker: running = ok (health unhealthy = crit with the last failing healthcheck output) with `guest.cpu` (% of the host's CPUs, or of `NanoCpus`), `guest.mem_used` (usage − inactive_file), `guest.mem` (% of the limit, the host's RAM without one), `guest.netin`/`guest.netout` (B/s from two readings), `docker.restarts` (automatic restarts within the last hour, from `RestartCount` deltas of the same container ID; threshold 1/5); restarting = crit; paused = warn; exited/dead = crit when the restart policy is always/unless-stopped, or the exit code ≠ 0 with on-failure or in a Compose project (not one-off), or OOM-killed with a restart policy; else ok ("beendet mit Code n vor …"); created = ok. Keyed by name (Compose re-creates containers with new IDs); part of the inventory |
 | proxmox | `pve:cluster` | Cluster | Cluster (quorum, nodes online) |
 | proxmox | `pve:node:<node>` | Knoten <node> | Knoten |
 | proxmox | `pve:vm:<vmid>` / `pve:ct:<vmid>` | VM <vmid> <name> / CT … | VMs / Container |
@@ -219,7 +223,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `group.age` | h | `<store>:[ns: ]vm/<id>` | pbs: age of the newest snapshot of a VM/CT group (display only; PVE judges the guest) |
 | `events.count` | "" | | agent Windows: events of an event rule in its window, exceptions dropped (no threshold – the rule decides) |
 | `eventlog.errors` | "" | | removed in 0.16 (agents up to 0.15: System+Application Error/Critical in the last 24 h) |
-| `guest.cpu` | % | `vm/<id>` / `ct/<id>` | pve (100 % = all assigned cores) |
+| `guest.cpu` | % | `vm/<id>` / `ct/<id>`, VM / container name | pve (100 % = all assigned cores), Hyper-V, Docker (100 % = all host cores or the CPU limit) |
 | `guest.mem` | % | ditto | pve |
 | `guest.mem_used` | B | ditto | pve |
 | `guest.netin`, `guest.netout`, `guest.diskread`, `guest.diskwrite` | B/s | ditto | pve |
@@ -240,6 +244,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `mssql.log_backup_age` | h | – | SQL Server last log backup (default warn 24, crit 72) |
 | `mssql.express_usage` | % | – | SQL Server Express data size of the 10 GB limit (default warn 80, crit 95) |
 | `ad.time_offset` | s | – | Active Directory: clock offset to the PDC emulator (default threshold warn 60, crit 240) |
+| `docker.restarts` | "" | container name | Docker: automatic restarts within the last hour (default threshold warn 1, crit 5) |
 | `checkpoint.age` | d | VM name | Hyper-V: age of the oldest checkpoint (default threshold warn 7, crit 30) |
 | `storage.used`, `storage.total` | B | ditto | pve |
 | `ping.rtt` | ms | | netcheck |
@@ -283,7 +288,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    Proxmox health defaults: `cpu.iowait` 10/25 % (5×), `disk.temp` 60/70 °C (2×), `disk.wearout` 90/98 %,
    `disk.spare` below 20/10 %, `disk.pending` 1/10, `disk.reallocated`, `disk.uncorrectable`, `disk.media_errors`
    warn from 1, `zfs.usage` 80/90 %, `zfs.errors` warn from 1, `zfs.scrub_age` warn from 35 days.
-   Hyper-V: `checkpoint.age` 7/30 days. Storage forecast: `forecast.days` below 30/7 days.
+   Hyper-V: `checkpoint.age` 7/30 days. Docker: `docker.restarts` 1/5. Storage forecast: `forecast.days` below 30/7 days.
    Active Directory: `ad.repl_age` 12/24 h, `ad.time_offset` 60/240 s.
 3. Threshold state needs `Count` consecutive bad values (`CheckStatus.Pending`), going back to ok
    is immediate. Native states (service stopped …) are immediate.
@@ -916,7 +921,8 @@ Server 2016 Express whose database "Zeiterfassung" is at 84 % of the 10 GB limit
 fine, from the branch office DC03 failing for 3 hours with error 1722 –, plus `demo-pve1` attached to the cluster as node pve1; the Windows host hv01
 runs Hyper-V via `hyperv.Checks`: a replicated DC, erp01 with a 12-day-old checkpoint, sql02 with a replication
 warning, print01 off although it starts with the host, an off test VM; one with high disk
-usage, one with a stopped service; rules: `updates` quiet on db01, `disk:/boot*` off on web01) reporting through
+usage, one with a stopped service; web01 runs Docker via `docker.Checks`: Nextcloud and Paperless Compose stacks, Uptime Kuma,
+a Paperless webserver restarted twice in the last hour and a finished one-off certbot container; rules: `updates` quiet on db01, `disk:/boot*` off on web01) reporting through
 `core.IngestReport` every 30 s (the Windows ones with update history: fs01 last installed 47 days ago with a
 failed update; and with event logs evaluated by the real rules (`fake/events.go`): dc01 failed logons below the
 limit and a locked account, fs01 a crashed "Windows Search" service plus DCOM 10016 and Schannel noise), and a net device "Webseite" with HTTP, TCP, ping and two domain checks against local httptest
