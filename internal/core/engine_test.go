@@ -540,3 +540,60 @@ func TestTestNetCheck(t *testing.T) {
 		t.Fatalf("check: %+v", ch)
 	}
 }
+
+func TestDashboard(t *testing.T) {
+	e := newEnv(t, Options{})
+	a := e.agentDevice(t, "a", nil)
+	b := e.agentDevice(t, "b", nil)
+	silent := e.agentDevice(t, "silent", nil)
+	maint := e.agentDevice(t, "maint", nil)
+	e.agentDevice(t, "off", func(d *model.Device) { d.Enabled = false })
+	svc := model.Check{Key: "svc:cron", Name: "Dienst cron", Group: "Dienste", State: model.StateWarn, Message: "aktiviert"}
+	e.report(t, a, diskCheck(10), svc)
+	e.report(t, b, diskCheck(99))
+	e.report(t, silent, diskCheck(99))
+	e.report(t, maint, diskCheck(99))
+	if _, err := e.c.SetMaintenance(maint, e.clk.Now().Add(time.Hour).Unix(), ""); err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Add(4 * time.Minute)
+	e.report(t, a, diskCheck(10), svc)
+	e.report(t, b, diskCheck(99))
+	e.c.checkSilence()
+
+	ov, err := e.c.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tt := ov.Totals
+	if tt.Devices != 4 || tt.Agents != 4 || tt.Disabled != 1 || tt.Maintenance != 1 || tt.Offline != 1 || tt.Checks != 5 || tt.ChecksCrit != 1 || tt.ChecksWarn != 1 || tt.ChecksUnknown != 2 {
+		t.Fatalf("totals %+v", tt)
+	}
+	if len(ov.Offline) != 1 || ov.Offline[0].DeviceID != silent || ov.Offline[0].LastOK == 0 {
+		t.Fatalf("offline %+v", ov.Offline)
+	}
+	// the silent device's stale checks and the device in maintenance are not listed
+	if len(ov.Problems) != 2 || ov.Problems[0].DeviceID != b || ov.Problems[0].State != model.StateCrit ||
+		ov.Problems[1].Key != "svc:cron" || ov.Problems[1].Group != "Dienste" {
+		t.Fatalf("problems %+v", ov.Problems)
+	}
+	// acknowledged problems go last
+	for _, al := range ov.Alerts {
+		if al.DeviceID == b {
+			if err := e.c.AckAlert(al.ID, "admin"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	ov, _ = e.c.Overview(context.Background())
+	if ov.Problems[0].Key != "svc:cron" || !ov.Problems[1].Acked {
+		t.Fatalf("problems after ack %+v", ov.Problems)
+	}
+	if len(ov.Recent) == 0 {
+		t.Fatal("no recent events")
+	}
+	e.clk.Add(13 * time.Hour)
+	if ov, _ = e.c.Overview(context.Background()); len(ov.Recent) != 0 {
+		t.Fatalf("events older than 12 hours: %+v", ov.Recent)
+	}
+}

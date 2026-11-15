@@ -157,11 +157,15 @@ type Suggestion struct {
 
 // Overview is the dashboard.
 type Overview struct {
-	Counts  Counts        `json:"counts"`
-	Devices []DeviceRow   `json:"devices"`
-	Alerts  []model.Alert `json:"alerts"`
-	Events  []store.Event `json:"events"`
-	Groups  []string      `json:"groups"`
+	Counts   Counts        `json:"counts"`
+	Totals   Totals        `json:"totals"`
+	Offline  []DashCheck   `json:"offline"`  // unreachable devices (not in maintenance)
+	Problems []DashCheck   `json:"problems"` // checks with warn or crit
+	Devices  []DeviceRow   `json:"devices"`
+	Alerts   []model.Alert `json:"alerts"`
+	Events   []store.Event `json:"events"` // the last 10
+	Recent   []store.Event `json:"recent"` // the last 12 hours (at most 300)
+	Groups   []string      `json:"groups"`
 }
 
 // Core is the engine. Fields are set by New; collectors may be replaced (demo, tests)

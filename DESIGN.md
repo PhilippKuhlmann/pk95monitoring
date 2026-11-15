@@ -679,7 +679,15 @@ Public:
   60 requests per minute and client like the external API). `web/status.js` renders it and reloads every minute.
 
 Authenticated:
-- `GET /api/overview` → `{counts:{ok,warn,crit,unknown,maintenance,disabled}, devices:[DeviceRow], alerts:[Alert active], events:[Event ×10], groups:[string]}`
+- `GET /api/overview` → `{counts:{ok,warn,crit,unknown,maintenance,disabled}, totals:Totals, offline:[DashCheck], problems:[DashCheck], devices:[DeviceRow], alerts:[Alert active], events:[Event ×10], recent:[Event of the last 12 h, ≤300], groups:[string]}`
+  (`core/dashboard.go`). `Totals` = `{devices, agents, disabled, checks, checks_ok, checks_warn, checks_crit, checks_unknown, offline, maintenance}`:
+  devices as in the device list (enabled, attached agents belong to their device), checks of all enabled devices
+  without `reach` and `discovery` (quiet ones included). `DashCheck` = `{device_id, device, device_type, folder?, key, name, group?, state, message, since, last_ok?, acked?}`:
+  `offline` = devices whose `reach` is crit (longest outage first); `problems` = warn/crit checks in mode alert
+  (inventory included), open before acknowledged, crit before warn, newest first. Devices that are disabled or in
+  maintenance are counted but not listed; the checks of an offline device are left out (stale).
+  The Übersicht page shows these (no device cards): totals, offline devices, problem checks with "Quittieren"
+  (via the open alert of device and check) and the last 12 hours of events (filter all / warnings and errors).
 - `DeviceRow` = `{id, name, type, host, group, enabled, no_alerts, maintenance_until, state, message, since, last_poll, os, platform, agent_version, checks:{ok,warn,crit,unknown}, cpu, mem, disk, parent_id?, parent_name?, attached}` (cpu/mem/disk: latest % or null; disk = max disk.usage; a parent without own values shows the highest of its agents; `attached` = number of attached agents)
 - `GET /api/devices` → `{devices:[DeviceRow], groups:[string]}` (overview and list: top-level devices only, see "Attached agents")
 - `POST /api/devices` (Device) → Device; `PUT /api/devices/{id}` → Device; `DELETE /api/devices/{id}` → `{ok}`

@@ -40,6 +40,8 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
 - **Sicherungen:** letzte Sicherung jedes Proxmox-Gasts (auch auf PBS), Proxmox Backup Server direkt (Datastores,
   Verifizierung, Sicherungsgruppen, Sync-/Prune-/Verify-Jobs), Veeam Backup & Replication (Jobs, ausgefallene Läufe,
   Repositories) und eine eigene Seite mit allen Sicherungen.
+- **Übersicht (Dashboard):** wie viele Geräte und Dienste überwacht werden, welche Geräte offline sind, welche
+  Dienste eine Warnung oder einen Fehler haben (direkt quittierbar) und was in den letzten 12 Stunden passiert ist.
 - **Übersichten:** Update-Stand aller Server, Systemprotokolle (Windows und Linux) mit Regeln und Ausnahmen, Ablaufdaten aller Zertifikate und Domains samt Speicherprognose („voll in 23 Tagen“), Verfügbarkeitsberichte
   (auch als Monatsbericht per E-Mail).
 - **Alarme und Benachrichtigungen** per E-Mail, Telegram, ntfy, Gotify oder Webhook – mit Schwellwerten,

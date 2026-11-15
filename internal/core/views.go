@@ -203,7 +203,13 @@ func (c *Core) Overview(ctx context.Context) (Overview, error) {
 	if events == nil {
 		events = []store.Event{}
 	}
-	return Overview{Counts: n, Devices: rows, Alerts: alerts, Events: events, Groups: c.Groups()}, nil
+	recent, err := c.recentEvents(ctx, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	t, offline, problems := c.dashboard(now)
+	return Overview{Counts: n, Totals: t, Offline: offline, Problems: problems, Devices: rows, Alerts: alerts,
+		Events: events, Recent: recent, Groups: c.Groups()}, nil
 }
 
 // deviceSummary is a device of the external API; a parent includes its attached agents

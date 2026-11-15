@@ -770,18 +770,6 @@ function eventRow(ev, compact) {
     </div></details>`;
 }
 
-// devCard: compact status card of a device (Übersicht).
-function devCard(d) {
-  const st = devState(d);
-  const bars = [["CPU", d.cpu], ["RAM", d.mem], ["Disk", d.disk]].filter(([, v]) => isNum(v));
-  return `<a class="dev-card st-${st}" href="/devices/${enc(d.id)}" data-go>
-    <div class="dc-head"><span class="dc-ic" title="${esc(TYPE_LABELS[d.type] || d.type)}">${icon(TYPE_ICONS[d.type] || "box")}</span>
-      <div class="grow"><div class="dc-name">${esc(d.name)}${attTag(d)}</div><div class="dc-host mono">${esc(d.host || TYPE_LABELS[d.type] || "")}</div></div>${statePill(st)}</div>
-    ${d.message ? `<div class="dc-msg">${esc(d.message)}</div>` : ""}
-    ${bars.length ? `<div class="dc-bars">${bars.map(([l, v]) => `<div class="dc-bar"><span class="dc-l">${l}</span>${pctBar(v)}</div>`).join("")}</div>` : ""}
-    <div class="dc-foot"><span>${esc(TYPE_LABELS[d.type] || d.type)}${d.platform ? " · " + esc(d.platform) : ""}</span><span title="Letzter Kontakt ${esc(fmtTime(d.last_poll, true))}">${esc(fmtAgo(d.last_poll))}</span></div></a>`;
-}
-
 // alertHref is where an alert leads: updates and system log rules have their own pages (they
 // are not shown on the device page), every other alert leads to its device.
 function alertHref(a) {
@@ -792,14 +780,6 @@ function alertHref(a) {
   return `/devices/${enc(a.device_id)}`;
 }
 
-// alertRow: one active alert in a list (Übersicht).
-function alertRow(a) {
-  return `<div class="row al-row"><span class="al-sev">${sevPill(a.severity)}</span><div class="grow">
-      <div class="title"><a href="${alertHref(a)}" data-go><b>${esc(a.device_name)}</b></a> · ${esc(a.check_name)}</div>
-      ${a.message ? `<div class="body">${esc(a.message)}</div>` : ""}
-      <div class="t-sub" title="Seit ${esc(fmtTime(a.started, true))}">${esc(fmtSince(a.started))}${a.acked_by ? ` · quittiert von ${esc(a.acked_by)}` : ""}</div></div>
-    ${!a.ended && !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}">${icon("check")} Quittieren</button>` : ""}</div>`;
-}
 function bindAck(root, after) {
   qsa("[data-ack]", root).forEach((b) => b.onclick = () => run(b, async () => {
     await POST(`/api/alerts/${enc(b.dataset.ack)}/ack`);
@@ -816,16 +796,13 @@ function bindAck(root, after) {
 }
 
 // ---------- overview ----------
-const TILES = [
-  ["crit", "x", "Kritisch", "red"], ["warn", "warn", "Warnung", "amber"], ["ok", "check", "OK", "green"],
-  ["unknown", "info", "Unbekannt", ""], ["maintenance", "wrench", "Wartung", "blue"], ["disabled", "power", "Deaktiviert", ""],
-];
 
 PAGES["/"] = async (el, token) => {
+  let evFilter = lsGet("pk95mon-dash-ev") === "warn" ? "warn" : "all";
   const draw = async (fresh) => {
     const r = fresh || Date.now() - state.ovAt > 5000 || !state.ov ? await loadOverview() : state.ov;
     if (token !== pageToken) return;
-    const devs = r.devices || [], alerts = r.alerts || [], c = Object.fromEntries(TILES.map(([k]) => [k, int((r.counts || {})[k])]));
+    const devs = r.devices || [], alerts = r.alerts || [];
     const head = (sub) => pageHead("Übersicht", sub, `<button class="btn gray" type="button" data-refresh>${icon("refresh")} Aktualisieren</button><button class="btn" type="button" data-add>${icon("plus")} Gerät hinzufügen</button>`);
     if (!devs.length) {
       el.innerHTML = `<div class="dash">` + head("Noch nichts eingerichtet.") +
@@ -840,46 +817,60 @@ PAGES["/"] = async (el, token) => {
       qs("[data-refresh]", el).onclick = (e) => run(e.currentTarget, () => draw(true));
       return;
     }
-    const crit = c.crit || 0, warn = c.warn || 0;
-    const tone = crit ? "error" : warn ? "warning" : "ok";
-    const bad = devs.filter((d) => ["crit", "warn"].includes(devState(d))).sort((a, b) => RANK[devState(b)] - RANK[devState(a)] || byName(a, b));
-    const headline = tone === "ok" ? "Alles in Ordnung" : [crit ? `${crit} ${crit === 1 ? "Gerät" : "Geräte"} kritisch` : "", warn ? `${warn} mit Warnung` : ""].filter(Boolean).join(" · ");
+    const t = r.totals || {}, offline = r.offline || [], problems = r.problems || [], recent = r.recent || [];
+    const open = problems.filter((p) => !p.acked), ackedN = problems.length - open.length;
+    const nCrit = open.filter((p) => p.state === "crit").length, nWarn = open.length - nCrit;
+    const tone = offline.length || nCrit ? "error" : nWarn ? "warning" : "ok";
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    const headline = tone === "ok" ? "Alles in Ordnung" : [offline.length ? `${plural(offline.length, "Gerät", "Geräte")} offline` : "", nCrit ? plural(nCrit, "Fehler", "Fehler") : "", nWarn ? plural(nWarn, "Warnung", "Warnungen") : ""].filter(Boolean).join(" · ");
     const lastPoll = devs.reduce((a, d) => Math.max(a, d.last_poll || 0), 0);
-    const acked = alerts.filter((a) => a.acked_by).length;
+    // the open alert of a line (device and check), to acknowledge it from here
+    const alertOf = new Map(alerts.map((a) => [`${a.device_id}|${a.check_key}`, a]));
+    const ackBtn = (p) => { const a = alertOf.get(`${p.device_id}|${p.key}`); return a && !a.acked_by ? `<button class="btn gray sm" type="button" data-ack="${esc(a.id)}">${icon("check")} Quittieren</button>` : ""; };
+    const devLabel = (p) => `${icon(TYPE_ICONS[p.device_type] || "box", "sm")}<b>${esc(p.device)}</b>`;
     const fact = (label, value, sub) => `<div class="hero-fact"><dt>${esc(label)}</dt><dd>${value}</dd>${sub ? `<div class="hero-fact-sub">${sub}</div>` : ""}</div>`;
     const hero = `<section class="hero ${tone}" aria-live="polite">
         <div class="hero-main"><span class="hero-ic">${icon(tone === "ok" ? "check" : tone === "error" ? "x" : "warn")}</span>
           <div class="hero-text"><h2>${esc(headline)}</h2>
-            ${tone === "ok" ? `<p>Alle aktiven Geräte melden sich und liegen innerhalb der Schwellwerte.${c.unknown ? ` ${c.unknown} ${c.unknown === 1 ? "Gerät hat" : "Geräte haben"} noch keine Daten.` : ""}</p>` :
-              `<ul class="hero-list">${bad.slice(0, 6).map((d) => `<li><a href="/devices/${enc(d.id)}" data-go><span class="sdot ${SDOT[devState(d)]}"></span><span><b>${esc(d.name)}</b>${d.message ? ": " + esc(d.message) : ""}</span>${icon("arrow-right")}</a></li>`).join("")}
-              ${bad.length > 6 ? `<li><a href="/devices?state=${crit ? "crit" : "warn"}" data-go><span class="sdot"></span><span>und ${bad.length - 6} weitere</span>${icon("arrow-right")}</a></li>` : ""}</ul>`}</div></div>
+            <p>${tone === "ok" ? "Alle Geräte sind erreichbar, alle Dienste liegen innerhalb der Schwellwerte." : "Details unten – offline Geräte zuerst, dann die Dienste mit Fehler oder Warnung."}${ackedN ? ` ${plural(ackedN, "Problem ist", "Probleme sind")} quittiert.` : ""}</p></div></div>
         <dl class="hero-facts">
-          ${fact("Geräte", String(devs.length), `${(r.groups || []).length} ${(r.groups || []).length === 1 ? "Gruppe" : "Gruppen"}`)}
-          ${fact("Aktive Alarme", String(alerts.length), alerts.length ? `${acked} quittiert` : "keine")}
+          ${fact("Geräte überwacht", String(int(t.devices)), int(t.agents) ? `davon ${int(t.agents)} mit Agent` : "")}
+          ${fact("Dienste überwacht", String(int(t.checks)), `${int(t.checks_ok)} in Ordnung`)}
           ${fact("Letzte Prüfung", esc(fmtAgo(lastPoll)), esc(fmtTime(lastPoll, true)))}
         </dl></section>`;
-    const tiles = `<div class="tiles six">${TILES.map(([k, ic, l, t]) => `<a class="tile ${c[k] ? t : ""}" href="/devices?state=${k}" data-go title="Geräte mit Zustand „${l}“ anzeigen"><span class="ti">${icon(ic)}</span><span class="tx"><span class="tv">${c[k] || 0}</span><span class="tl">${l}</span></span></a>`).join("")}</div>`;
+    const tile = (n, ic, label, tn, href, title) => `<a class="tile ${n ? tn : ""}" href="${href}" ${href.startsWith("#") ? "data-jump" : "data-go"} title="${esc(title)}"><span class="ti">${icon(ic)}</span><span class="tx"><span class="tv">${n}</span><span class="tl">${label}</span></span></a>`;
+    const tiles = `<div class="tiles six">
+      ${tile(offline.length, "power", "Geräte offline", "red", "#dash-offline", "Geräte, die nicht erreichbar sind")}
+      ${tile(nCrit, "x", "Dienste mit Fehler", "red", "#dash-problems", "Offene Fehler (nicht quittiert)")}
+      ${tile(nWarn, "warn", "Dienste mit Warnung", "amber", "#dash-problems", "Offene Warnungen (nicht quittiert)")}
+      ${tile(int(t.checks_unknown), "info", "Dienste unbekannt", "", "/devices", "Dienste ohne aktuelle Werte")}
+      ${tile(int(t.maintenance), "wrench", "Geräte in Wartung", "blue", "/devices?state=maintenance", "Geräte in Wartung")}
+      ${tile(int(t.disabled), "power", "Geräte deaktiviert", "", "/devices?state=disabled", "Abgeschaltete Geräte")}</div>`;
 
-    const groups = groupBy([...devs].sort(byName), (d) => d.group || "");
-    groups.sort(([a], [b]) => (a === "") - (b === "") || a.localeCompare(b, "de"));
-    const groupPanels = groups.map(([g, list]) => {
-      list.sort((a, b) => RANK[devState(b)] - RANK[devState(a)] || byName(a, b));
-      const n = { crit: 0, warn: 0 };
-      list.forEach((d) => { const s = devState(d); if (n[s] !== undefined) n[s]++; });
-      return `<div class="panel flush"><div class="panel-head"><div class="panel-title">${esc(g || "Ohne Gruppe")} <span class="muted small">${list.length}</span></div>
-        <div class="actions">${n.crit ? pill(`${n.crit} kritisch`, "rose") : ""}${n.warn ? pill(`${n.warn} Warnung`, "amber") : ""}<a class="btn gray sm" href="/devices${g ? "?group=" + enc(g) : "?group=-"}" data-go>Liste</a></div></div>
-        <div class="dev-cards">${list.map(devCard).join("")}</div></div>`;
-    }).join("");
+    const offRows = offline.map((p) => `<div class="row al-row"><span class="al-sev">${pill("Offline", "rose")}</span><div class="grow">
+        <div class="title"><a href="/devices/${enc(p.device_id)}" data-go class="dash-dev">${devLabel(p)}</a>${p.folder ? ` <span class="muted small">${esc(p.folder)}</span>` : ""}</div>
+        ${p.message ? `<div class="body">${esc(p.message)}</div>` : ""}
+        <div class="t-sub"><span title="Seit ${esc(fmtTime(p.since, true))}">${esc(fmtSince(p.since))}</span>${p.last_ok ? ` · letzter Kontakt <span title="${esc(fmtTime(p.last_ok, true))}">${esc(fmtAgo(p.last_ok))}</span>` : ""}</div></div>${ackBtn(p)}</div>`).join("");
+    const probRows = problems.map((p) => `<div class="row al-row${p.acked ? " dash-acked" : ""}"><span class="al-sev">${sevPill(p.state)}</span><div class="grow">
+        <div class="title"><a href="${checkPath(p.device_id, p.key)}" data-go class="dash-dev">${devLabel(p)} · ${esc(p.name)}</a></div>
+        ${p.message ? `<div class="body">${esc(p.message)}</div>` : ""}
+        <div class="t-sub"><span title="Seit ${esc(fmtTime(p.since, true))}">${esc(fmtSince(p.since))}</span>${p.group ? ` · ${esc(p.group)}` : ""}${p.acked ? ` · ${icon("check", "sm")} quittiert` : ""}</div></div>${ackBtn(p)}</div>`).join("");
+    const evList = recent.filter((ev) => evFilter === "all" || ["warning", "critical"].includes(ev.severity));
+    const evPanel = `<div class="panel flush"><div class="panel-head"><div class="panel-title">Letzte 12 Stunden <span class="muted small">${evList.length}</span></div>
+        <div class="actions"><div class="seg" role="group" aria-label="Ereignisse filtern">${[["all", "Alle"], ["warn", "Warnungen und Fehler"]].map(([k, l]) => `<button type="button" data-evf="${k}" aria-pressed="${evFilter === k}">${l}</button>`).join("")}</div><a class="btn gray sm" href="/events" data-go>Alle</a></div></div>
+        <div class="rows dash-events">${evList.map((ev) => eventRow(ev, true)).join("") || `<div class="row muted">${recent.length ? "Keine Warnungen oder Fehler in den letzten 12 Stunden." : "In den letzten 12 Stunden ist nichts passiert."}</div>`}</div></div>`;
 
     el.innerHTML = `<div class="dash">` + head(`${state.instance ? esc(state.instance) + " · " : ""}Stand ${fmtTime(Math.floor(state.ovAt / 1000))} · aktualisiert sich alle 15 Sekunden`) + hero + tiles +
       `<div class="dash-cols">
-        <div class="dash-col">${groupPanels}</div>
         <div class="dash-col">
-          <div class="panel flush"><div class="panel-head"><div class="panel-title">Offene Alarme</div><div class="actions">${alerts.some((a) => a.acked_by) ? `<a class="btn ghost sm" href="/alerts?tab=acked" data-go>${alerts.filter((a) => a.acked_by).length} quittiert</a>` : ""}<a class="btn gray sm" href="/alerts" data-go>Alle</a></div></div>
-            <div class="rows">${alerts.filter((a) => !a.acked_by).map(alertRow).join("") || `<div class="row muted">${alerts.length ? "Keine offenen Alarme – alle quittiert." : "Keine aktiven Alarme."}</div>`}</div></div>
-          <div class="panel flush"><div class="panel-head"><div class="panel-title">Ereignisse</div><a class="btn gray sm" href="/events" data-go>Alle</a></div>
-            <div class="rows">${(r.events || []).map(eventItem).join("") || `<div class="row muted">Noch keine Ereignisse.</div>`}</div></div>
-        </div></div></div>`;
+          <div class="panel flush" id="dash-offline"><div class="panel-head"><div class="panel-title">Geräte offline <span class="muted small">${offline.length}</span></div><a class="btn gray sm" href="/devices" data-go>Alle Geräte</a></div>
+            <div class="rows">${offRows || `<div class="row muted">${icon("check", "sm")} Alle Geräte sind erreichbar.</div>`}</div></div>
+          <div class="panel flush" id="dash-problems"><div class="panel-head"><div class="panel-title">Dienste mit Fehler oder Warnung <span class="muted small">${problems.length}</span></div><a class="btn gray sm" href="/alerts" data-go>Alarme</a></div>
+            <div class="rows">${probRows || `<div class="row muted">${icon("check", "sm")} Kein Dienst hat eine Warnung oder einen Fehler.</div>`}</div></div>
+        </div>
+        <div class="dash-col">${evPanel}</div></div></div>`;
+    qsa("[data-evf]", el).forEach((b) => b.onclick = () => { evFilter = b.dataset.evf; lsSet("pk95mon-dash-ev", evFilter); draw(false); });
+    qsa("[data-jump]", el).forEach((a) => a.onclick = (e) => { e.preventDefault(); const x = qs(a.getAttribute("href"), el); if (x) x.scrollIntoView({ behavior: "smooth", block: "start" }); });
     qs("[data-refresh]", el).onclick = (e) => run(e.currentTarget, () => draw(true));
     qs("[data-add]", el).onclick = () => addDevice();
     bindAck(el, () => draw(true));
