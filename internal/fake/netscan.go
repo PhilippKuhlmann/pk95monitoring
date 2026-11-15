@@ -38,8 +38,11 @@ var demoNetwork = map[string]netscan.Host{
 	"10.0.0.50": {Name: "nas-archiv.kunde.local", Ping: true, Ports: []int{netscan.PortHTTP, netscan.PortHTTPS, netscan.PortSynology}, Title: "nas-archiv - Synology DiskStation"},
 	"10.0.0.60": {Ping: true, Ports: []int{netscan.PortHTTP},
 		SNMP: &netscan.SNMPInfo{Descr: "APC Web/SNMP Management Card (MB:v4.1.0 PF:v6.9.6 PN:apc_hw05_aos_696.bin)", ObjectID: "1.3.6.1.4.1.318.1.3.27", Name: "usv-buero"}},
-	"10.0.0.70":  {Name: "unifi-filiale.kunde.local", Ping: true, Ports: []int{netscan.PortSSH, netscan.PortHTTP, netscan.PortHTTPS}, Title: "UniFi OS"},
-	"10.0.0.80":  {Name: "backup-pi.kunde.local", Ping: true, Ports: []int{netscan.PortSSH}},
+	"10.0.0.70": {Name: "unifi-filiale.kunde.local", Ping: true, Ports: []int{netscan.PortSSH, netscan.PortHTTP, netscan.PortHTTPS}, Title: "UniFi OS"},
+	"10.0.0.80": {Name: "backup-pi.kunde.local", Ping: true, Ports: []int{netscan.PortSSH}},
+	"10.0.0.250": {Name: "utm-lager.kunde.local", Ping: true, Ports: []int{netscan.PortSSH, netscan.PortHTTPS}, Title: "Securepoint UTM",
+		SNMP: &netscan.SNMPInfo{Descr: "Securepoint UTM 14.0.2 Linux", Name: "utm-lager"}},
+	"10.0.20.1":  {Name: "opnsense-filiale2.kunde.local", Ping: true, Ports: []int{netscan.PortDNS, netscan.PortHTTP, netscan.PortHTTPS}, Title: "Login | OPNsense"},
 	"10.0.0.90":  {Ping: true},
 	"10.0.10.11": {Name: "pve1.kunde.local", Ping: true, Ports: []int{netscan.PortSSH, netscan.PortPVE}, Title: "pve1 - Proxmox Virtual Environment"},
 }

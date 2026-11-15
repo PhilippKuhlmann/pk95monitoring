@@ -18,7 +18,7 @@ import (
 var backfillStep int64 = 300
 
 // demoPolled are the polled demo devices (back-filled from one poll).
-var demoPolled = []string{"demo-pve", "demo-switch", "demo-unifi", "demo-ups", "demo-nut", "demo-printer", "demo-nas", "demo-web"}
+var demoPolled = []string{"demo-pve", "demo-switch", "demo-unifi", "demo-ups", "demo-nut", "demo-printer", "demo-nas", "demo-web", "demo-sophos", "demo-opnsense"}
 
 // backfill writes BackfillDays of 5-minute samples for every demo device that has no
 // history yet (all of them on the first start; on later starts the demo devices added by a
@@ -78,6 +78,8 @@ func backfill(c *core.Core, agents []*simAgent, now time.Time) error {
 				checks, _ = c.M365.Collect(ctx, d)
 			case model.TypeUniFi:
 				checks, _ = c.UniFi.Collect(ctx, d)
+			case model.TypeOPNsense:
+				checks, _ = c.OPNsense.Collect(ctx, d)
 			}
 			for _, nc := range d.Checks {
 				checks = append(checks, netcheck.Run(ctx, nc, d.Host))

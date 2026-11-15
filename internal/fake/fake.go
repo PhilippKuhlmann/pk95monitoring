@@ -23,6 +23,7 @@ import (
 	"pk95monitoring/internal/core"
 	"pk95monitoring/internal/fake/fakegraph"
 	"pk95monitoring/internal/fake/fakenut"
+	"pk95monitoring/internal/fake/fakeopnsense"
 	"pk95monitoring/internal/fake/fakepbs"
 	"pk95monitoring/internal/fake/fakepve"
 	"pk95monitoring/internal/fake/fakeredfish"
@@ -50,6 +51,7 @@ const (
 	hostUPS     = "10.0.0.5"
 	hostPrinter = "10.0.0.20"
 	hostNAS     = "10.0.0.30"
+	hostSophos  = "10.0.0.1"
 )
 
 // BackfillDays is the history written on the first start (tests shorten it).
@@ -73,6 +75,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 		hostUPS:     fakesnmp.NewUPS(),
 		hostPrinter: fakesnmp.NewPrinter(),
 		hostNAS:     fakesnmp.NewNAS(),
+		hostSophos:  fakesnmp.NewSophos(),
 	}
 	fakeDial := fakesnmp.Dialer(devs)
 	realDial := c.SNMP.Dial
@@ -95,6 +98,7 @@ func Setup(c *core.Core) (stop func(), err error) {
 	bmc := fakeredfish.New()
 	graph := fakegraph.New()
 	udm := fakeunifi.New()
+	opn := fakeopnsense.New()
 	c.Scanner = demoScan // the demo's networks are simulated
 	// The demo's Microsoft 365 tenant is simulated; real tenants added in the demo would be
 	// asked there too.
@@ -111,12 +115,13 @@ func Setup(c *core.Core) (stop func(), err error) {
 		bmc.Close()
 		graph.Close()
 		udm.Close()
+		opn.Close()
 	}
 
 	netcheck.SetRDAPBootstrap(plain.URL + "/rdap/dns.json")
 	now := time.Now()
 	agents := demoAgents(now)
-	if err := createDevices(c, pve, ups, vbr, pbsSrv, bmc, udm, web, plain, agents, now); err != nil {
+	if err := createDevices(c, pve, ups, vbr, pbsSrv, bmc, udm, opn, web, plain, agents, now); err != nil {
 		closeAll()
 		return nil, err
 	}
@@ -273,7 +278,7 @@ const demoUPSName = "ups"
 
 // createDevices adds missing demo devices. The Proxmox cluster, the NUT UPS and the web site
 // are updated on every start because the simulated servers get new ports and certificates.
-func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, bmc *fakeredfish.Server, demoUniFi *fakeunifi.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
+func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *fakeveeam.Server, pbsSrv *fakepbs.Server, bmc *fakeredfish.Server, demoUniFi *fakeunifi.Server, demoOPNsense *fakeopnsense.Server, web, plain *httptest.Server, agents []*simAgent, now time.Time) error {
 	ts := now.Unix()
 	// New demo devices date back to the start of the back-filled history, so reports and the
 	// status page history cover it.
@@ -342,6 +347,8 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 		snmpDev("demo-ups", "USV Serverraum", hostUPS, groupServer, snmp.ProfileAuto),
 		snmpDev("demo-printer", "Drucker Empfang", hostPrinter, groupPeri, snmp.ProfileAuto),
 		snmpDev("demo-nas", "NAS Sicherung", hostNAS, groupServer, snmp.ProfileAuto),
+		withNotes(snmpDev("demo-sophos", "Firewall Zentrale", hostSophos, groupNet, snmp.ProfileAuto),
+			"Simulierte Sophos XGS 2100 (Demo, SNMP): HA-Cluster, drei IPsec-Tunnel, Web Protection läuft in 20 Tagen ab."),
 	} {
 		if err := importOrUpgrade(c, d, ts); err != nil {
 			return err
@@ -385,6 +392,14 @@ func createDevices(c *core.Core, pve *fakepve.Server, ups *fakenut.Server, vbr *
 		Enabled: true, Interval: 60, Created: created, Updated: ts, UniFi: &ucfg,
 		Notes: "Simulierte UniFi Dream Machine Pro (Demo) mit UniFi Network und Protect: ein Access Point und eine Kamera offline, eine Kamera nimmt nicht auf."}
 	if err := c.ImportDevice(keep(ud.ID, ud)); err != nil {
+		return err
+	}
+
+	ocfg := demoOPNsense.Config()
+	od := model.Device{ID: "demo-opnsense", Name: "Firewall Filiale", Type: model.TypeOPNsense, Host: demoOPNsense.Host(), Group: groupNet,
+		Enabled: true, Interval: 60, Created: created, Updated: ts, OPNsense: &ocfg,
+		Notes: "Simulierte OPNsense 25.7 (Demo) mit zwei WAN-Leitungen, IPsec zur Filiale, WireGuard, CARP und drei ausstehenden Updates."}
+	if err := c.ImportDevice(keep(od.ID, od)); err != nil {
 		return err
 	}
 
@@ -449,4 +464,10 @@ func importOrUpgrade(c *core.Core, d model.Device, ts int64) error {
 	}
 	old.Updated = ts
 	return c.ImportDevice(old)
+}
+
+// withNotes sets the notes of a demo device.
+func withNotes(d model.Device, notes string) model.Device {
+	d.Notes = notes
+	return d
 }

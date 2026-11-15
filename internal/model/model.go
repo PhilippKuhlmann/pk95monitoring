@@ -41,16 +41,17 @@ func Worst(a, b string) string {
 
 // Device types.
 const (
-	TypeProxmox = "proxmox" // Proxmox VE node or cluster, polled over its REST API
-	TypeAgent   = "agent"   // Linux or Windows host running pk95agent (push)
-	TypeSNMP    = "snmp"    // switch, UPS, printer, NAS … polled over SNMP
-	TypeNet     = "net"     // host or service checked only over the network (ping, HTTP, TCP, DNS, TLS)
-	TypeNUT     = "nut"     // UPS polled over a NUT server (Network UPS Tools, e.g. UniFi UPS)
-	TypeVeeam   = "veeam"   // Veeam Backup & Replication server, polled over its REST API
-	TypePBS     = "pbs"     // Proxmox Backup Server, polled over its REST API
-	TypeRedfish = "redfish" // server hardware over its management controller (iDRAC, iLO, XCC …) via Redfish
-	TypeM365    = "m365"    // Microsoft 365 / Entra ID tenant, polled over Microsoft Graph
-	TypeUniFi   = "unifi"   // UniFi OS console (Dream Machine, Cloud Key, UNVR …): UniFi Network and Protect
+	TypeProxmox  = "proxmox"  // Proxmox VE node or cluster, polled over its REST API
+	TypeAgent    = "agent"    // Linux or Windows host running pk95agent (push)
+	TypeSNMP     = "snmp"     // switch, UPS, printer, NAS … polled over SNMP
+	TypeNet      = "net"      // host or service checked only over the network (ping, HTTP, TCP, DNS, TLS)
+	TypeNUT      = "nut"      // UPS polled over a NUT server (Network UPS Tools, e.g. UniFi UPS)
+	TypeVeeam    = "veeam"    // Veeam Backup & Replication server, polled over its REST API
+	TypePBS      = "pbs"      // Proxmox Backup Server, polled over its REST API
+	TypeRedfish  = "redfish"  // server hardware over its management controller (iDRAC, iLO, XCC …) via Redfish
+	TypeM365     = "m365"     // Microsoft 365 / Entra ID tenant, polled over Microsoft Graph
+	TypeUniFi    = "unifi"    // UniFi OS console (Dream Machine, Cloud Key, UNVR …): UniFi Network and Protect
+	TypeOPNsense = "opnsense" // OPNsense firewall over its REST API
 )
 
 // Device is one monitored thing. Stored as JSON (store kind "device").
@@ -76,15 +77,16 @@ type Device struct {
 	// empty for single-host parents.
 	Node string `json:"node,omitempty"`
 
-	Proxmox *ProxmoxConfig `json:"proxmox,omitempty"`
-	SNMP    *SNMPConfig    `json:"snmp,omitempty"`
-	NUT     *NUTConfig     `json:"nut,omitempty"`
-	Veeam   *VeeamConfig   `json:"veeam,omitempty"`
-	PBS     *PBSConfig     `json:"pbs,omitempty"`
-	Redfish *RedfishConfig `json:"redfish,omitempty"`
-	M365    *M365Config    `json:"m365,omitempty"`
-	UniFi   *UniFiConfig   `json:"unifi,omitempty"`
-	Agent   *AgentConfig   `json:"agent,omitempty"`
+	Proxmox  *ProxmoxConfig  `json:"proxmox,omitempty"`
+	SNMP     *SNMPConfig     `json:"snmp,omitempty"`
+	NUT      *NUTConfig      `json:"nut,omitempty"`
+	Veeam    *VeeamConfig    `json:"veeam,omitempty"`
+	PBS      *PBSConfig      `json:"pbs,omitempty"`
+	Redfish  *RedfishConfig  `json:"redfish,omitempty"`
+	M365     *M365Config     `json:"m365,omitempty"`
+	UniFi    *UniFiConfig    `json:"unifi,omitempty"`
+	OPNsense *OPNsenseConfig `json:"opnsense,omitempty"`
+	Agent    *AgentConfig    `json:"agent,omitempty"`
 
 	// Checks are additional network checks; they work for every device type.
 	Checks []NetCheck `json:"checks"`
@@ -121,6 +123,10 @@ func (d Device) Clone() Device {
 	if d.M365 != nil {
 		m := *d.M365
 		d.M365 = &m
+	}
+	if d.OPNsense != nil {
+		o := *d.OPNsense
+		d.OPNsense = &o
 	}
 	if d.UniFi != nil {
 		u := *d.UniFi
@@ -327,7 +333,7 @@ type SNMPConfig struct {
 	PrivPass  string `json:"priv_pass,omitempty"`
 	// Profile chooses the extra MIBs: "auto" (default, detected from sysObjectID/sysDescr),
 	// "generic", "switch", "unifi" (UniFi switch: switch MIBs plus the Broadcom FASTPATH tree),
-	// "ups", "printer", "nas".
+	// "ups", "printer", "nas", "sophos" (Sophos Firewall: SFOS-FIREWALL-MIB).
 	Profile string `json:"profile"`
 	// Interfaces are ifName/ifDescr values whose link must be up (crit when not up,
 	// "Alarm bei Link-Ausfall"). Every other non-loopback port is reported too and stays
@@ -380,6 +386,15 @@ type UniFiConfig struct {
 	Password    string `json:"password,omitempty"`
 	Fingerprint string `json:"fingerprint"` // SHA-256 of the console certificate (pinning); empty = system CAs
 	Site        string `json:"site"`        // UniFi Network site (name or description); "" = every site
+}
+
+// OPNsenseConfig polls an OPNsense firewall over its REST API with the key and secret of a
+// user with read rights.
+type OPNsenseConfig struct {
+	Port        int    `json:"port"` // default 443
+	Key         string `json:"key"`
+	Secret      string `json:"secret,omitempty"`
+	Fingerprint string `json:"fingerprint"` // SHA-256 of the firewall certificate (pinning); empty = system CAs
 }
 
 // BackupServer reports whether a device type is a backup server (managed on the page
@@ -675,6 +690,8 @@ func DefaultThresholds() []Threshold {
 		{Metric: "mssql.express_usage", Warn: f(80), Crit: f(95)},
 		{Metric: "m365.cred_days", Warn: f(30), Crit: f(7), Below: true},
 		{Metric: "m365.sub_days", Warn: f(14), Crit: f(3), Below: true},
+		// firewall subscriptions (Sophos): a month to renew, crit in the last week
+		{Metric: "license.days", Warn: f(30), Crit: f(7), Below: true},
 		// Proxmox hardware and storage health
 		{Metric: "cpu.iowait", Warn: f(10), Crit: f(25), Count: 5},
 		{Metric: "disk.temp", Warn: f(60), Crit: f(70), Count: 2},

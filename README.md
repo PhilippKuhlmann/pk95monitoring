@@ -28,6 +28,9 @@ Go-Programm mit SQLite und eigener Weboberfläche (dieselbe Optik wie PK95 ProxB
 - **UniFi-Konsolen** (Dream Machine, Cloud Gateway, Cloud Key, UNVR): Access Points, Switches und Gateways
   (offline, Firmware-Updates), Internetverbindung und WAN-Ausfallleitung, UniFi-Protect-Kameras (getrennt, nimmt
   nicht auf), Aufnahmespeicher und Festplatten.
+- **Firewalls:** OPNsense über die API (Gateways und WAN-Ausfall, IPsec- und WireGuard-Tunnel, CARP-Hochverfügbarkeit,
+  Dienste, Firmware-Updates) und Sophos Firewall per SNMP (VPN-Tunnel, HA-Cluster, ablaufende Lizenzen, Dienste);
+  Securepoint UTM wie jedes SNMP-Gerät.
 - **Microsoft 365 / Entra ID** über Microsoft Graph: Entra-Connect-Synchronisierung, Lizenzen (frei, überbelegt,
   Kulanzzeit, Testversionen), ablaufende Geheimnisse und Zertifikate von App-Registrierungen, Domains und der
   Microsoft-Dienststatus.
@@ -500,6 +503,47 @@ Der Management-Port muss vom Monitoring aus per HTTPS erreichbar sein.
 - **RAID:** je Controller ein Check, je Volume (degradiert, Wiederaufbau mit Fortschritt) und je Platte (ausgefallen
   = kritisch, Ausfall vorhergesagt = Warnung, Verschleiß bei SSDs als `disk.wearout`). Die Plattenliste wird alle
   fünf Minuten gelesen. Ältere HPE-Firmware ohne die Standard-Ressource „Storage“ liefert keine RAID-Checks.
+
+## Firewalls (OPNsense, Sophos, Securepoint)
+
+**OPNsense** liest das Monitoring über die REST-API, nur lesend. Einmalig in OPNsense:
+
+1. *System → Zugang → Gruppen:* eine Gruppe „monitoring“ mit den Rechten **Dashboard (all)** (bzw. *Diagnostics:
+   System Activity*), **Status: Gateways**, **Status: CARP**, **Status: Services**, **System: Firmware**,
+   **VPN: IPsec: Status** und **VPN: WireGuard**.
+2. *System → Zugang → Benutzer:* einen Benutzer „monitoring“ in dieser Gruppe anlegen und unter **API-Schlüssel** mit
+   „+“ einen Schlüssel erzeugen – die Datei enthält `key` und `secret`.
+3. Im Monitoring **Geräte → Hinzufügen → OPNsense-Firewall**: Adresse, Schlüssel und Geheimnis eintragen,
+   Fingerabdruck mit „Abrufen“ holen und „Verbindung testen“.
+
+- **Gateways:** jede Leitung mit Zustand der Gateway-Überwachung – offline = kritisch, Paketverlust oder hohe Latenz =
+  Warnung; Latenz (`gw.latency`) und Verlust (`gw.loss`) als Verlauf. Manuell abgeschaltete Gateways bleiben OK.
+- **VPN:** jeder IPsec-Tunnel (getrennt = kritisch) und jeder WireGuard-Peer (letzter Handshake zu alt = Warnung;
+  Peers, die nie verbunden waren – z. B. Notebooks –, bleiben OK).
+- **Hochverfügbarkeit (CARP):** Master oder Backup; uneinheitlich (Teile Master, Teile Backup) oder INIT = kritisch,
+  abgeschaltet/Wartungsmodus = Warnung.
+- **Dienste:** jeder eingerichtete Dienst (Unbound, DHCP, OpenVPN, IPsec …) – gestoppt = kritisch.
+- **Firmware-Updates** stehen auf der Seite *Updates* (ausstehend = Warnung). OPNsense sucht nur nach Updates, wenn
+  man es anstößt – am besten unter *System → Einstellungen → Cron* „Firmware-Updates prüfen“ einplanen.
+- **System:** Version, Laufzeit, Arbeitsspeicher, Datenträger, Temperatur. Fehlt dem Schlüssel ein Recht, nennt der
+  Check „API-Abfrage“ den Bereich.
+
+**Sophos Firewall** (SFOS, XG/XGS) wird per SNMP überwacht: an der Firewall unter *Verwaltung → SNMP* einen Agent
+mit Community (oder SNMPv3) einrichten und dem Monitoring den Zugriff erlauben (*Gerätezugriff → SNMP* für die
+Zone). Das Profil „Sophos Firewall“ wird automatisch erkannt und liest die SFOS-MIB:
+
+- **VPN:** jeder IPsec-Tunnel – Site-to-Site getrennt = kritisch, teilweise verbunden = Warnung; Host-zu-Host-
+  Verbindungen bauen sich bei Bedarf auf und bleiben OK, nicht aktivierte ebenso.
+- **Hochverfügbarkeit:** Zustand beider Geräte – fehlerhaft oder kein Partner = kritisch.
+- **Lizenzen:** jedes abonnierte Modul (Network, Web, Email Protection, Sandstorm, Support …) mit Ablaufdatum
+  (`license.days`, Warnung ab 30, kritisch ab 7 Tagen; auch unter *Ablaufdaten*), abgelaufen = kritisch.
+- **Dienste:** abgestürzte oder eingefrorene Dienste = kritisch, gestoppte Kerndienste (Webadmin, Datenbank,
+  Netzwerk, Protokollierung) = Warnung.
+- **System:** Modell, Firmware, angemeldete Benutzer, CPU, Arbeitsspeicher, Auslagerung, Speicher und alle Ports.
+
+**Securepoint UTM** hat keine eigene MIB mit VPN-Status; sie wird wie jedes SNMP-Gerät überwacht (Ports, Verkehr,
+CPU, Speicher, Laufzeit). VPN-Gegenstellen lassen sich zusätzlich mit Netzwerk-Checks (Ping auf eine Adresse hinter
+dem Tunnel) prüfen. Der Netzwerk-Scan erkennt alle drei Firewalls und schlägt das passende Vorgehen vor.
 
 ## UniFi-Konsole (Network und Protect)
 

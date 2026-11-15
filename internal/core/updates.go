@@ -62,6 +62,9 @@ func (c *Core) Updates() []UpdateRow {
 			if d.Agent != nil {
 				r.OS, r.Platform = d.Agent.OS, platformText(*d.Agent)
 			}
+			if d.Type == model.TypeOPNsense && cs.Facts["Installiert"] != "" {
+				r.Platform = "OPNsense " + cs.Facts["Installiert"]
+			}
 			for _, m := range cs.Metrics {
 				v := m.Value
 				switch m.Name {
@@ -105,7 +108,7 @@ type ExpiryRow struct {
 	Group    string   `json:"group,omitempty"`
 	CheckKey string   `json:"check_key"`
 	Name     string   `json:"name"`
-	Kind     string   `json:"kind"` // cert, domain, storage (full within forecastListDays), app (Entra app secret), license (Microsoft 365)
+	Kind     string   `json:"kind"` // cert, domain, storage (full within forecastListDays), app (Entra app secret), license (Microsoft 365, firewall subscription)
 	Days     *float64 `json:"days"` // nil = no expiry date known
 	Until    string   `json:"until,omitempty"`
 	Detail   string   `json:"detail,omitempty"` // issuer, registrar or growth
@@ -131,6 +134,7 @@ func (c *Core) Expiry() []ExpiryRow {
 		for _, cs := range rt.st.Checks {
 			r := ExpiryRow{DeviceID: id, Device: c.displayName(d), Group: d.Group, CheckKey: cs.Key, Name: cs.Name,
 				State: cs.State, Acked: cs.Acked, Message: cs.Message}
+			fwLicense := false // a firewall subscription (license.days), not Microsoft 365
 			for _, m := range cs.Metrics {
 				switch {
 				case m.Name == "cert.days" || m.Name == "domain.days":
@@ -139,9 +143,10 @@ func (c *Core) Expiry() []ExpiryRow {
 				case m.Name == "m365.cred_days":
 					v := m.Value
 					r.Days, r.Kind = &v, "app"
-				case m.Name == "m365.sub_days":
+				case m.Name == "m365.sub_days" || m.Name == "license.days":
 					v := m.Value
 					r.Days, r.Kind = &v, "license"
+					fwLicense = m.Name == "license.days"
 				case m.Name == forecastMetric && m.Value <= forecastListDays && (r.Days == nil || m.Value < *r.Days):
 					v := m.Value
 					r.Days, r.Kind = &v, "storage"
@@ -164,6 +169,9 @@ func (c *Core) Expiry() []ExpiryRow {
 				r.Until, r.Detail = cs.Facts["Endet ohne Verlängerung"], "Microsoft-365-Abonnement"
 				if cs.Facts["Testversion"] != "" {
 					r.Detail += " (Testversion)"
+				}
+				if fwLicense {
+					r.Until, r.Detail = cs.Facts["Läuft ab"], cs.Facts["Produkt"]
 				}
 			case "storage":
 				r.Until = cs.Facts[factFull]

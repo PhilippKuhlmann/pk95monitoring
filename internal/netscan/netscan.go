@@ -103,7 +103,8 @@ const (
 	KindNAS      = "nas"
 	KindSwitch   = "switch"
 	KindUniFi    = "unifi"
-	KindUniFiOS  = "unifios" // UniFi OS console (Dream Machine, Cloud Key, UNVR)
+	KindUniFiOS  = "unifios"  // UniFi OS console (Dream Machine, Cloud Key, UNVR)
+	KindFirewall = "firewall" // OPNsense, Sophos, Securepoint
 	KindSNMP     = "snmp"
 	KindWindows  = "windows"
 	KindLinux    = "linux"
@@ -560,6 +561,15 @@ func Classify(h *Host) {
 		case ent == 6574 || ent == 24681 || containsAny(descr, "synology", "qnap", "diskstation"):
 			set(KindNAS, "NAS (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (NAS: Platten, RAID)")
 			h.Profile = snmp.ProfileAuto
+		case containsAny(descr, "opnsense"):
+			set(KindFirewall, "OPNsense", model.TypeOPNsense, "Als OPNsense hinzufügen (API-Schlüssel mit Leserechten): Gateways, VPN, HA, Updates")
+			h.Port = PortHTTPS
+		case ent == 2604 || containsAny(descr, "sophos firewall", "sfos", "xgs"):
+			set(KindFirewall, "Sophos Firewall (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (Sophos: VPN-Tunnel, HA, Lizenzen, Dienste)")
+			h.Profile = snmp.ProfileSophos
+		case containsAny(descr, "securepoint"):
+			set(KindFirewall, "Securepoint UTM (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (Ports, Verkehr, CPU, Speicher)")
+			h.Profile = snmp.ProfileAuto
 		case ent == 41112 || ent == 4413 || containsAny(descr, "unifi", "usw-", "ubiquiti"):
 			set(KindUniFi, "UniFi-Gerät (SNMP)", model.TypeSNMP, "Als SNMP-Gerät hinzufügen (UniFi)")
 			h.Profile = snmp.ProfileAuto
@@ -576,6 +586,15 @@ func Classify(h *Host) {
 		}
 	case has(h, PortSynology) || containsAny(web, "synology", "diskstation"):
 		set(KindNAS, "Synology NAS", model.TypeSNMP, "SNMP am NAS einschalten (Systemsteuerung → Terminal & SNMP), dann als SNMP-Gerät hinzufügen")
+		h.Profile = snmp.ProfileAuto
+	case has(h, PortHTTPS) && containsAny(web, "opnsense"):
+		set(KindFirewall, "OPNsense", model.TypeOPNsense, "Als OPNsense hinzufügen (API-Schlüssel mit Leserechten): Gateways, VPN, HA, Updates")
+		h.Port = PortHTTPS
+	case containsAny(web, "sophos"):
+		set(KindFirewall, "Sophos Firewall", model.TypeSNMP, "SNMP an der Firewall einschalten (Verwaltung → SNMP, Zugriff für das Monitoring erlauben), dann als SNMP-Gerät hinzufügen")
+		h.Profile = snmp.ProfileSophos
+	case containsAny(web, "securepoint"):
+		set(KindFirewall, "Securepoint UTM", model.TypeSNMP, "SNMP an der UTM einschalten, dann als SNMP-Gerät hinzufügen")
 		h.Profile = snmp.ProfileAuto
 	case has(h, PortHTTPS) && containsAny(web, "unifi os", "unifi network", "unifi protect", "dream machine", "ubiquiti"):
 		set(KindUniFiOS, "UniFi-Konsole", model.TypeUniFi, "Als UniFi-Konsole hinzufügen (lokaler Benutzer mit Leserechten): Geräte, Internet, Kameras")

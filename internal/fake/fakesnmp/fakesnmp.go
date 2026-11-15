@@ -44,6 +44,7 @@ type Device struct {
 	printer printerState
 	nas     nasState
 	sw      switchState
+	fw      sophosState
 }
 
 func newDevice(name string) *Device {

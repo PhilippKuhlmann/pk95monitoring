@@ -843,6 +843,31 @@ func (s *Server) testUniFi(w http.ResponseWriter, r *http.Request) {
 		"devices": res.Devices, "cameras": res.Cameras, "message": ""})
 }
 
+// testOPNsense reads an OPNsense firewall once: {id, host, opnsense}.
+func (s *Server) testOPNsense(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID       string               `json:"id"`
+		Host     string               `json:"host"`
+		OPNsense model.OPNsenseConfig `json:"opnsense"`
+	}
+	if !decode(w, r, &req) || fieldErrs(w, needHost(req.Host)) {
+		return
+	}
+	if req.OPNsense.Port < 0 || req.OPNsense.Port > 65535 {
+		fieldErrs(w, map[string]string{"opnsense.port": "Port zwischen 1 und 65535."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	res, err := s.C.TestOPNsense(ctx, req.ID, strings.TrimSpace(req.Host), req.OPNsense)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": res.Version, "name": res.Name, "gateways": res.Gateways,
+		"tunnels": res.Tunnels, "services": res.Services, "missing": res.Missing, "message": ""})
+}
+
 // testM365 signs in to a Microsoft 365 tenant and tries every area: {id, m365}.
 func (s *Server) testM365(w http.ResponseWriter, r *http.Request) {
 	var req struct {

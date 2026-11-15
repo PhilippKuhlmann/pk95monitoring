@@ -60,6 +60,10 @@ func TestClassify(t *testing.T) {
 		{Host{Ports: []int{PortSSH, PortHTTPS, PortSynology}}, KindNAS, model.TypeSNMP},
 		{Host{Ports: []int{PortSSH, PortUniFi}, Title: "UniFi Network"}, KindWeb, model.TypeNet},
 		{Host{Ports: []int{PortSSH, PortHTTPS}, Title: "UniFi OS"}, KindUniFiOS, model.TypeUniFi},
+		{Host{Ports: []int{PortSSH, PortHTTP, PortHTTPS}, Title: "Login | OPNsense"}, KindFirewall, model.TypeOPNsense},
+		{Host{Ports: []int{PortHTTPS}, SNMP: &SNMPInfo{Descr: "OPNsense.localdomain 14.3-RELEASE-p4 FreeBSD"}}, KindFirewall, model.TypeOPNsense},
+		{Host{SNMP: &SNMPInfo{Descr: "Sophos Firewall XGS2100", ObjectID: "1.3.6.1.4.1.2604.5"}}, KindFirewall, model.TypeSNMP},
+		{Host{Ports: []int{PortSSH, PortHTTPS}, Title: "Securepoint UTM"}, KindFirewall, model.TypeSNMP},
 	} {
 		h := tc.h
 		Classify(&h)

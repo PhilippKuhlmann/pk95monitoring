@@ -17,6 +17,7 @@ import (
 	"pk95monitoring/internal/agentdist"
 	"pk95monitoring/internal/collect/m365"
 	"pk95monitoring/internal/collect/nut"
+	"pk95monitoring/internal/collect/opnsense"
 	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/collect/redfish"
@@ -171,18 +172,19 @@ type Overview struct {
 // Core is the engine. Fields are set by New; collectors may be replaced (demo, tests)
 // before Run is called.
 type Core struct {
-	St      *store.Store
-	Opt     Options
-	Started int64
-	Agents  *agentdist.Catalog
-	Proxmox *proxmox.Collector
-	SNMP    *snmp.Collector
-	NUT     *nut.Collector
-	Veeam   *veeam.Collector
-	PBS     *pbs.Collector
-	Redfish *redfish.Collector
-	M365    *m365.Collector
-	UniFi   *unifi.Collector
+	St       *store.Store
+	Opt      Options
+	Started  int64
+	Agents   *agentdist.Catalog
+	Proxmox  *proxmox.Collector
+	SNMP     *snmp.Collector
+	NUT      *nut.Collector
+	Veeam    *veeam.Collector
+	PBS      *pbs.Collector
+	Redfish  *redfish.Collector
+	M365     *m365.Collector
+	UniFi    *unifi.Collector
+	OPNsense *opnsense.Collector
 
 	// Notify delivers a notification (default notify.Send); tests replace it.
 	Notify func(ctx context.Context, s notify.Settings, m notify.Message) error

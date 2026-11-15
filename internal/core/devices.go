@@ -12,6 +12,7 @@ import (
 	"pk95monitoring/internal/collect/m365"
 	"pk95monitoring/internal/collect/netcheck"
 	"pk95monitoring/internal/collect/nut"
+	"pk95monitoring/internal/collect/opnsense"
 	"pk95monitoring/internal/collect/pbs"
 	"pk95monitoring/internal/collect/proxmox"
 	"pk95monitoring/internal/collect/redfish"
@@ -211,6 +212,8 @@ func typeLabel(t string) string {
 		return "Microsoft 365"
 	case model.TypeUniFi:
 		return "UniFi-Konsole"
+	case model.TypeOPNsense:
+		return "OPNsense"
 	}
 	return t
 }
@@ -234,7 +237,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		errs["notes"] = "Höchstens 4000 Zeichen."
 	}
 	switch d.Type {
-	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish, model.TypeM365, model.TypeUniFi:
+	case model.TypeProxmox, model.TypeSNMP, model.TypeNet, model.TypeNUT, model.TypeVeeam, model.TypePBS, model.TypeRedfish, model.TypeM365, model.TypeUniFi, model.TypeOPNsense:
 	case model.TypeAgent:
 		if old == nil {
 			errs["type"] = "Agents werden bei der Installation des Agents automatisch angelegt."
@@ -247,7 +250,7 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 	}
 	if d.Host != "" && (len(d.Host) > 253 || !hostRe.MatchString(d.Host)) {
 		errs["host"] = "Hostname oder IP-Adresse ohne Protokoll und Pfad angeben."
-	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || d.Type == model.TypeRedfish || d.Type == model.TypeUniFi || model.BackupServer(d.Type)) {
+	} else if d.Host == "" && (d.Type == model.TypeProxmox || d.Type == model.TypeSNMP || d.Type == model.TypeNUT || d.Type == model.TypeRedfish || d.Type == model.TypeUniFi || d.Type == model.TypeOPNsense || model.BackupServer(d.Type)) {
 		errs["host"] = "Hostname oder IP-Adresse angeben."
 	} else if d.Host == "" && d.Type == model.TypeNet && len(d.Checks) == 0 {
 		errs["host"] = "Host oder mindestens einen Check angeben."
@@ -295,6 +298,11 @@ func (c *Core) validateDevice(d *model.Device, old *model.Device) map[string]str
 		validateUniFi(d, old, errs)
 	} else {
 		d.UniFi = nil
+	}
+	if d.Type == model.TypeOPNsense {
+		validateOPNsense(d, old, errs)
+	} else {
+		d.OPNsense = nil
 	}
 	if d.Type == model.TypeAgent && old != nil {
 		in := d.Agent
@@ -583,6 +591,8 @@ func (c *Core) forgetCollector(d model.Device) {
 		c.M365.Forget(d.ID)
 	case model.TypeUniFi:
 		c.UniFi.Forget(d.ID)
+	case model.TypeOPNsense:
+		c.OPNsense.Forget(d.ID)
 	}
 }
 
@@ -741,6 +751,50 @@ func (c *Core) TestUniFi(ctx context.Context, id, host string, cfg model.UniFiCo
 	}
 	cfg.Username = strings.TrimSpace(cfg.Username)
 	return unifi.Test(ctx, strings.TrimSpace(host), cfg)
+}
+
+func validateOPNsense(d *model.Device, old *model.Device, errs map[string]string) {
+	if d.OPNsense == nil {
+		d.OPNsense = &model.OPNsenseConfig{}
+	}
+	o := d.OPNsense
+	if o.Secret == "" && old != nil && old.OPNsense != nil {
+		o.Secret = old.OPNsense.Secret
+	}
+	o.Key, o.Secret, o.Fingerprint = strings.TrimSpace(o.Key), strings.TrimSpace(o.Secret), strings.TrimSpace(o.Fingerprint)
+	if o.Port == 0 {
+		o.Port = opnsense.DefaultPort
+	}
+	if o.Port < 1 || o.Port > 65535 {
+		errs["opnsense.port"] = "Port zwischen 1 und 65535."
+	}
+	switch {
+	case o.Key == "":
+		errs["opnsense.key"] = "API-Schlüssel angeben (System → Zugang → Benutzer → API-Schlüssel)."
+	case len(o.Key) > 256 || strings.ContainsAny(o.Key, "\r\n\x00\t :"):
+		errs["opnsense.key"] = "Ungültiger API-Schlüssel."
+	}
+	switch {
+	case o.Secret == "":
+		errs["opnsense.secret"] = "API-Geheimnis angeben."
+	case len(o.Secret) > 256 || strings.ContainsAny(o.Secret, "\r\n\x00"):
+		errs["opnsense.secret"] = "Ungültiges API-Geheimnis."
+	}
+	if f := strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(o.Fingerprint)); f != "" && !fpRe.MatchString(f) {
+		errs["opnsense.fingerprint"] = "SHA-256-Fingerabdruck (64 Hex-Zeichen, Doppelpunkte erlaubt) oder leer lassen."
+	}
+}
+
+// TestOPNsense reads an OPNsense firewall once. When cfg.Secret is empty and id names an
+// existing OPNsense device, the stored secret is used.
+func (c *Core) TestOPNsense(ctx context.Context, id, host string, cfg model.OPNsenseConfig) (opnsense.TestResult, error) {
+	if cfg.Secret == "" && id != "" {
+		if d, err := c.Device(id); err == nil && d.OPNsense != nil {
+			cfg.Secret = d.OPNsense.Secret
+		}
+	}
+	cfg.Key, cfg.Secret = strings.TrimSpace(cfg.Key), strings.TrimSpace(cfg.Secret)
+	return opnsense.Test(ctx, strings.TrimSpace(host), cfg)
 }
 
 // tenantRe matches a tenant given as a domain (contoso.onmicrosoft.com).

@@ -24,11 +24,12 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/store` | SQLite: settings, objects (JSON docs), users, sessions, events, metrics, rollups, alerts, statuses, API tokens, agent tokens |
 | `internal/notify` | e-mail / Telegram / ntfy / Gotify / webhook (copied from ProxBackup, done) |
 | `internal/collect/proxmox` | Proxmox VE API client + collector |
-| `internal/collect/snmp` | SNMP collector (gosnmp); profiles incl. `unifi`, switch MIBs (LLDP, PoE) |
+| `internal/collect/snmp` | SNMP collector (gosnmp); profiles incl. `unifi` and `sophos` (SFOS-FIREWALL-MIB), switch MIBs (LLDP, PoE) |
 | `internal/collect/nut` | NUT client + collector (upsd protocol, TCP 3493) |
 | `internal/collect/veeam` | Veeam Backup & Replication 12+ REST client + collector (jobs, repositories) |
 | `internal/collect/pbs` | Proxmox Backup Server REST client + collector (datastores, verification, groups, tasks) |
 | `internal/collect/redfish` | Redfish client + collector for server management controllers (iDRAC, iLO, XCC …) |
+| `internal/collect/opnsense` | OPNsense REST API client (basic auth with key/secret, GET only) + collector: system, firmware, gateways, IPsec, WireGuard, CARP, services |
 | `internal/collect/unifi` | UniFi OS console client (local user, cookie session) + collector for UniFi Network and Protect |
 | `internal/collect/m365` | Microsoft Graph client (client credentials) + collector for a Microsoft 365 / Entra ID tenant |
 | `internal/collect/netcheck` | ping, HTTP, TLS, TCP, DNS |
@@ -51,6 +52,7 @@ the overview for them. Shared types: `internal/model/model.go` (read it first �
 | `internal/fake/fakepbs` | simulated Proxmox Backup Server API (httptest TLS) – used by tests and demo |
 | `internal/fake/fakeredfish` | simulated Redfish controller shaped like a Dell iDRAC 9 (httptest TLS) – used by tests and demo |
 | `internal/fake/fakedocker` | simulated Docker Engine API (`/version`, `/info`, `/containers/json`, inspect, stats; httptest) – used by tests |
+| `internal/fake/fakeopnsense` | simulated OPNsense REST API (httptest TLS, basic auth; gateways, IPsec, WireGuard, CARP, services, firmware, 403 per path) – used by tests and demo |
 | `internal/fake/fakeunifi` | simulated UniFi OS console (Dream Machine Pro with Network and Protect, httptest TLS) – used by tests and demo |
 | `internal/fake/fakegraph` | simulated Entra token endpoint + Microsoft Graph (tenant "Muster GmbH", httptest) – used by tests and demo |
 | `web/` | SPA: `index.html`, `app.js`, `style.css` (copied), `theme.js`, `logo.svg`, `fonts/` |
@@ -173,6 +175,19 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | unifi | `unifi:disk:<n>` | Festplatte <n> | UniFi Protect: systemInfo.storage.devices[].healthy false = crit |
 | unifi | `unifi:cam:<id>` | camera name | Kameras: adopted cameras; DISCONNECTED crit, connected without recording although mode ≠ never = warn |
 | unifi | `unifi:protect` | UniFi Protect | only on errors: no rights = warn, other errors unknown |
+| opnsense | `opn:system` | System | `system_information` versions (Version, Kernel, OpenSSL), `system_time` uptime text → `uptime` (s), loadavg → `cpu.load1` |
+| opnsense | `opn:mem`, `opn:disk`, `opn:temp` | Arbeitsspeicher, Datenträger /, Temperatur | `system_resources` memory total/used → `mem.usage`; `system_disk` devices[mountpoint "/"].used_pct → `disk.usage`; highest `system_temperature` → `temp` |
+| opnsense | `updates` | Firmware-Updates | `core/firmware/status` (cached result, never triggers a check): status update = warn with `updates.pending` (all_packages), upgrade = ok "Neue Hauptversion", error = warn, none with "check for update" in status_msg = unknown (never checked); shown on the updates page |
+| opnsense | `opn:gw:<name>` | Gateway <name> | Gateways: status none = ok "Online", force_down = ok, down = crit, loss/delay = warn; `gw.latency` (ms), `gw.loss` (%) parsed from "9.8 ms" / "0.0 %" |
+| opnsense | `opn:ipsec:<phase1desc>` | IPsec <name> | VPN: `ipsec/sessions/search_phase1` connected false = crit; install-time, bytes in/out as facts |
+| opnsense | `opn:wg:<instance>/<peer>` | WireGuard <peer> | VPN: `wireguard/service/show` type peer; peer-status online = ok, stale = warn, offline (never) = ok |
+| opnsense | `opn:carp` | Hochverfügbarkeit (CARP) | `get_vip_status` rows mode carp: all MASTER / all BACKUP = ok, mixed or INIT = crit, DISABLED = warn |
+| opnsense | `opn:svc:<id>` | Dienst <description> | Dienste: `core/service/search` running 0 = crit |
+| opnsense | `opn:perm` | API-Abfrage | 403 on a part = warn listing the parts (privileges to grant), other errors = unknown, else ok |
+| snmp (sophos) | `snmp:ha` | Hochverfügbarkeit | SFOS `sfosHAStatus` enabled only: this or peer HaState faulty, standalone or no peer = crit, ready = warn |
+| snmp (sophos) | `snmp:lic:<module>` | Lizenz <module> | Lizenzen: subscriptions with status trial/subscribed/expired/deactivated (none and notsubscribed skipped); expiry DisplayString parsed in several layouts, "Perpetual" = unbefristet; `license.days` (threshold below 30/7); expired = crit, deactivated = warn; facts Status, Produkt, Läuft ab (expiry page kind license) |
+| snmp (sophos) | `snmp:vpn:<name>` | VPN <name> | VPN: `sfosIPSecVpnTunnelTable` – not activated = ok, active = ok, partially-active = warn, inactive = crit for site-to-site / tunnel interface, ok for host-to-host |
+| snmp (sophos) | `snmp:services` | Firewall-Dienste | Dienste: `sfosXGServiceStatus` dead/frozen = crit, core services (Apache, Database, Network, Garner) stopped/exiting = warn; `services.failed` |
 | m365 | `m365:tenant` | Mandant | Microsoft 365: name, default domain, verified domains; an unverified domain = warn |
 | m365 | `m365:sync` | Entra Connect Sync | Microsoft 365 (only with `onPremisesSyncEnabled`): `m365.sync_age`; never synced = warn |
 | m365 | `m365:health` | Microsoft-Dienststatus | Microsoft 365: services in serviceInterruption = crit, serviceDegradation/investigating/restoring/verifying/extendedRecovery = warn, with the oldest open incident; advisories counted |
@@ -265,6 +280,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | `temp` | °C | `System`, Synology diskID, `Batterie` (UPS), `USV` (nut `ups.temperature`; several UPS: `<ups>/USV`, `<ups>/Batterie`), UniFi `Sensor N`, Redfish sensor name | snmp, nut, redfish |
 | `fan.rpm` | rpm | fan name (`Lüfter N`) | snmp (UniFi), redfish |
 | `power.watts` | W | – | redfish (power consumption) |
+| `gw.latency` | ms | gateway name | OPNsense gateway monitoring delay |
+| `gw.loss` | % | gateway name | OPNsense gateway monitoring packet loss |
+| `license.days` | d | module | Sophos subscription days left (default threshold below 30/7) |
 | `unifi.clients` | – | – | UniFi device clients |
 | `unifi.latency` | ms | – | UniFi internet latency (health `www`) |
 | `unifi.storage_usage` | % | – | UniFi Protect recording storage (no default threshold: full is normal) |
@@ -467,7 +485,12 @@ messages are picked by text since their priority is unreliable):
 
 ## SNMP profiles
 
-`SNMPConfig.Profile`: `auto` (default), `generic`, `switch`, `unifi`, `ups`, `printer`, `nas`.
+`SNMPConfig.Profile`: `auto` (default), `generic`, `switch`, `unifi`, `ups`, `printer`, `nas`, `sophos`.
+
+- `sophos` (Sophos Firewall SFOS): detected by enterprise 2604; reads HOST-RESOURCES-MIB (CPU) and
+  SFOS-FIREWALL-MIB `1.3.6.1.4.1.2604.5.1`: device type, firmware, appliance key, live users into `snmp:system`;
+  memory/swap and disk percentages as `snmp:mem` / `snmp:storage:Firewall` when HOST-RESOURCES had none; HA, licenses,
+  IPsec tunnels and services (see the check table). Securepoint UTM has no MIB with VPN state: profile auto/generic.
 
 - `auto` detects from sysObjectID/sysDescr; `unifi` before the "more than 4 Ethernet ports → switch" rule:
   sysDescr `^(US|USW)[ -]`, `^UBNT US`, `^USW GigaBit`, `^USW-`; sysObjectID `1.3.6.1.4.1.4413` with
@@ -592,6 +615,15 @@ per device and logged in again once on a 401 (login errors: 401/403/400 rejected
 Sites 404/502/503 = a console without Network. TLS: pinned SHA-256 fingerprint, else system CAs. Network scan: HTTPS
 with a UniFi title = suggestion `unifi`. Status page template `video`: devices with `unifi:cam:*` checks, groups
 "Kameras" and "UniFi Protect", mode outage.
+
+## OPNsense (`collect/opnsense`)
+
+Device type `opnsense` – `OPNsenseConfig {port (443), key, secret, fingerprint}`; the secret is never sent to the UI
+(`has_secret`). HTTP basic auth (key as user, secret as password), GET only (POST on firmware/status would run a
+probe). `system_information` must answer (401 = key rejected, 403 = error naming the privilege); every other part is
+optional: 404 = not installed/older version (skipped), 403 = listed in `opn:perm`. TLS: pinned SHA-256 fingerprint,
+else system CAs. Network scan: HTTPS title or sysDescr "OPNsense" = suggestion `opnsense` (kind `firewall`; Sophos
+and Securepoint are suggested as SNMP devices).
 
 ## Microsoft 365 (`collect/m365`)
 
@@ -791,6 +823,8 @@ Authenticated:
   stored one; no datastore visible = error "Rolle Audit"); fingerprint via `POST /api/probe {host, port: 8007}`.
 - `POST /api/test/unifi {id?, host, unifi}` → `{ok, console, network, protect, devices, cameras, message}` (empty
   password with id = the stored one); fingerprint via `POST /api/probe {host, port: 443}`.
+- `POST /api/test/opnsense {id?, host, opnsense}` → `{ok, version, name, gateways, tunnels, services, missing:[part], message}`
+  (empty secret with id = the stored one); fingerprint via `POST /api/probe {host, port}`.
 - `POST /api/test/m365 {id?, m365}` → `{ok, tenant, domain, sync, licenses, apps, missing:[permission], message}`
   (empty secret with id = the stored one).
 - `POST /api/test/redfish {id?, host, redfish}` → `{ok, vendor, model, serial, power, firmware, message}` (empty
@@ -919,7 +953,9 @@ the end are down and stay ok), a UniFi USW-Pro-24-PoE `demo-unifi` (10.0.0.3, gr
 unifi; PoE on 12 ports, LLDP neighbors, fans, temperatures; "Alarm bei Link-Ausfall" on 0/13–0/15, 0/24–0/26),
 a UniFi UPS 2U `demo-nut` on a `fakenut` server (group Infrastruktur; host/port updated on every start), a Veeam
 server `demo-veeam` on `fakeveeam` (jobs with success, warning, failure and a disabled one; a NAS and an S3
-repository; config updated on every start), a UniFi Dream Machine Pro `demo-udm` on `fakeunifi` (group Netzwerk: 5 devices, AP "AP Lager" offline, 5 cameras –
+repository; config updated on every start), an OPNsense `demo-opnsense` on `fakeopnsense` (group Netzwerk: two WAN gateways, IPsec, WireGuard, CARP master, 3 pending
+updates), a Sophos XGS 2100 `demo-sophos` (10.0.0.1, SNMP profile auto → sophos: HA cluster, three IPsec tunnels, Web
+Protection ending in 20 days), a UniFi Dream Machine Pro `demo-udm` on `fakeunifi` (group Netzwerk: 5 devices, AP "AP Lager" offline, 5 cameras –
 "Lager" disconnected, "Parkplatz" not recording –, 89 % recording storage), a Microsoft 365 tenant `demo-m365` on `fakegraph` (group Cloud; Entra Connect, an unverified domain, Entra ID P1 in its grace period, a Copilot trial ending in 9 days, an app secret expiring in 12 days, one expired 3 days ago, an Exchange Online incident), a Dell iDRAC `demo-idrac` on `fakeredfish` (PowerEdge R650: power supply 2 without input, redundancy lost,
 an SSD predicting failure), a Proxmox Backup Server `demo-pbs` on `fakepbs` (datastores backup
 and offsite – offsite full in 18 days –, a namespace, a VM group whose newest snapshot failed verification, a

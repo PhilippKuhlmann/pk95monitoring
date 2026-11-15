@@ -66,16 +66,23 @@ type unifiOut struct {
 	HasPassword bool   `json:"has_password"`
 }
 
+type opnsenseOut struct {
+	model.OPNsenseConfig
+	Secret    string `json:"secret"`
+	HasSecret bool   `json:"has_secret"`
+}
+
 type deviceOut struct {
 	model.Device
-	Proxmox *proxmoxOut `json:"proxmox,omitempty"`
-	SNMP    *snmpOut    `json:"snmp,omitempty"`
-	NUT     *nutOut     `json:"nut,omitempty"`
-	Veeam   *veeamOut   `json:"veeam,omitempty"`
-	PBS     *pbsOut     `json:"pbs,omitempty"`
-	Redfish *redfishOut `json:"redfish,omitempty"`
-	M365    *m365Out    `json:"m365,omitempty"`
-	UniFi   *unifiOut   `json:"unifi,omitempty"`
+	Proxmox  *proxmoxOut  `json:"proxmox,omitempty"`
+	SNMP     *snmpOut     `json:"snmp,omitempty"`
+	NUT      *nutOut      `json:"nut,omitempty"`
+	Veeam    *veeamOut    `json:"veeam,omitempty"`
+	PBS      *pbsOut      `json:"pbs,omitempty"`
+	Redfish  *redfishOut  `json:"redfish,omitempty"`
+	M365     *m365Out     `json:"m365,omitempty"`
+	UniFi    *unifiOut    `json:"unifi,omitempty"`
+	OPNsense *opnsenseOut `json:"opnsense,omitempty"`
 }
 
 func redactDevice(d model.Device) deviceOut {
@@ -130,7 +137,12 @@ func redactDevice(d model.Device) deviceOut {
 		out.UniFi = &unifiOut{UniFiConfig: c, HasPassword: u.Password != ""}
 	}
 	out.Device.Proxmox, out.Device.SNMP, out.Device.NUT, out.Device.Veeam, out.Device.PBS, out.Device.Redfish, out.Device.M365 = nil, nil, nil, nil, nil, nil, nil
-	out.Device.UniFi = nil
+	if o := d.OPNsense; o != nil {
+		c := *o
+		c.Secret = ""
+		out.OPNsense = &opnsenseOut{OPNsenseConfig: c, HasSecret: o.Secret != ""}
+	}
+	out.Device.UniFi, out.Device.OPNsense = nil, nil
 	return out
 }
 

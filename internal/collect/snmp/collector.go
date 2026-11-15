@@ -27,11 +27,14 @@ const (
 	// ProfileUniFi is a UniFi (or EdgeSwitch) switch: the switch MIBs plus the Broadcom
 	// FASTPATH vendor tree (model, CPU, memory, temperatures, fans, power supplies).
 	ProfileUniFi = "unifi"
+	// ProfileSophos is a Sophos Firewall (SFOS, XG/XGS): SFOS-FIREWALL-MIB with HA,
+	// subscriptions, IPsec tunnels and services.
+	ProfileSophos = "sophos"
 )
 
 func normProfile(p string) string {
 	switch p = strings.ToLower(strings.TrimSpace(p)); p {
-	case ProfileGeneric, ProfileSwitch, ProfileUPS, ProfilePrinter, ProfileNAS, ProfileUniFi:
+	case ProfileGeneric, ProfileSwitch, ProfileUPS, ProfilePrinter, ProfileNAS, ProfileUniFi, ProfileSophos:
 		return p
 	}
 	return ProfileAuto
@@ -169,6 +172,8 @@ func detectProfile(s Session, si sysInfo, ifs []iface, ifErr error) (profile str
 		return ProfileUPS, true
 	case 6574:
 		return ProfileNAS, true
+	case 2604:
+		return ProfileSophos, true
 	}
 	uni, uniOK := isUniFi(s, si)
 	if uni {
@@ -374,6 +379,9 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 	case ProfileNAS:
 		p.hostResources()
 		p.nas()
+	case ProfileSophos:
+		p.hostResources()
+		p.sophos()
 	default:
 		p.hostResources()
 	}
@@ -456,6 +464,7 @@ var profileNames = map[string]string{
 	ProfilePrinter: "Drucker",
 	ProfileNAS:     "NAS",
 	ProfileUniFi:   "UniFi-Switch",
+	ProfileSophos:  "Sophos Firewall",
 }
 
 // custom reads the configured extra OIDs (check snmp:custom:<name>, metric "custom").

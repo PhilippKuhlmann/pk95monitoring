@@ -188,8 +188,8 @@ function groupBy(list, keyFn) {
 const byName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { numeric: true });
 
 // ---------- labels ----------
-const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server", redfish: "Hardware (Redfish)", m365: "Microsoft 365", unifi: "UniFi-Konsole" };
-const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive", redfish: "cpu", m365: "apps", unifi: "signal" };
+const TYPE_LABELS = { proxmox: "Proxmox VE", agent: "Agent", snmp: "SNMP", nut: "USV (NUT)", net: "Netzwerk", veeam: "Veeam", pbs: "Proxmox Backup Server", redfish: "Hardware (Redfish)", m365: "Microsoft 365", unifi: "UniFi-Konsole", opnsense: "OPNsense" };
+const TYPE_ICONS = { proxmox: "server", agent: "desktop", snmp: "signal", nut: "bolt", net: "globe", veeam: "archive", pbs: "archive", redfish: "cpu", m365: "apps", unifi: "signal", opnsense: "shield" };
 const STATES = { ok: ["OK", "green"], warn: ["Warnung", "amber"], crit: ["Kritisch", "rose"], unknown: ["Unbekannt", ""], maintenance: ["Wartung", "blue"], disabled: ["Deaktiviert", ""] };
 const SDOT = { ok: "ok", warn: "warning", crit: "error", unknown: "", maintenance: "blue", disabled: "" };
 const RANK = { ok: 0, disabled: 0, maintenance: 0, unknown: 1, warn: 2, crit: 3 };
@@ -292,6 +292,9 @@ const METRIC_LABELS = {
   "m365.cred_days": ["Restlaufzeit App-Geheimnis", "d"],
   "m365.sub_days": ["Restlaufzeit Abonnement", "d"],
   "m365.lic_free": ["Freie Lizenzen", ""],
+  "license.days": ["Restlaufzeit Lizenz", "d"],
+  "gw.latency": ["Gateway-Latenz", "ms"],
+  "gw.loss": ["Gateway-Paketverlust", "%"],
   "unifi.clients": ["WLAN-Clients", ""],
   "unifi.latency": ["Internet-Latenz", "ms"],
   "unifi.storage_usage": ["Aufnahmespeicher belegt", "%"],
@@ -1114,6 +1117,7 @@ function addDevice(done) {
       ["nut", "USV (NUT-Server)", "USV über Network UPS Tools, z. B. UniFi-USV – Akku, Restlaufzeit, Last, Spannungen."],
       ["redfish", "Server-Hardware (iDRAC, iLO, XCC)", "Über den Management-Controller per Redfish – Netzteile, Lüfter, Temperaturen, RAID und Platten, auch wenn das Betriebssystem steht."],
       ["unifi", "UniFi-Konsole (Dream Machine, Cloud Key, UNVR)", "UniFi Network und Protect: Access Points, Switches, Internetverbindung, Kameras, Aufzeichnung und Festplatten."],
+      ["opnsense", "OPNsense-Firewall", "Über die API: Gateways und WAN-Ausfall, IPsec- und WireGuard-Tunnel, CARP-Hochverfügbarkeit, Dienste und Firmware-Updates. Sophos und Securepoint: als SNMP-Gerät."],
       ["m365", "Microsoft 365 / Entra ID", "Mandant über Microsoft Graph – Entra-Connect-Sync, Lizenzen, ablaufende App-Geheimnisse, Domains und der Microsoft-Dienststatus."],
       ["net", "Netzwerk / Website", "Ping, HTTP(S), TCP-Port, DNS und TLS-Zertifikat – ohne Software auf dem Ziel."]] }],
     submit: async (v) => {
@@ -1241,7 +1245,7 @@ function interfacePicker(box, chosen) {
 }
 
 // SNMP_PROFILES: values of model.SNMPConfig.Profile with their labels.
-const SNMP_PROFILES = { auto: "Automatisch erkennen", generic: "Allgemein (nur Standardwerte)", switch: "Switch", unifi: "UniFi-Switch", ups: "USV", printer: "Drucker", nas: "NAS" };
+const SNMP_PROFILES = { auto: "Automatisch erkennen", generic: "Allgemein (nur Standardwerte)", switch: "Switch", unifi: "UniFi-Switch", ups: "USV", printer: "Drucker", nas: "NAS", sophos: "Sophos Firewall" };
 
 const PVE_TOKEN_CMDS = `pveum user add pk95mon@pve --comment "PK95 Monitoring"
 pveum acl modify / --users pk95mon@pve --roles PVEAuditor
@@ -1264,12 +1268,13 @@ function deviceForm(dev, type, done, pre) {
   const rf = d0.redfish || { port: 443, username: "", fingerprint: "" };
   const ms = d0.m365 || { tenant_id: "", client_id: "" };
   const uf = d0.unifi || { port: 443, username: "", fingerprint: "", site: "" };
+  const op = d0.opnsense || { port: 443, key: "", fingerprint: "" };
   const groups = [...new Set([...(state.groups || []), ...(d0.group ? [d0.group] : [])])].sort((a, b) => a.localeCompare(b, "de"));
-  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs" || type === "redfish" || type === "unifi";
+  const hostReq = type === "proxmox" || type === "snmp" || type === "nut" || type === "veeam" || type === "pbs" || type === "redfish" || type === "unifi" || type === "opnsense";
   const namePh = { proxmox: "z. B. Cluster Büro", snmp: "z. B. Switch Keller", nut: "z. B. USV Serverraum", net: "z. B. Website", veeam: "z. B. Veeam Backup", pbs: "z. B. Backup-Server", redfish: "z. B. iDRAC hv01", m365: "z. B. Microsoft 365", unifi: "z. B. UDM Pro Büro", agent: "" }[type];
   const fields = [
     { name: "name", label: "Name", value: d0.name, required: true, placeholder: namePh },
-    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : type === "redfish" ? "Management-Controller (Host / IP)" : type === "unifi" ? "Konsole (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
+    { name: "host", label: type === "proxmox" ? "Adresse eines Knotens" : type === "nut" ? "NUT-Server (Host / IP)" : type === "veeam" ? "Veeam-Server (Host / IP)" : type === "pbs" ? "Backup-Server (Host / IP)" : type === "redfish" ? "Management-Controller (Host / IP)" : type === "unifi" ? "Konsole (Host / IP)" : type === "opnsense" ? "Firewall (Host / IP)" : "Host / IP", value: d0.host, required: hostReq, mono: true,
       placeholder: type === "net" ? "optional, z. B. 192.168.1.1" : "192.168.1.10",
       hint: type === "agent" ? "Meldet der Agent selbst; nur für Ping-Checks und die Anzeige." : type === "net" ? "Standardziel für Ping-Checks ohne eigenes Ziel." : type === "nut" ? "Die USV selbst (z. B. UniFi) oder der Server, an dem sie per USB hängt." : "" },
     { name: "group", label: "Gruppe", value: d0.group, list: "dl-groups", placeholder: "z. B. Server, Netzwerk" },
@@ -1363,6 +1368,21 @@ function deviceForm(dev, type, done, pre) {
         <p class="hint">Der Management-Port (meist ein eigenes Netz) muss vom Monitoring aus per HTTPS erreichbar sein. Gelesen werden Netzteile, Lüfter, Temperaturen, Arbeitsspeicher, Prozessoren und die RAID-Controller mit Volumes und Platten.</p></details>
     </div></div>`;
   }
+  if (type === "opnsense") {
+    extra += `<div class="section"><div class="section-title">OPNsense-API</div><div class="form-grid">
+      ${field({ name: "opnsense.port", label: "Port", type: "number", min: 1, max: 65535, value: op.port || 443, hint: "Port der Weboberfläche, Standard 443." })}
+      ${field({ name: "opnsense.key", label: "API-Schlüssel", required: true, value: op.key, mono: true, wide: true })}
+      ${field({ name: "opnsense.secret", label: "API-Geheimnis", type: "password", required: !op.has_secret, wide: true, placeholder: op.has_secret ? "unverändert lassen" : "" })}
+      ${field({ name: "opnsense.fingerprint", label: "Fingerabdruck des Zertifikats", value: op.fingerprint, wide: true, mono: true, button: "Abrufen", hint: "OPNsense hat meist ein selbst signiertes Zertifikat – „Abrufen“ übernimmt seinen Fingerabdruck. Leer bei einem gültigen Zertifikat." })}
+      <div class="field wide"><div class="flex"><button class="btn gray" type="button" data-test-opnsense>${icon("signal")} Verbindung testen</button></div><div class="test-out" data-test-out></div></div>
+      <details class="howto wide"><summary>Wie bekomme ich einen API-Schlüssel?</summary>
+        <ol class="hint"><li>Unter <b>System → Zugang → Gruppen</b> eine Gruppe „monitoring“ anlegen und ihr nur lesende Rechte geben: <b>Dashboard (all)</b> bzw. <b>Diagnostics: System Activity</b>, <b>Status: Gateways</b>, <b>Status: CARP</b>, <b>Status: Services</b>, <b>System: Firmware</b>, <b>VPN: IPsec: Status</b> und <b>VPN: WireGuard</b>.</li>
+          <li>Unter <b>System → Zugang → Benutzer</b> einen Benutzer „monitoring“ in dieser Gruppe anlegen (zufälliges Kennwort, keine Shell).</li>
+          <li>Beim Benutzer unter <b>API-Schlüssel</b> auf „+“ klicken – die heruntergeladene Datei enthält <code>key</code> und <code>secret</code>.</li>
+          <li>Die Firewall-Regel muss dem Monitoring den Zugriff auf die Weboberfläche erlauben.</li></ol>
+        <p class="hint">Gelesen wird nur (GET): System, Firmware-Updates, Gateways, IPsec- und WireGuard-Tunnel, CARP und Dienste. Fehlt ein Recht, meldet der Check „API-Abfrage“, welcher Bereich nicht lesbar ist. Damit Updates erkannt werden, sollte OPNsense regelmäßig selbst danach suchen (System → Einstellungen → Cron: „Firmware-Updates prüfen“).</p></details>
+    </div></div>`;
+  }
   if (type === "unifi") {
     extra += `<div class="section"><div class="section-title">UniFi-Konsole</div><div class="form-grid">
       ${field({ name: "unifi.port", label: "Port", type: "number", min: 1, max: 65535, value: uf.port || 443, hint: "HTTPS, Standard 443." })}
@@ -1422,6 +1442,10 @@ function deviceForm(dev, type, done, pre) {
   const ufValues = (v) => ({
     port: Number(v["unifi.port"]) || 443, username: (v["unifi.username"] || "").trim(), password: v["unifi.password"] || "",
     fingerprint: (v["unifi.fingerprint"] || "").trim(), site: (v["unifi.site"] || "").trim(),
+  });
+  const opValues = (v) => ({
+    port: Number(v["opnsense.port"]) || 443, key: (v["opnsense.key"] || "").trim(), secret: (v["opnsense.secret"] || "").trim(),
+    fingerprint: (v["opnsense.fingerprint"] || "").trim(),
   });
   const msValues = (v) => ({
     tenant_id: (v["m365.tenant_id"] || "").trim(), client_id: (v["m365.client_id"] || "").trim(), secret: (v["m365.secret"] || "").trim(),
@@ -1486,7 +1510,7 @@ function deviceForm(dev, type, done, pre) {
           try {
             const r = await POST("/api/test/snmp", { id: dev ? dev.id : "", host: host(), snmp: snValues(formValues(form)) });
             if (r.ok === false) { out.innerHTML = `${pill("Fehler", "rose")} <span class="bad">${esc(r.message || "Keine Antwort.")}</span>`; return; }
-            const prof = { generic: "Allgemein", switch: "Switch", unifi: "UniFi-Switch", ups: "USV", printer: "Drucker", nas: "NAS" }[r.profile] || r.profile || "";
+            const prof = SNMP_PROFILES[r.profile] || r.profile || "";
             out.innerHTML = `${pill("Antwortet", "green", true)} <span><b>${esc(r.sys_name || "")}</b>${prof ? ` · erkannt als ${esc(prof)}` : ""}${(r.interfaces || []).length ? ` · ${r.interfaces.length} Schnittstellen` : ""}</span>${r.sys_descr ? `<div class="t-sub">${esc(r.sys_descr)}</div>` : ""}${r.message ? `<div class="t-sub">${esc(r.message)}</div>` : ""}`;
             if (!qs('[name="name"]', d).value && r.sys_name) qs('[name="name"]', d).value = r.sys_name;
             if ((r.interfaces || []).length) ifs.set(r.interfaces);
@@ -1584,6 +1608,31 @@ function deviceForm(dev, type, done, pre) {
           } catch (e) { out.innerHTML = ""; showErrors(d, e); }
         });
       }
+      if (type === "opnsense") {
+        const fb = qs('[data-fbtn="opnsense.fingerprint"]', d);
+        fb.onclick = () => run(fb, async () => {
+          showErrors(d, null);
+          try {
+            const r = await POST("/api/probe", { host: host(), port: Number(qs('[name="opnsense.port"]', d).value) || 443 });
+            qs('[name="opnsense.fingerprint"]', d).value = r.fingerprint;
+            toast("Fingerabdruck abgerufen.");
+          } catch (e) { showErrors(d, e.fields ? e : Object.assign(e, { fields: { "opnsense.fingerprint": e.message } })); }
+        });
+        const tb = qs("[data-test-opnsense]", d), out = qs("[data-test-out]", d);
+        tb.onclick = () => run(tb, async () => {
+          showErrors(d, null);
+          out.innerHTML = `<span class="spinner"></span> frage ab …`;
+          try {
+            const r = await POST("/api/test/opnsense", { id: dev ? dev.id : "", host: host(), opnsense: opValues(formValues(form)) });
+            if (r.ok === false) { out.innerHTML = `${pill("Fehler", "rose")} <span class="bad">${esc(r.message || "Verbindung fehlgeschlagen.")}</span>`; return; }
+            const miss = r.missing || [];
+            out.innerHTML = `${pill("Verbunden", "green", true)} <span><b>${esc(r.version)}</b>${r.name ? ` · ${esc(r.name)}` : ""} · ${int(r.gateways)} ${r.gateways === 1 ? "Gateway" : "Gateways"} · ${int(r.tunnels)} ${r.tunnels === 1 ? "Tunnel" : "Tunnel"} · ${int(r.services)} Dienste</span>` +
+              (miss.length ? `<div class="t-sub warn-ink">Keine Leserechte für: ${miss.map(esc).join(", ")} – dem API-Benutzer die Rechte geben (siehe unten).</div>` : `<div class="t-sub">Alle Bereiche lesbar.</div>`);
+            const nm = qs('[name="name"]', d);
+            if (!nm.value.trim() && r.name) nm.value = r.name.split(".")[0];
+          } catch (e) { out.innerHTML = ""; showErrors(d, e); }
+        });
+      }
       if (type === "m365") {
         const tb = qs("[data-test-m365]", d), out = qs("[data-test-out]", d);
         tb.onclick = () => run(tb, async () => {
@@ -1654,6 +1703,7 @@ function deviceForm(dev, type, done, pre) {
       if (type === "redfish") out.redfish = rfValues(v);
       if (type === "m365") out.m365 = msValues(v);
       if (type === "unifi") out.unifi = ufValues(v);
+      if (type === "opnsense") out.opnsense = opValues(v);
       const r = edit ? await PUT(`/api/devices/${enc(dev.id)}`, out) : await POST("/api/devices", out);
       state.ovAt = 0;
       toast(edit ? "Gespeichert." : `${out.name} hinzugefügt – die erste Abfrage läuft.`);
@@ -2302,7 +2352,7 @@ function bindRowLinks(root) {
 }
 
 // ---------- check views ----------
-const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Microsoft 365", "Lizenzen", "App-Registrierungen", "SQL Server", "SQL-Datenbanken", "SQL-Agent-Aufträge", "UniFi", "UniFi-Geräte", "UniFi Protect", "Kameras", "Hyper-V", "Hyper-V Replikation", "Docker", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
+const GROUP_ORDER = ["Status", "Cluster", "Knoten", "System", "Hochverfügbarkeit", "Gateways", "VPN", "Festplatten", "Speicher", "VMs", "Container", "VMs / Container", "Active Directory", "Microsoft 365", "Lizenzen", "App-Registrierungen", "SQL Server", "SQL-Datenbanken", "SQL-Agent-Aufträge", "UniFi", "UniFi-Geräte", "UniFi Protect", "Kameras", "Hyper-V", "Hyper-V Replikation", "Docker", "Netzteile", "Kühlung", "RAID", "Netzwerk", "Schnittstellen", "PoE", "USV", "Drucker", "Sensoren", "Platten", "Dienste", "Updates", "Sicherungen", "Replikation", "Zertifikate", "Eigene Werte", "Netzwerk-Checks"];
 // tableKind: checks of large groups are table rows (Proxmox nodes, guests and storage, switch ports,
 // toner); every other check is a card.
 // fullIn: "voll in 23 Tagen" from the storage forecast of a check ("" without one).
@@ -2472,6 +2522,16 @@ function cardValue(c) {
   const v = (n) => mval(c, n), has = (n) => isNum(v(n));
   const sp = (n, n2) => ({ names: n2 ? [n, n2] : [n], inst: instOf(c, n) });
   const fa = c.facts || {};
+  // Firewalls: gateways show their latency, tunnels, HA, services and licenses their state
+  if (c.key.startsWith("opn:gw:")) {
+    const [head, ...rest] = String(c.msg || "").split(" · ");
+    return has("gw.latency") && c.state !== "crit" ? { text: fmtVal(v("gw.latency"), "ms"), sub: [head, ...rest.slice(1)].join(" · "), spark: sp("gw.latency") } : { word: true, text: head || "—", sub: rest.join(" · ") };
+  }
+  if (has("license.days")) return { text: `${Math.max(0, Math.round(v("license.days")))} Tage`, sub: fa["Läuft ab"] ? `gültig bis ${fa["Läuft ab"]}` : "Restlaufzeit", spark: sp("license.days") };
+  if (/^(opn:(ipsec|wg|carp|svc|perm)|snmp:(vpn|ha|lic|services)):?/.test(c.key)) {
+    const [head, ...rest] = String(c.msg || "").split(" · ");
+    return { word: true, text: head || "—", sub: rest.join(" · ") };
+  }
   // UniFi: devices, cameras and disks say their state; the recording shows its storage
   if (/^unifi:(dev|cam|disk|console):?/.test(c.key)) {
     const [head, ...rest] = String(c.msg || "").split(" · ");
@@ -3690,6 +3750,9 @@ const EXPLAIN = {
   "ad.repl_age": { what: "Wie viele Stunden die letzte erfolgreiche eingehende Replikation von diesem Partner-Domänencontroller zurückliegt (älteste Partition).", why: "Repliziert ein DC nicht mehr, laufen Kennwörter, Konten und Gruppenrichtlinien auseinander – Anmeldungen schlagen an einem Standort fehl. Nach der Tombstone-Lebensdauer (meist 180 Tage) darf der Partner gar nicht mehr replizieren.", todo: ["Auf dem DC „repadmin /showrepl“ und „repadmin /replsummary“ ausführen.", "Erreichbarkeit, DNS-Auflösung und Firewall (RPC, Port 135 und dynamische Ports) zum Partner prüfen.", "Nach der Ursache „repadmin /syncall /AdeP“ ausführen."] },
   "m365.sync_age": { what: "Wie viele Stunden die letzte Synchronisierung von Entra Connect (oder Cloud Sync) aus dem lokalen Active Directory zurückliegt. Normal läuft sie alle 30 Minuten.", why: "Steht die Synchronisierung, kommen neue Mitarbeiter, Kennwortänderungen, Sperrungen und Gruppenänderungen nicht in Microsoft 365 an – ausgeschiedene Mitarbeiter können sich weiter anmelden.", todo: ["Auf dem Entra-Connect-Server den Dienst „Microsoft Azure AD Sync“ (ADSync) prüfen und starten.", "Im Synchronization Service Manager die letzten Läufe und Fehler ansehen.", "In PowerShell „Start-ADSyncSyncCycle -PolicyType Delta“ ausführen.", "Ist das Konto des Connectors abgelaufen oder gesperrt? Ist der Server aktuell (alte Versionen werden abgeschaltet)?"] },
   "m365.cred_days": { what: "Wie viele Tage das Geheimnis oder Zertifikat der App-Registrierung noch gültig ist (das am längsten gültige zählt).", why: "Läuft es ab, hört die Anwendung schlagartig auf zu funktionieren – Scan-to-Mail, Sicherungen, Schnittstellen oder dieses Monitoring.", todo: ["Im Entra Admin Center unter App-Registrierungen → Zertifikate & Geheimnisse ein neues Geheimnis anlegen.", "Den neuen Wert in der Anwendung eintragen (bei dieser Überwachung: am Gerät unter Bearbeiten).", "Das alte Geheimnis danach löschen. Wird die App nicht mehr gebraucht, die App-Registrierung entfernen."] },
+  "gw.latency": { what: "Antwortzeit des Überwachungsziels über diese Leitung, wie die OPNsense-Gateway-Überwachung (dpinger) sie misst.", why: "Steigt die Latenz deutlich, ist die Leitung überlastet oder gestört – Telefonie und Videokonferenzen leiden zuerst.", todo: ["Auslastung der Leitung prüfen (Sicherungen, große Uploads).", "Bei dauerhaft hohen Werten den Anbieter kontaktieren."] },
+  "gw.loss": { what: "Anteil der verlorenen Pakete zum Überwachungsziel dieser Leitung.", why: "Paketverlust bremst jede Verbindung; ab einem Grenzwert schaltet OPNsense auf die Ausfallleitung um.", todo: ["Modem bzw. Router des Anbieters und die Kabel prüfen.", "Störung beim Anbieter melden, wenn der Verlust bleibt."] },
+  "license.days": { what: "In wie vielen Tagen die Lizenz bzw. das Abonnement der Firewall abläuft (z. B. Sophos Network oder Web Protection).", why: "Läuft ein Abonnement ab, fallen seine Schutzfunktionen weg – IPS, Webfilter, Sandbox oder Support –, ohne dass die Firewall laut meldet.", todo: ["Die Verlängerung beim Händler bzw. im Sophos-Partnerportal bestellen.", "Nach der Verlängerung in der Firewall die Lizenzen synchronisieren (Sophos: Verwaltung → Lizenzierung → „Lizenzen synchronisieren“)."] },
   "m365.sub_days": { what: "In wie vielen Tagen das Abonnement endet – angezeigt für Testversionen und Abonnements, die abgelaufen oder gesperrt sind.", why: "Endet es, verlieren die Benutzer die Lizenz: erst Kulanzzeit, dann gesperrt, am Ende werden Daten gelöscht.", todo: ["Im Microsoft 365 Admin Center unter Abrechnung → Ihre Produkte das Abonnement verlängern oder kaufen.", "Bei einer Testversion entscheiden, ob sie in ein bezahltes Abonnement übergehen soll.", "Wird das Produkt nicht mehr gebraucht, die Lizenzen den Benutzern entziehen."] },
   "m365.lic_free": { what: "Wie viele Lizenzen dieses Produkts noch frei sind (gekauft minus zugewiesen).", why: "Ohne freie Lizenz lässt sich kein neuer Mitarbeiter einrichten; zu viele freie Lizenzen kosten Geld.", todo: ["Vor einem Neuzugang rechtzeitig Lizenzen nachkaufen.", "Lizenzen ausgeschiedener Mitarbeiter entziehen.", "Eine Warnschwelle für wenige freie Lizenzen am Gerät unter Schwellwerte (Messwert m365.lic_free, unterhalb) setzen."] },
   "unifi.storage_usage": { what: "Wie voll der Aufnahmespeicher von UniFi Protect ist.", why: "Ein voller Speicher ist bei Protect normal: die ältesten Aufnahmen werden überschrieben. Wächst die Zahl der Kameras, sinkt aber die Zeit, die zurückreicht.", todo: ["In Protect unter Einstellungen → Aufzeichnung die Aufbewahrungsdauer prüfen.", "Für längere Aufbewahrung eine größere oder zusätzliche Festplatte einbauen."] },
@@ -4925,7 +4988,7 @@ PAGES["/maintenance"] = async (el, token) => {
 // ---------- network scan ----------
 const PORT_NAMES = { 22: "SSH", 53: "DNS", 80: "HTTP", 443: "HTTPS", 445: "SMB", 631: "IPP", 1433: "SQL Server", 3389: "RDP", 3493: "NUT",
   5001: "Synology", 5985: "WinRM", 8006: "Proxmox", 8007: "PBS", 8443: "UniFi", 9100: "JetDirect", 9419: "Veeam" };
-const SCAN_TYPES = { unifi: "UniFi-Konsole", proxmox: "Proxmox VE", pbs: "Proxmox Backup Server", veeam: "Veeam", redfish: "Server-Hardware", nut: "USV (NUT)", snmp: "SNMP-Gerät", net: "Netzwerk-Checks" };
+const SCAN_TYPES = { opnsense: "OPNsense", unifi: "UniFi-Konsole", proxmox: "Proxmox VE", pbs: "Proxmox Backup Server", veeam: "Veeam", redfish: "Server-Hardware", nut: "USV (NUT)", snmp: "SNMP-Gerät", net: "Netzwerk-Checks" };
 
 // scanPrefill is what the device dialog gets for a found host.
 function scanPrefill(h) {
