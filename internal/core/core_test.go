@@ -356,6 +356,16 @@ func TestAlertLifecycle(t *testing.T) {
 	}
 }
 
+// hasAlert reports whether the list has an alert of the check (acknowledged by ackedBy, if set).
+func hasAlert(l []model.Alert, key, ackedBy string) bool {
+	for _, a := range l {
+		if a.CheckKey == key && (ackedBy == "" || a.AckedBy == ackedBy) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAlertsMaintenanceAndRemoval(t *testing.T) {
 	e := newEnv(t, Options{})
 	id := e.agentDevice(t, "fs01", nil)
@@ -375,21 +385,47 @@ func TestAlertsMaintenanceAndRemoval(t *testing.T) {
 		t.Fatalf("removed: %+v %v", active, e.rec.titles())
 	}
 
-	// Maintenance closes silently and raises nothing.
+	// Maintenance holds back new alerts and notifications but keeps the open ones with
+	// their acknowledgement; an alert fixed during maintenance ends without notification.
+	time1 := model.Check{Key: "svc:W32Time", Name: "Dienst Windows-Zeitgeber", State: model.StateCrit, Message: "beendet"}
+	e.report(t, id, svc, time1)
+	e.wait()
+	active, _ = e.st.ActiveAlerts()
+	if len(active) != 3 { // Spooler, W32Time and the vanished disk (Dienste-Inventur)
+		t.Fatalf("before maintenance: %+v", active)
+	}
+	for _, a := range active {
+		if a.CheckKey == "svc:Spooler" {
+			if err := e.c.AckAlert(a.ID, "admin"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	e.rec.reset()
 	if _, err := e.c.SetMaintenance(id, e.clk.Now().Add(time.Hour).Unix(), "Update"); err != nil {
 		t.Fatal(err)
 	}
-	e.report(t, id, svc, diskCheck(99))
+	time1.State, time1.Message = model.StateOK, "läuft"
+	e.report(t, id, svc, time1, diskCheck(99))
 	e.wait()
-	if active, _ = e.st.ActiveAlerts(); len(active) != 0 || len(e.rec.titles()) != 0 {
+	if active, _ = e.st.ActiveAlerts(); len(active) != 1 || !hasAlert(active, "svc:Spooler", "admin") || hasAlert(active, "svc:W32Time", "") || len(e.rec.titles()) != 0 {
 		t.Fatalf("maintenance: %+v %v", active, e.rec.titles())
 	}
-	// Maintenance ends by time: the next sync opens the alerts again.
+	if body := lastEventBody(t, e, "Wieder OK: fs01 – Dienst Windows-Zeitgeber"); body != "läuft" {
+		t.Errorf("fixed during maintenance: %q", body)
+	}
+	// Maintenance ends by time: the next sync opens the new alert; the acknowledged one goes on.
 	e.clk.Add(2 * time.Hour)
 	e.c.syncAllAlerts()
 	e.wait()
-	if active, _ = e.st.ActiveAlerts(); len(active) != 2 || len(e.rec.titles()) != 2 {
+	active, _ = e.st.ActiveAlerts()
+	if len(active) != 2 || len(e.rec.titles()) != 1 || !strings.Contains(e.rec.titles()[0], "Festplatte") {
 		t.Fatalf("after maintenance: %+v %v", active, e.rec.titles())
+	}
+	for _, a := range active {
+		if a.CheckKey == "svc:Spooler" && a.AckedBy != "admin" {
+			t.Errorf("acknowledgement lost: %+v", a)
+		}
 	}
 	// Deleting the device closes its alerts.
 	if err := e.c.DeleteDevice(id); err != nil {

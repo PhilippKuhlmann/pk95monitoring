@@ -199,9 +199,7 @@ func (c *Core) Overview(ctx context.Context) (Overview, error) {
 	if err != nil {
 		return Overview{}, err
 	}
-	if alerts == nil {
-		alerts = []model.Alert{}
-	}
+	alerts = c.withoutHeld(alerts, now)
 	if events == nil {
 		events = []store.Event{}
 	}
@@ -262,11 +260,23 @@ func (c *Core) Summary() model.Summary {
 	if err != nil {
 		log.Printf("summary alerts: %v", err)
 	}
-	if alerts == nil {
-		alerts = []model.Alert{}
-	}
-	sum.Alerts = alerts
+	sum.Alerts = c.withoutHeld(alerts, c.Now().Unix())
 	return sum
+}
+
+// withoutHeld drops the alerts of devices in maintenance: they go on (with their
+// acknowledgement) after the maintenance but are not shown as open problems meanwhile.
+func (c *Core) withoutHeld(alerts []model.Alert, now int64) []model.Alert {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]model.Alert, 0, len(alerts))
+	for _, a := range alerts {
+		if d, ok := c.devices[a.DeviceID]; ok && d.InMaintenance(now) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // DeviceSummary returns one device of the external API, or store.ErrNotFound.

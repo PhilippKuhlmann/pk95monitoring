@@ -730,8 +730,10 @@ Einstellungen → Standard.
 - **Alarme:** Wird ein Check Warnung oder Kritisch, öffnet sich ein Alarm mit Benachrichtigung; steigt er auf
   Kritisch, kommt eine weitere. Zurück auf OK schließt den Alarm („Wieder OK“). Offene, nicht quittierte Alarme
   können alle N Stunden erneut melden (Einstellungen → Allgemein).
-- **Wartung:** Am Gerät „Wartung“ starten (Dauer oder bis Zeitpunkt, mit Notiz) – bis dahin keine Alarme und
-  Benachrichtigungen, die Werte werden weiter aufgezeichnet. „Keine Alarme“ am Gerät schaltet sie dauerhaft ab.
+- **Wartung:** Am Gerät „Wartung“ starten (Dauer oder bis Zeitpunkt, mit Notiz) – bis dahin keine neuen Alarme und
+  keine Benachrichtigungen, die Werte werden weiter aufgezeichnet. Schon offene Alarme bleiben bestehen, samt
+  Quittierung, und laufen nach der Wartung weiter; was in der Wartung wieder in Ordnung kommt, endet ohne
+  Benachrichtigung. „Keine Alarme“ am Gerät schaltet sie dauerhaft ab und beendet die offenen.
 
 ## Benachrichtigungen
 

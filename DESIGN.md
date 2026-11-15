@@ -305,7 +305,10 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    `NoAlerts`, not in maintenance) an alert opens (store) and a notification is sent
    (`notify.Send`, severity warning/critical). Escalation warn→crit updates the alert and notifies
    again. Back to ok: alert closed + "Wieder OK" (severity info). Checks that disappear (guest
-   deleted) close their alerts silently. Optional re-notify every N hours (settings). Events
+   deleted) close their alerts silently. Maintenance only holds back new alerts, escalations and notifications:
+   open alerts stay open with their acknowledgement (one fixed meanwhile closes with a "Wieder OK" event but no
+   notification) and are left out of the overview and summary until it ends; a disabled device or `NoAlerts`
+   closes them. Optional re-notify every N hours (settings). Events
    (store events table) are written for every alert open/close and for system things. With
    notification rules (see "Notification rules") the rules decide who gets alert notifications;
    system messages always go to all enabled channels.

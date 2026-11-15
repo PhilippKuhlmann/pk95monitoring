@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -132,8 +133,11 @@ func TestWindowApply(t *testing.T) {
 	if db, _ := e.c.Device(b); db.Maintenance.Until != until || db.Maintenance.Window != "" {
 		t.Fatalf("longer maintenance replaced: %+v", db.Maintenance)
 	}
-	if l, _ := e.st.ActiveAlerts(); len(l) != 0 {
-		t.Fatalf("alert not closed by the window: %d", len(l))
+	if l, _ := e.st.ActiveAlerts(); len(l) != 1 {
+		t.Fatalf("alert closed by the window: %d", len(l)) // maintenance holds alerts, it does not end them
+	}
+	if ov, _ := e.c.Overview(context.Background()); len(ov.Alerts) != 0 {
+		t.Fatalf("held alert in the overview: %+v", ov.Alerts)
 	}
 
 	// after the end: alerts again and an end event

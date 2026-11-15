@@ -289,6 +289,10 @@ func muteReason(d model.Device, now int64) string {
 // Caller holds c.mu.
 func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 	muted := muteReason(d, now)
+	// Maintenance only holds back new alerts and notifications: alerts that are open keep
+	// running (with their acknowledgement) and continue after the maintenance. A disabled
+	// device or one with alerts switched off ends them.
+	maint := muted != "" && d.Enabled && !d.NoAlerts
 	name := c.displayName(d) // "<parent> / <node>" for an attached agent
 	byKey := map[string]model.CheckStatus{}
 	for _, cs := range rt.st.Checks {
@@ -358,7 +362,7 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 		}
 		cs, exists := byKey[oa.a.CheckKey]
 		quiet := exists && cs.Mode != "" // quiet or new: never alerts
-		if muted == "" && exists && !quiet && (cs.State == model.StateWarn || cs.State == model.StateCrit || cs.State == model.StateUnknown) {
+		if (muted == "" || maint) && exists && !quiet && (cs.State == model.StateWarn || cs.State == model.StateCrit || cs.State == model.StateUnknown) {
 			continue // still bad, or no current data: keep the alert as it is
 		}
 		if err := c.St.CloseAlert(oa.a.ID, now); err != nil {
@@ -366,7 +370,7 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 			continue
 		}
 		delete(c.open, k)
-		if muted == "" && exists && !quiet {
+		if (muted == "" || maint) && exists && !quiet {
 			title := fmt.Sprintf("Wieder OK: %s – %s", name, oa.a.CheckName)
 			body := cs.Message
 			if body == "" {
@@ -376,10 +380,15 @@ func (c *Core) syncAlerts(d model.Device, rt *devState, now int64) {
 			// "Wieder OK", even when the alert went back to warn before it closed.
 			det := c.alertDetails(d, rt, cs, "ok")
 			c.Event("info", name, title, body, det, false)
-			c.notifyAlert(oa, d, c.message("info", name, title, body, det), sevName(model.Worst(oa.peak, oa.a.Severity)), true)
+			if muted == "" { // fixed during maintenance: logged, not notified
+				c.notifyAlert(oa, d, c.message("info", name, title, body, det), sevName(model.Worst(oa.peak, oa.a.Severity)), true)
+			}
 			continue
 		}
 		why := muted
+		if maint {
+			why = "" // the alert ended for its own reason (removed, quiet, switched off)
+		}
 		switch {
 		case why != "":
 		case quiet && cs.Mode == model.ModeNew:
