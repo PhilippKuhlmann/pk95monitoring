@@ -15,7 +15,7 @@ import (
 // (a Proxmox host with one alert per guest backup) must still come with the device.
 func TestGetDeviceOpenAlerts(t *testing.T) {
 	c := newTestCore(t, t.TempDir())
-	d, _, err := c.SaveDevice(model.Device{Name: "pve01", Type: model.TypeNet, Host: "pve01.example.lan", Enabled: true})
+	d, _, err := c.SaveDevice(model.Device{Name: "pve01", Type: model.TypeNet, Host: "pve01.example.lan", Enabled: false}) // not polled: no alerts of its own
 	if err != nil {
 		t.Fatal(err)
 	}

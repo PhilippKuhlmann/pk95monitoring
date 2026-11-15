@@ -32,6 +32,16 @@ func seriesCacheKey(deviceID, name, instance string) string {
 	return deviceID + "\x00" + name + "\x00" + instance
 }
 
+// seriesInstance is the instance a metric is stored under. Network checks report their
+// metrics without one (ping.rtt, http.time, …) and a device can have several of a kind, so
+// each network check gets its own series under its check ID.
+func seriesInstance(checkKey, instance string) string {
+	if id, ok := strings.CutPrefix(checkKey, "net:"); ok && instance == "" {
+		return id
+	}
+	return instance
+}
+
 // WriteMetrics stores all metrics of the checks as samples at time ts (unix seconds, 0 = now).
 // Series are created on first use; unit, check key and the latest value are kept current
 // (older samples, e.g. from buffered agent reports, never replace a newer latest value).
@@ -76,7 +86,8 @@ func (s *Store) WriteMetrics(deviceID string, ts int64, checks []model.Check) er
 			if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
 				continue
 			}
-			key := seriesCacheKey(deviceID, m.Name, m.Instance)
+			inst := seriesInstance(c.Key, m.Instance)
+			key := seriesCacheKey(deviceID, m.Name, inst)
 			id, ok := fresh[key]
 			if !ok {
 				id, ok = s.series[key]
@@ -91,7 +102,7 @@ func (s *Store) WriteMetrics(deviceID string, ts int64, checks []model.Check) er
 				}
 			}
 			if !ok {
-				if err := upsert.QueryRow(deviceID, m.Name, m.Instance, m.Unit, c.Key, ts, m.Value).Scan(&id); err != nil {
+				if err := upsert.QueryRow(deviceID, m.Name, inst, m.Unit, c.Key, ts, m.Value).Scan(&id); err != nil {
 					return err
 				}
 				fresh[key] = id

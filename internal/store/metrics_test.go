@@ -688,3 +688,57 @@ func BenchmarkWriteMetrics1000(b *testing.B) {
 		}
 	}
 }
+
+// Network checks report ping.rtt etc. without an instance; two of a kind on one device must
+// still get their own series (one per check ID) instead of overwriting each other.
+func TestNetCheckSeries(t *testing.T) {
+	s := newStore(t)
+	checks := []model.Check{
+		chk("net:aaaaaa", met("ping.rtt", "", 8.3, "ms"), met("ping.loss", "", 0, "%")),
+		chk("net:bbbbbb", met("ping.rtt", "", 12.1, "ms"), met("ping.loss", "", 25, "%")),
+	}
+	if err := s.WriteMetrics("d1", base, checks); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.SeriesList("d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, x := range list {
+		if x.CheckKey != "net:"+x.Instance {
+			t.Fatalf("series %+v: instance does not match the check", x)
+		}
+		got[x.Name+" "+x.Instance] = x.LastValue
+	}
+	if len(list) != 4 || got["ping.rtt aaaaaa"] != 8.3 || got["ping.rtt bbbbbb"] != 12.1 || got["ping.loss bbbbbb"] != 25 {
+		t.Fatalf("series = %+v", list)
+	}
+}
+
+// Migration 3 moves the series of network checks written before under the check ID.
+func TestMigrateNetCheckSeries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO series (device_id, name, instance, unit, check_key) VALUES ('d1', 'ping.rtt', '', 'ms', 'net:aaaaaa')`,
+		`INSERT INTO series (device_id, name, instance, unit, check_key) VALUES ('d1', 'disk.usage', '/', '%', 'disk:/')`,
+		`PRAGMA user_version = 2`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	list, _ := s.SeriesList("d1")
+	if len(list) != 2 || list[0].Instance != "/" || list[1].Instance != "aaaaaa" {
+		t.Fatalf("series = %+v", list)
+	}
+}

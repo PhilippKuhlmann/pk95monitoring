@@ -123,6 +123,11 @@ CREATE TABLE agent_tokens (
 ALTER TABLE alerts ADD COLUMN ack_until INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE alerts ADD COLUMN ack_note  TEXT    NOT NULL DEFAULT '';
 `,
+	// network checks get one series each (instance = check ID, see seriesInstance); until now
+	// two ping checks of a device shared ping.rtt and the history goes to the last writer
+	`
+UPDATE series SET instance = substr(check_key, 5) WHERE check_key LIKE 'net:%' AND instance = '';
+`,
 }
 
 // ErrNotFound is returned when an object does not exist.

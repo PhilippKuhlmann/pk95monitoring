@@ -696,7 +696,10 @@ File `<data dir>/pk95monitoring.db`. Base taken from `~/code/pk95proxbackup/inte
 (settings, objects, users, sessions, events incl. `details`, migrations via `PRAGMA user_version`,
 run automatically on start), plus:
 
-- `series(id INTEGER PK, device_id, name, instance, unit, check_key, last_ts, last_value, UNIQUE(device_id,name,instance))`
+- `series(id INTEGER PK, device_id, name, instance, unit, check_key, last_ts, last_value, UNIQUE(device_id,name,instance))`;
+  network checks report their metrics without an instance, so their series are stored under the
+  check ID (`net:a1b2c3` → instance `a1b2c3`): several ping or HTTP checks of one device keep
+  separate series (migration 3 moved older series; before, such checks shared one series)
 - `samples(series_id, ts, value, PRIMARY KEY(series_id, ts)) WITHOUT ROWID` – raw, default 2 days
 - `rollups(series_id, res, ts, min, max, avg, cnt, PRIMARY KEY(series_id,res,ts)) WITHOUT ROWID` – res 300 (default 35 days) and 3600 (default 400 days)
 - `alerts(id PK, device_id, device_name, check_key, check_name, severity, message, started, ended, acked_by, acked_at, ack_until, ack_note)` (`ack_until`/`ack_note`: migration 2)
