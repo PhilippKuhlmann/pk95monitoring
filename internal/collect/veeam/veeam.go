@@ -1,9 +1,10 @@
 // Package veeam polls Veeam Backup & Replication 12 or newer over its REST API (HTTPS, port
-// 9419): the server version, the state of every job (last result, last and next run) and the
-// fill level of the backup repositories.
+// 9419): the server version, the state of every job (last result, last and next run, the
+// latest runs from the job sessions) and the fill level of the backup repositories.
 package veeam
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -16,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,13 +36,29 @@ const requestTimeout = 30 * time.Second
 
 // Collector polls Veeam servers. It keeps a token per device between polls.
 type Collector struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	clients map[string]*client
+	mu       sync.Mutex
+	now      func() time.Time
+	clients  map[string]*client
+	sessions map[string]sessionCache // device ID -> latest runs per job
 }
 
+// sessionCache holds the runs per job ID read from the sessions at a time.
+type sessionCache struct {
+	at   time.Time
+	runs map[string][]model.JobRun
+}
+
+const (
+	// sessionWindow is how far back job sessions are read for the latest runs of a job.
+	sessionWindow = 35 * 24 * time.Hour
+	// sessionTTL is how often the sessions are read again.
+	sessionTTL = 10 * time.Minute
+)
+
 // New returns a Collector.
-func New() *Collector { return &Collector{now: time.Now, clients: map[string]*client{}} }
+func New() *Collector {
+	return &Collector{now: time.Now, clients: map[string]*client{}, sessions: map[string]sessionCache{}}
+}
 
 // Forget drops the connection of a device (deleted or changed).
 func (c *Collector) Forget(deviceID string) {
@@ -50,6 +68,7 @@ func (c *Collector) Forget(deviceID string) {
 		cl.http.CloseIdleConnections()
 	}
 	delete(c.clients, deviceID)
+	delete(c.sessions, deviceID)
 }
 
 type client struct {
@@ -275,9 +294,12 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 		return nil, err
 	}
 	now := c.now()
+	runs := c.jobRuns(ctx, cl, d.ID, now)
 	checks := []model.Check{serverCheck(info, len(jobs.Data))}
 	for _, j := range jobs.Data {
-		checks = append(checks, jobCheck(j, now))
+		ch := jobCheck(j, now)
+		ch.Runs = runs[j.ID]
+		checks = append(checks, ch)
 	}
 	var repos page[repoState]
 	if err := cl.get(ctx, "/api/v1/backupInfrastructure/repositories/states?limit=1000", &repos); err == nil {
@@ -286,6 +308,86 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 		}
 	}
 	return checks, nil
+}
+
+type session struct {
+	JobID        string `json:"jobId"`
+	ParentID     string `json:"parentSessionId"`
+	CreationTime string `json:"creationTime"`
+	EndTime      string `json:"endTime"`
+	State        string `json:"state"` // Stopped when finished
+	Result       struct {
+		Result  string `json:"result"` // Success, Warning, Failed, None
+		Message string `json:"message"`
+	} `json:"result"`
+}
+
+// jobRuns returns the latest finished runs per job ID (oldest first, at most
+// model.MaxJobRuns), read from the sessions of the last sessionWindow every sessionTTL. If
+// the sessions cannot be read (older version, no permission), the jobs have no runs.
+func (c *Collector) jobRuns(ctx context.Context, cl *client, devID string, now time.Time) map[string][]model.JobRun {
+	c.mu.Lock()
+	sc, ok := c.sessions[devID]
+	c.mu.Unlock()
+	if ok && now.Sub(sc.at) < sessionTTL {
+		return sc.runs
+	}
+	q := url.Values{"createdAfterFilter": {now.Add(-sessionWindow).UTC().Format(time.RFC3339)},
+		"orderColumn": {"CreationTime"}, "orderAsc": {"false"}, "limit": {"5000"}}
+	var list page[session]
+	sc = sessionCache{at: now, runs: map[string][]model.JobRun{}}
+	if err := cl.get(ctx, "/api/v1/sessions?"+q.Encode(), &list); err == nil {
+		sc.runs = runsOf(list.Data)
+	}
+	c.mu.Lock()
+	c.sessions[devID] = sc
+	c.mu.Unlock()
+	return sc.runs
+}
+
+// runsOf turns sessions (any order) into the latest finished runs per job, oldest first.
+// Child sessions (one per machine of an agent policy) are left out.
+func runsOf(list []session) map[string][]model.JobRun {
+	out := map[string][]model.JobRun{}
+	for _, s := range list {
+		start, end := parseTime(s.CreationTime), parseTime(s.EndTime)
+		if s.JobID == "" || s.ParentID != "" || start.IsZero() || !strings.EqualFold(s.State, "Stopped") {
+			continue
+		}
+		r := model.JobRun{Start: start.Unix(), State: model.StateOK, Message: "Erfolgreich"}
+		if !end.IsZero() {
+			r.End = end.Unix()
+		}
+		switch s.Result.Result {
+		case "Warning":
+			r.State, r.Message = model.StateWarn, "Mit Warnungen"
+		case "Failed":
+			r.State, r.Message = model.StateCrit, "Fehlgeschlagen"
+		case "Success":
+		default:
+			r.State, r.Message = model.StateUnknown, "Ohne Ergebnis"
+		}
+		if m := strings.TrimSpace(s.Result.Message); m != "" && r.State != model.StateOK {
+			r.Message += ": " + firstLine(m)
+		}
+		out[s.JobID] = append(out[s.JobID], r)
+	}
+	for id, rs := range out {
+		slices.SortFunc(rs, func(a, b model.JobRun) int { return cmp.Compare(a.Start, b.Start) })
+		if len(rs) > model.MaxJobRuns {
+			rs = rs[len(rs)-model.MaxJobRuns:]
+		}
+		out[id] = rs
+	}
+	return out
+}
+
+func firstLine(s string) string {
+	s, _, _ = strings.Cut(s, "\n")
+	if r := []rune(s); len(r) > 200 {
+		s = string(r[:200]) + "…"
+	}
+	return strings.TrimSpace(s)
 }
 
 // TestResult is the answer of a connection test.

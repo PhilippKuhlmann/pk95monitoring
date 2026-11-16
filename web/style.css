@@ -1313,3 +1313,14 @@ tr.row-link, .toner.row-link { cursor: pointer; }
 .ack-note .icon { flex: none; width: 13px; height: 13px; color: var(--muted); align-self: center; }
 .ack-note-cell { white-space: normal; overflow-wrap: anywhere; max-width: 260px; }
 .ack-tag .icon.sm { width: 11px; height: 11px; }
+/* backup jobs: the latest runs as bars like an uptime monitor */
+.bak-jobs-panel { margin-bottom: 16px; }
+.bak-jobs td:nth-child(2) { min-width: 200px; }
+.job-runs { display: flex; gap: 3px; align-items: stretch; height: 22px; }
+.jr { display: inline-block; width: 8px; border-radius: 2px; background: var(--bar-ok); flex: none; }
+.jr.warn { background: var(--bar-warn); } .jr.crit { background: var(--bar-bad); }
+.jr.unknown { background: var(--faint); } .jr.none { background: var(--bar-track); }
+.job-runs .jr:hover { opacity: 0.7; }
+.job-legend { display: flex; gap: 12px; flex-wrap: wrap; }
+.job-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.job-legend .jr { height: 10px; width: 6px; }

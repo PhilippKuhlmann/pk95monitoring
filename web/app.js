@@ -4501,7 +4501,7 @@ PAGES["/updates"] = async (el, token) => {
   const sec = count((r) => (n(r.security) || 0) > 0), reboot = count((r) => r.reboot), old = count((r) => (n(r.age) ?? 0) >= 35), failed = count((r) => (n(r.failed) || 0) > 0);
   const stat = (label, v, sub, cls) => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${v}</div><div class="t-sub">${sub}</div></div>`;
   const draw = () => {
-    const list = filter === "todo" ? rows.filter(todo) : rows;
+    const list = filter === "todo" ? backups.filter(todo) : backups;
     const body = list.map((r) => {
       const pend = n(r.pending), secN = n(r.security), age = n(r.age), fail = n(r.failed);
       const st = r.acked ? pill("Quittiert", "green", true) : statePill(r.state);
@@ -4537,6 +4537,18 @@ PAGES["/updates"] = async (el, token) => {
 // ---------- backups ----------
 const BAK_KINDS = { guest: "Proxmox – Gast", tasks: "Proxmox – Sicherungsaufgaben", job: "Veeam-Job", group: "PBS – Sicherungsgruppe", pbsjob: "PBS – Job", verify: "PBS – Verifizierung", log: "Systemprotokoll" };
 const BAK_SERVER_TYPES = ["veeam", "pbs"];
+const BAK_JOB_KINDS = ["job", "pbsjob"]; // shown in the jobs table, not with the backups
+const JOB_RUNS = 10;
+const RUN_WORDS = { ok: "erfolgreich", warn: "mit Warnungen", crit: "fehlgeschlagen" };
+// jobRunBars: the latest runs of a backup job as bars like an uptime monitor – oldest left,
+// empty slots while a job has fewer runs; time, duration and result as tooltip.
+function jobRunBars(runs) {
+  const list = (runs || []).slice(-JOB_RUNS);
+  const tip = (r) => [fmtTime(r.start, true), r.end > r.start ? fmtUptime(r.end - r.start) : "", r.msg].filter(Boolean).join(" · ");
+  const counts = Object.keys(RUN_WORDS).map((k) => [list.filter((r) => r.state === k).length, RUN_WORDS[k]]).filter(([n]) => n);
+  const label = list.length ? `Letzte ${list.length} ${list.length === 1 ? "Lauf" : "Läufe"}: ${counts.map(([n, w]) => `${n} ${w}`).join(", ")}` : "Noch keine Läufe";
+  return `<div class="job-runs" role="img" aria-label="${esc(label)}">${'<span class="jr none"></span>'.repeat(JOB_RUNS - list.length)}${list.map((r) => `<span class="jr ${RUN_WORDS[r.state] ? r.state : "unknown"}" title="${esc(tip(r))}"></span>`).join("")}</div>`;
+}
 
 PAGES["/backups"] = async (el, token) => {
   const BF_KEY = "pk95mon-bak-filter";
@@ -4547,7 +4559,9 @@ PAGES["/backups"] = async (el, token) => {
   const stat = (label, v, sub, cls) => `<div class="panel rp-stat ${cls}"><div class="rp-stat-l">${esc(label)}</div><div class="rp-stat-v">${v}</div><div class="t-sub">${sub}</div></div>`;
   const reload = async () => { data = await GET("/api/backups"); if (token === pageToken) draw(); };
   const draw = () => {
-    const rows = data.rows || [], stores = data.storages || [], servers = data.servers || [];
+    const rows = data.rows || [], stores = data.storages || [], servers = data.servers || [], jobs = data.jobs || [];
+    const backups = rows.filter((r) => !BAK_JOB_KINDS.includes(r.kind));
+    const source = (r) => (BAK_SERVER_TYPES.includes(r.type) ? esc(r.device) : `<a href="/devices/${enc(r.device_id)}" data-go>${esc(r.device)}</a>`);
     const live = (r) => !r.acked && !r.mode;
     const failed = rows.filter((r) => r.state === "crit" && live(r)).length, warned = rows.filter((r) => r.state === "warn" && live(r)).length;
     const noJob = rows.filter((r) => /^In keinem Sicherungsjob/.test(r.message || "")).length, okN = rows.filter((r) => r.state === "ok").length;
@@ -4564,25 +4578,41 @@ PAGES["/backups"] = async (el, token) => {
       return `<tr class="dt-row" data-href="${path}">
         <td data-l="Zustand">${r.acked ? pill("Quittiert", "green", true) : r.mode === "quiet" ? pill("Nur Anzeige") : statePill(r.state)}</td>
         <td data-l="Sicherung"><a class="t-main" href="${path}" data-go>${esc(r.name)}</a><div class="t-sub">${esc([kind, r.job_type].filter(Boolean).join(" · "))}</div>${r.state !== "ok" ? `<div class="small bak-msg">${esc(r.message)}</div>` : ""}</td>
-        <td data-l="Quelle">${BAK_SERVER_TYPES.includes(r.type) ? esc(r.device) : `<a href="/devices/${enc(r.device_id)}" data-go>${esc(r.device)}</a>`}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
+        <td data-l="Quelle">${source(r)}${r.group ? `<div class="t-sub">${esc(r.group)}</div>` : ""}</td>
         <td data-l="Letzte Sicherung" class="nowrap">${age(r)}</td>
         <td data-l="Ergebnis" class="small">${esc(r.result || "—")}</td>
         <td data-l="Ziel" class="small">${esc(r.target || "—")}</td>
         <td data-l="Größe" class="num nowrap">${r.size ? esc(fmtBytes(r.size)) : '<span class="muted">—</span>'}</td>
         <td data-l="Nächster Lauf" class="small nowrap">${esc(r.next || "—")}</td></tr>`;
     }).join("");
-    el.innerHTML = pageHead("Sicherungen", "Letzte Sicherung jedes Proxmox-Gasts, Veeam-Jobs, Proxmox Backup Server und die Sicherungsziele – was fehlschlägt oder zu alt ist, steht oben.",
+    const jobPill = (j) => (!j.enabled ? pill("Deaktiviert") : j.acked ? pill("Quittiert", "green", true) : j.mode === "quiet" ? pill("Nur Anzeige") : statePill(j.state));
+    const jobBody = jobs.map((j) => {
+      const path = checkPath(j.device_id, j.check_key);
+      const sub = [j.type === "proxmox" ? "Proxmox-Sicherungsjob" : j.type === "veeam" ? j.job_type : "", j.selection && j.selection !== j.name ? j.selection : "", j.schedule ? `Zeitplan ${j.schedule}` : ""].filter(Boolean);
+      return `<tr class="dt-row" data-href="${path}">
+        <td data-l="Zustand">${jobPill(j)}</td>
+        <td data-l="Job"><a class="t-main" href="${path}" data-go>${esc(j.name)}</a>${sub.length ? `<div class="t-sub">${esc(sub.join(" · "))}</div>` : ""}${j.enabled && j.state !== "ok" && j.message ? `<div class="small bak-msg">${esc(j.message)}</div>` : ""}</td>
+        <td data-l="Quelle">${source(j)}</td>
+        <td data-l="Letzter Lauf" class="nowrap">${j.last ? `${esc(fmtTime(j.last))}<div class="t-sub">${esc(fmtAgo(j.last))}</div>` : '<span class="muted">—</span>'}</td>
+        <td data-l="Letzte ${JOB_RUNS} Läufe">${jobRunBars(j.runs)}</td>
+        <td data-l="Ziel" class="small">${esc(j.target || "—")}</td>
+        <td data-l="Nächster Lauf" class="small nowrap">${esc(j.next_ts ? fmtTime(j.next_ts, true) : j.next || "—")}</td></tr>`;
+    }).join("");
+    el.innerHTML = pageHead("Sicherungen", "Sicherungsjobs mit ihren letzten Läufen, die letzte Sicherung jedes Proxmox-Gasts und der Backup-Server und die Sicherungsziele – was fehlschlägt oder zu alt ist, steht oben.",
       `<button class="btn gray" type="button" data-bs-add="pbs">${icon("plus")} Proxmox Backup Server</button><button class="btn" type="button" data-bs-add="veeam">${icon("plus")} Veeam-Server</button>`) +
       `<div class="rp-stats">
         ${stat("Fehlgeschlagen", failed, "kritisch", failed ? "rp-bad" : "rp-ok")}
         ${stat("Warnungen", warned, "zu alt, mit Warnung, Lauf ausgefallen", warned ? "rp-warn" : "rp-ok")}
         ${stat("Ohne Sicherungsjob", noJob, "Proxmox-Gäste", noJob ? "rp-warn" : "rp-ok")}
         ${stat("In Ordnung", okN, `von ${rows.length} Sicherungen`, "")}
-      </div>
-      <div class="rp-bar"><div class="seg" role="group" aria-label="Filter"><button type="button" data-bf="todo" aria-pressed="${filter === "todo"}">Handlungsbedarf <span class="seg-n">${rows.filter(todo).length}</span></button><button type="button" data-bf="all" aria-pressed="${filter === "all"}">Alle <span class="seg-n">${rows.length}</span></button></div></div>` +
+      </div>` +
+      (jobs.length ? `<div class="panel flush bak-jobs-panel"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Jobs</div>
+          <div class="job-legend muted small"><span><i class="jr ok"></i>erfolgreich</span><span><i class="jr warn"></i>mit Warnungen</span><span><i class="jr crit"></i>fehlgeschlagen</span></div></div>
+        <div class="table-wrap"><table class="resp bak-table bak-jobs"><thead><tr><th>Zustand</th><th>Job</th><th>Quelle</th><th>Letzter Lauf</th><th>Letzte ${JOB_RUNS} Läufe</th><th>Ziel</th><th>Nächster Lauf</th></tr></thead><tbody>${jobBody}</tbody></table></div></div>` : "") +
+      `<div class="rp-bar"><div class="seg" role="group" aria-label="Filter"><button type="button" data-bf="todo" aria-pressed="${filter === "todo"}">Handlungsbedarf <span class="seg-n">${backups.filter(todo).length}</span></button><button type="button" data-bf="all" aria-pressed="${filter === "all"}">Alle <span class="seg-n">${backups.length}</span></button></div></div>` +
       (list.length ? `<div class="panel flush"><div class="table-wrap"><table class="resp bak-table"><thead><tr><th>Zustand</th><th>Sicherung</th><th>Quelle</th><th>Letzte Sicherung</th><th>Ergebnis</th><th>Ziel</th><th class="num">Größe</th><th>Nächster Lauf</th></tr></thead><tbody>${body}</tbody></table></div></div>
         <p class="muted small" style="margin:0 12px">Proxmox: neueste Sicherung je Gast aus den Sicherungsspeichern (Warnung ab 30, kritisch ab 54 Stunden – änderbar unter Einstellungen → Schwellwerte, Messwert „backup.age“; bei wöchentlichen Sicherungen am Gerät höher setzen). Veeam: letztes Ergebnis je Job, ein ausgefallener geplanter Lauf ist eine Warnung. Proxmox Backup Server: neueste Sicherung je Gruppe, fehlgeschlagene Verifizierung (kritisch), Verify-, Sync-, Prune- und Garbage-Collection-Jobs der letzten 7 Tage; Host-Sicherungen werden wie Gäste nach Alter bewertet.</p>`
-        : `<div class="panel">${empty(rows.length ? "Kein Handlungsbedarf" : "Noch keine Sicherungen", rows.length ? "Alle Sicherungen sind in Ordnung." : "Proxmox VE liefert die letzte Sicherung je Gast automatisch (der Token braucht dafür Leserechte auf die Sicherungsspeicher, Rolle PVEAuditor). Veeam-Server und Proxmox Backup Server fügst du oben rechts hinzu.", "", "archive")}</div>`) +
+        : `<div class="panel">${empty(backups.length ? "Kein Handlungsbedarf" : "Noch keine Sicherungen", backups.length ? "Alle Sicherungen sind in Ordnung." : "Proxmox VE liefert die letzte Sicherung je Gast automatisch (der Token braucht dafür Leserechte auf die Sicherungsspeicher, Rolle PVEAuditor). Veeam-Server und Proxmox Backup Server fügst du oben rechts hinzu.", "", "archive")}</div>`) +
       (stores.length ? `<div class="panel flush mt"><div class="panel-head" style="padding:16px 16px 0"><div class="panel-title">Sicherungsziele</div></div><div class="table-wrap"><table class="resp bak-store"><thead><tr><th>Ziel</th><th>Server</th><th>Belegung</th><th>Frei</th></tr></thead><tbody>
         ${stores.map((s) => `<tr class="dt-row" data-href="${checkPath(s.device_id, s.check_key)}"><td data-l="Ziel"><a class="t-main" href="${checkPath(s.device_id, s.check_key)}" data-go>${esc(s.name)}</a>${s.state !== "ok" ? ` ${statePill(s.state)}` : ""}</td>
           <td data-l="Server">${esc(s.device)}</td>

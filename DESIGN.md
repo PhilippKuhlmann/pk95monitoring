@@ -151,10 +151,10 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | proxmox | `pve:ceph` | Ceph | Speicher (only when Ceph answers `/cluster/ceph/status`: HEALTH_OK/WARN/ERR with the check summaries) |
 | proxmox | `pve:cert:<node>` | Zertifikat <node> | Zertifikate (`/certificates/info`, cached 6 h: pveproxy-ssl.pem, else pve-ssl.pem) |
 | proxmox | `pve:updates:<node>` | Updates <node> | Updates |
-| proxmox | `pve:backup` | Sicherungen | Sicherungen (failed vzdump tasks last 24 h = crit until a later run backed the guest up) |
+| proxmox | `pve:backup` | Sicherungen | Sicherungen (failed vzdump tasks last 24 h = crit until a later run backed the guest up); carries `jobs` – the backup jobs of `/cluster/backup` (Sys.Audit on /; type vzdump; read every 10 min with the vzdump tasks of the last 35 days of every online node) with id, name (comment, else the selection), schedule, storage, selection ("Alle [außer …]", "Pool x", guests), enabled, next-run and the newest 10 runs. A task belongs to a job by `--job-id` in its log (PVE 8.2+), else by the same storage and selection in the logged vzdump command line (`--all` + `--exclude`, `--pool`, or VMIDs that are all in the job; `--remove 0` = "Backup now", no job); task logs are read newest first, 20 per poll, cached per UPID. Tasks of a job starting within 30 min of a run's first task are one run (one per node); a run is ok, warn (`WARNINGS`) or crit with the failed guests or the task status |
 | proxmox | `pve:bak:<vmid>` | "Sicherung VM 100 dc01" | Sicherungen: newest backup of the guest on any storage with content `backup` (shared ones once; `GET /nodes/{node}/storage/{storage}/content?content=backup`, cached 15 min); metrics `backup.age` (h), `backup.size` (B), instance `vm/<id>` or `ct/<id>`; facts Letzte Sicherung, Ziel, Größe, Verifiziert, Knoten; warn: verification failed, or in no backup job (`/cluster/backup-info/not-backed-up`); no backup: warn "Keine Sicherung gefunden"; storages not readable: unknown. Templates and IgnoreGuests left out; not part of the inventory |
 | veeam | `veeam:server` | Veeam-Server | Server (version, name, database) |
-| veeam | `veeam:job:<id>` | job name | Jobs: last result (Failed crit, Warning warn, Success/None ok), facts Typ, Ziel, Objekte, Letzter/Nächster Lauf, Ergebnis; a scheduled run more than 2 h overdue (not running) = warn "Geplanter Lauf … nicht gestartet"; disabled = ok without metrics; metric `job.age` (h, instance job name, no threshold) |
+| veeam | `veeam:job:<id>` | job name | Jobs: last result (Failed crit, Warning warn, Success/None ok), facts Typ, Ziel, Objekte, Letzter/Nächster Lauf, Ergebnis; a scheduled run more than 2 h overdue (not running) = warn "Geplanter Lauf … nicht gestartet"; disabled = ok without metrics; metric `job.age` (h, instance job name, no threshold); `runs`: the newest 10 finished sessions of the job of the last 35 days (`GET /api/v1/sessions`, read every 10 min, child sessions left out; Success ok, Warning warn, Failed crit, None unknown; with the result message) |
 | veeam | `veeam:repo:<id>` | "Repository <name>" | Repositories: `storage.usage/used/total` (instance name); capacity 0 (object storage) = ok without metrics |
 | pbs | `pbs:server` | Backup-Server | version (`GET /version`) |
 | pbs | `pbs:ds:<store>` | "Datastore <store>" | `storage.usage/used/total` (instance store); `estimated-full-date` < 30 days = warn; facts Voll voraussichtlich, Sicherungsgruppen, Sicherungen; `error` or total 0 = unknown |
@@ -199,7 +199,7 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
 | m365 | `m365:perm` | Berechtigungen | Microsoft 365: areas answered with 403 = warn naming the permission |
 | m365 | `m365:sku:<part number lower>` | product name | Lizenzen: consumed/enabled+warning, `m365.lic_free`; capabilityStatus Warning = warn, Suspended/LockedOut = crit, over-assigned = warn; `m365.sub_days` for trials and ending subscriptions. Skipped: Deleted, appliesTo ≠ User, ≥ 10000 units (free SKUs), no units |
 | m365 | `m365:app:<appId lower>` | app name | App-Registrierungen: `m365.cred_days` of the credential valid longest; apps without credentials or all expired > 30 days left out |
-| pbs | `pbs:task:<worker_type>:<worker_id>` | "<Typ> <worker_id>" | newest finished task of the last 7 days per job for verificationjob, verify, syncjob, prunejob, prune, garbage_collection: `OK` ok, `WARNINGS…` warn, else crit (status in the message); "Läuft gerade" prefix while one runs; `job.age` (h); facts Typ, Letzter Lauf, Ergebnis. Task list not readable: `pbs:tasks` unknown |
+| pbs | `pbs:task:<worker_type>:<worker_id>` | "<Typ> <worker_id>" | newest finished task of the last 7 days per job for verificationjob, verify, syncjob, prunejob, prune, garbage_collection: `OK` ok, `WARNINGS…` warn, else crit (status in the message); "Läuft gerade" prefix while one runs; `job.age` (h); facts Typ, Letzter Lauf, Ergebnis; `runs`: the newest 10 finished tasks of the job in the 7 days. Task list not readable: `pbs:tasks` unknown |
 | snmp | `snmp:system` | System | System (facts: Name, Beschreibung, Standort, Kontakt, Profil, Laufzeit, plus Modell, Seriennummer (printer, UPS, NAS, UniFi), Firmware (UniFi), DSM-Version (Synology) from the profile; metric `uptime`) |
 | snmp | `snmp:cpu`, `snmp:mem` | CPU / Arbeitsspeicher | System |
 | snmp | `snmp:storage:<descr>` | Speicher <descr> | Speicher |
@@ -788,7 +788,12 @@ Authenticated:
 - `GET /api/updates` → `{rows:[UpdateRow]}`: every `updates` / `pve:updates:<node>` check of the enabled devices,
   worst first – `{device_id, device, name, check_key, group, type, os, platform, state, acked, message, pending,
   security, age, failed (null when not reported), reboot, last_install, titles, updated}`.
-- `GET /api/backups` → `{rows:[BackupRow], storages:[BackupStorage], servers:[BackupServer]}` (servers = the Veeam
+- `GET /api/backups` → `{rows:[BackupRow], jobs:[BackupJob], storages:[BackupStorage], servers:[BackupServer]}`; jobs =
+  the Proxmox backup jobs (from `pve:backup`, state and message of their last run, raise no alert of their own; disabled:
+  unknown "Deaktiviert"; no run: unknown "Kein Lauf in den letzten 35 Tagen"), Veeam jobs and PBS jobs (state of their
+  check, message of the last run unless an overdue run is reported), problems first – `{device_id, device, type,
+  check_key, id, name, job_type, selection, schedule, target, enabled, last (end of the last run), next (text), next_ts,
+  state, acked, mode, message, runs:[{start, end, state, msg}] (oldest first, at most 10)}` (servers = the Veeam
   and PBS devices `{id, name, host, group, type, enabled, state (reach), message, version, last_poll}`): checks `pve:bak:*`, `pve:backup`,
   `veeam:job:*`, `pbs:group:*`, `pbs:task:*`, `pbs:verify:*`, `ev:backup`, `ev:veeam` of the enabled devices, worst
   first – `{device_id, device, group, type, check_key, name, kind: guest|tasks|job|group|pbsjob|verify|log, age (h,
@@ -1073,8 +1078,11 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   edit, reset/delete, "Eigene Regel") and all exceptions. The check page of an `ev:` check lists its events with
   "Ignorieren"; the device settings of a Windows or Linux agent have a section "Systemprotokoll" (central rules to switch
   off, own rules, the device's exceptions).
-- Page `/backups` (nav "Sicherungen"): stat tiles (failed, warnings, guests without job, ok), filter
-  "Handlungsbedarf" (`pk95mon-bak-filter`) / "Alle", table of `GET /api/backups` and the backup targets with
+- Page `/backups` (nav "Sicherungen"): stat tiles (failed, warnings, guests without job, ok), the table "Jobs" (state,
+  job, source, last run, the last 10 runs as bars like an uptime monitor – green ok, amber warnings, red failed, grey
+  without result, empty slots while a job has fewer runs; tooltip time · duration · result – target, next run), filter
+  "Handlungsbedarf" (`pk95mon-bak-filter`) / "Alle", table of the other rows of `GET /api/backups` (Veeam and PBS job
+  rows are in "Jobs") and the backup targets with
   their fill level and the backup servers (Veeam and PBS; add/edit open the device dialog of their type); refreshes every minute.
   Nav "Sicherungen" after "Updates". Check pages of separate checks lead back to their page.
 - Page `/expiry` (nav "Ablaufdaten"): stat tiles (expired, next 30 days, certificates and domains, storage running

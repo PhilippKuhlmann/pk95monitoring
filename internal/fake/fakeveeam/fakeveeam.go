@@ -1,5 +1,6 @@
 // Package fakeveeam simulates the REST API of Veeam Backup & Replication 12 (token, server
-// info, job states, repository states) for tests and the demo. It must not import core.
+// info, job states, job sessions, repository states) for tests and the demo. It must not
+// import core.
 package fakeveeam
 
 import (
@@ -28,7 +29,14 @@ type Job struct {
 	ID, Name, Type, Status, Result, Repository string
 	LastAgo, NextIn                            time.Duration // NextIn < 0: scheduled run did not start
 	Objects                                    int
+	// Every is the interval of the earlier runs (sessions); Earlier their results, newest
+	// first ("" = Success). There are 12 runs in all.
+	Every   time.Duration
+	Earlier []string
 }
+
+// sessionRuns is how many runs (sessions) a job has.
+const sessionRuns = 12
 
 // Repo is a simulated repository.
 type Repo struct {
@@ -51,11 +59,16 @@ type Server struct {
 func New() *Server {
 	s := &Server{token: "tok-" + strconv.FormatInt(time.Now().UnixNano(), 36), now: time.Now}
 	s.jobs = []Job{
-		{ID: "a1f0c3e2-0001", Name: "Täglich – VMs", Type: "Backup", Status: "inactive", Result: "Success", Repository: "Repo NAS", LastAgo: 9 * time.Hour, NextIn: 15 * time.Hour, Objects: 6},
-		{ID: "a1f0c3e2-0002", Name: "SQL-Server stündlich", Type: "Backup", Status: "inactive", Result: "Success", Repository: "Repo NAS", LastAgo: 40 * time.Minute, NextIn: 20 * time.Minute, Objects: 1},
-		{ID: "a1f0c3e2-0003", Name: "Kopie Offsite", Type: "BackupCopy", Status: "inactive", Result: "Warning", Repository: "Offsite S3", LastAgo: 7 * time.Hour, NextIn: 17 * time.Hour, Objects: 6},
-		{ID: "a1f0c3e2-0004", Name: "Laptops (Agent)", Type: "WindowsAgentBackupWorkstationPolicy", Status: "inactive", Result: "Failed", Repository: "Repo NAS", LastAgo: 11 * time.Hour, NextIn: 13 * time.Hour, Objects: 14},
-		{ID: "a1f0c3e2-0005", Name: "Archiv monatlich", Type: "Backup", Status: "disabled", Result: "Success", Repository: "Repo NAS", LastAgo: 40 * 24 * time.Hour, Objects: 6},
+		{ID: "a1f0c3e2-0001", Name: "Täglich – VMs", Type: "Backup", Status: "inactive", Result: "Success", Repository: "Repo NAS", LastAgo: 9 * time.Hour, NextIn: 15 * time.Hour, Objects: 6,
+			Every: 24 * time.Hour, Earlier: []string{"", "", "Warning"}},
+		{ID: "a1f0c3e2-0002", Name: "SQL-Server stündlich", Type: "Backup", Status: "inactive", Result: "Success", Repository: "Repo NAS", LastAgo: 40 * time.Minute, NextIn: 20 * time.Minute, Objects: 1,
+			Every: time.Hour, Earlier: []string{"", "", "", "", "Failed"}},
+		{ID: "a1f0c3e2-0003", Name: "Kopie Offsite", Type: "BackupCopy", Status: "inactive", Result: "Warning", Repository: "Offsite S3", LastAgo: 7 * time.Hour, NextIn: 17 * time.Hour, Objects: 6,
+			Every: 24 * time.Hour, Earlier: []string{"Warning", "", "", "", "", "Failed"}},
+		{ID: "a1f0c3e2-0004", Name: "Laptops (Agent)", Type: "WindowsAgentBackupWorkstationPolicy", Status: "inactive", Result: "Failed", Repository: "Repo NAS", LastAgo: 11 * time.Hour, NextIn: 13 * time.Hour, Objects: 14,
+			Every: 24 * time.Hour},
+		{ID: "a1f0c3e2-0005", Name: "Archiv monatlich", Type: "Backup", Status: "disabled", Result: "Success", Repository: "Repo NAS", LastAgo: 40 * 24 * time.Hour, Objects: 6,
+			Every: 30 * 24 * time.Hour},
 	}
 	s.repos = []Repo{
 		{ID: "b2e1-0001", Name: "Repo NAS", Type: "LinuxHardened", Host: "nas01", Path: "/mnt/backup/veeam", CapacityGB: 16384, FreeGB: 4710},
@@ -147,6 +160,40 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			out = append(out, m)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": out, "pagination": map[string]int{"total": len(out), "count": len(out), "skip": 0, "limit": 1000}})
+	case "/api/v1/sessions":
+		after, _ := time.Parse(time.RFC3339, r.URL.Query().Get("createdAfterFilter"))
+		out := []map[string]any{}
+		for _, j := range s.jobs {
+			for i := range sessionRuns {
+				start := hour.Add(-j.LastAgo - time.Duration(i)*j.Every)
+				if start.Before(after) {
+					break
+				}
+				result := j.Result
+				if i > 0 {
+					result = "Success"
+					if i-1 < len(j.Earlier) && j.Earlier[i-1] != "" {
+						result = j.Earlier[i-1]
+					}
+				}
+				msg := ""
+				switch result {
+				case "Failed":
+					msg = "Error: Failed to connect to the backup repository"
+				case "Warning":
+					msg = "Warning: Changed block tracking is disabled"
+				}
+				id := j.ID + "-s" + strconv.Itoa(i)
+				sess := map[string]any{"id": id, "name": j.Name, "jobId": j.ID, "sessionType": j.Type + "Job", "state": "Stopped",
+					"creationTime": ts(start), "endTime": ts(start.Add(17 * time.Minute)), "result": map[string]any{"result": result, "message": msg}}
+				out = append(out, sess)
+				if strings.Contains(j.Type, "Agent") { // a child session per machine
+					out = append(out, map[string]any{"id": id + "-c", "name": j.Name + " (LT-07)", "jobId": j.ID, "parentSessionId": id,
+						"state": "Stopped", "creationTime": ts(start), "endTime": ts(start.Add(5 * time.Minute)), "result": map[string]any{"result": "Failed"}})
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": out, "pagination": map[string]int{"total": len(out), "count": len(out), "skip": 0, "limit": 5000}})
 	case "/api/v1/backupInfrastructure/repositories/states":
 		out := []map[string]any{}
 		for _, rp := range s.repos {

@@ -560,6 +560,34 @@ type Check struct {
 	Facts   map[string]string `json:"facts,omitempty"` // static info (OS, model, serial …), German labels as keys
 	// Events are the latest matching events of a Windows event rule check ("ev:<id>").
 	Events []EventEntry `json:"events,omitempty"`
+	// Runs are the latest runs of a backup job check (Veeam job, PBS job), oldest first.
+	Runs []JobRun `json:"runs,omitempty"`
+	// Jobs are the backup jobs of a Proxmox VE cluster (check "pve:backup").
+	Jobs []BackupJob `json:"jobs,omitempty"`
+}
+
+// MaxJobRuns is how many runs a backup job reports (the dots on the page "Sicherungen").
+const MaxJobRuns = 10
+
+// JobRun is one run of a backup job.
+type JobRun struct {
+	Start   int64  `json:"start"`
+	End     int64  `json:"end,omitempty"` // 0 = still running
+	State   string `json:"state"`         // ok, warn, crit; unknown while running
+	Message string `json:"msg,omitempty"` // result in German, e.g. "Fehlgeschlagen: 103 nextcloud"
+}
+
+// BackupJob is a scheduled backup job of a Proxmox VE cluster (/cluster/backup) with its
+// latest runs (vzdump tasks of all nodes started together count as one run).
+type BackupJob struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`                // comment, else the selection
+	Schedule  string   `json:"schedule,omitempty"`  // as configured, e.g. "21:00" or "sat 02:00"
+	Target    string   `json:"target,omitempty"`    // storage
+	Selection string   `json:"selection,omitempty"` // "Alle", "100, 101", "Pool prod"
+	Enabled   bool     `json:"enabled"`
+	Next      int64    `json:"next,omitempty"` // next run (unix), 0 = unknown
+	Runs      []JobRun `json:"runs,omitempty"` // oldest first, at most MaxJobRuns
 }
 
 // CheckStatus is a check with its effective state after thresholds and hysteresis.

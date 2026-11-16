@@ -37,6 +37,8 @@ type devState struct {
 	smart    map[string]smartEntry    // node \x00 /dev/… -> SMART data
 	certs    map[string]certEntry     // node -> certificates
 	guestBak *guestBackups            // last backup per guest (cached)
+	jobs     *jobHistory              // backup jobs and vzdump tasks for their runs (cached)
+	jobLogs  map[string]jobLog        // UPID -> parsed vzdump log of the job history
 }
 
 type counterSample struct {
@@ -93,7 +95,7 @@ func (c *Collector) dev(id string) *devState {
 	st := c.devs[id]
 	if st == nil {
 		st = &devState{counters: map[string]counterSample{}, onboot: map[string]onbootEntry{}, apt: map[string]aptEntry{}, taskLogs: map[string]taskInfo{},
-			smart: map[string]smartEntry{}, certs: map[string]certEntry{}}
+			smart: map[string]smartEntry{}, certs: map[string]certEntry{}, jobLogs: map[string]jobLog{}}
 		c.devs[id] = st
 	}
 	return st
@@ -214,7 +216,9 @@ func (c *Collector) Collect(ctx context.Context, d model.Device) ([]model.Check,
 			}
 		}
 	}
-	checks = append(checks, c.backupCheck(ctx, cl, d.ID, inv, details, now))
+	bak := c.backupCheck(ctx, cl, d.ID, inv, details, now)
+	bak.Jobs = c.backupJobs(ctx, cl, d.ID, inv, now)
+	checks = append(checks, bak)
 	checks = append(checks, guestBackupChecks(inv, c.guestBackupsFor(ctx, cl, d.ID, inv, now), d.Proxmox.IgnoreGuests, now)...)
 	c.prune(d.ID, inv)
 	return checks, nil

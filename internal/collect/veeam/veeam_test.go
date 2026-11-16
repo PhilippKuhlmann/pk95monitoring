@@ -101,3 +101,54 @@ func TestErrors(t *testing.T) {
 		t.Errorf("test %+v %v", res, err)
 	}
 }
+
+// The latest runs of a job come from its sessions: newest 10, oldest first; child sessions
+// of an agent policy and sessions older than the window are left out.
+func TestJobRunsFromSessions(t *testing.T) {
+	_, c, d := setup(t)
+	checks, err := c.Collect(context.Background(), d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := byKey(checks)
+	daily := m["veeam:job:a1f0c3e2-0001"].Runs
+	if len(daily) != model.MaxJobRuns {
+		t.Fatalf("daily runs %+v", daily)
+	}
+	for i, r := range daily {
+		want := model.StateOK
+		if i == 6 { // the third run before the last
+			want = model.StateWarn
+		}
+		if r.State != want || r.End <= r.Start || i > 0 && r.Start-daily[i-1].Start != 86400 {
+			t.Errorf("daily run %d: %+v", i, r)
+		}
+	}
+	if w := daily[6]; w.Message != "Mit Warnungen: Warning: Changed block tracking is disabled" {
+		t.Errorf("warning message %q", w.Message)
+	}
+	agent := m["veeam:job:a1f0c3e2-0004"].Runs
+	if len(agent) != model.MaxJobRuns || agent[9].State != model.StateCrit || agent[8].State != model.StateOK {
+		t.Errorf("agent runs %+v", agent)
+	}
+	if hourly := m["veeam:job:a1f0c3e2-0002"].Runs; len(hourly) != model.MaxJobRuns || hourly[4].State != model.StateCrit {
+		t.Errorf("hourly runs %+v", hourly)
+	}
+	if off := m["veeam:job:a1f0c3e2-0005"].Runs; len(off) != 0 {
+		t.Errorf("disabled job: runs older than the window %+v", off)
+	}
+}
+
+func TestRunsOf(t *testing.T) {
+	var a, b, run session
+	a.JobID, a.CreationTime, a.EndTime, a.State, a.Result.Result = "j", "2026-11-10T01:00:00Z", "2026-11-10T01:20:00Z", "Stopped", "Failed"
+	a.Result.Message = "Error: disk full\nmore"
+	b = a
+	b.CreationTime, b.Result.Result, b.Result.Message = "2026-11-11T01:00:00Z", "None", ""
+	run = a
+	run.CreationTime, run.State = "2026-11-12T01:00:00Z", "Working"
+	got := runsOf([]session{b, run, a})["j"]
+	if len(got) != 2 || got[0].Message != "Fehlgeschlagen: Error: disk full" || got[1].State != model.StateUnknown {
+		t.Errorf("runs %+v", got)
+	}
+}

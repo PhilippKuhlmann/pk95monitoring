@@ -258,6 +258,8 @@ func (s *Server) route(p []string, q url.Values) (any, int, string) {
 		return s.cephStatus(), 200, ""
 	case len(p) == 3 && p[0] == "cluster" && p[1] == "backup-info" && p[2] == "not-backed-up":
 		return s.notBackedUp(), 200, ""
+	case len(p) == 2 && p[0] == "cluster" && p[1] == "backup":
+		return s.backupJobs(now), 200, ""
 	case len(p) == 2 && p[0] == "cluster" && p[1] == "tasks":
 		tasks := s.tasks(now)
 		out := make([]map[string]any, len(tasks))

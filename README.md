@@ -237,7 +237,8 @@ Welche Gäste laufen müssen, steht im Gerät: „Beim Booten starten“ (Standa
 …“, Gruppe Sicherungen): Zeit, Alter, Ziel und Größe aus allen Speichern mit Inhalt „backup“ (NFS, CIFS, PBS …,
 alle 15 Minuten gelesen). Warnung ab 30, kritisch ab 54 Stunden (Messwert `backup.age`; bei wöchentlichen
 Sicherungen am Gerät höher setzen). Gäste in keinem Sicherungsjob sind eine Warnung; ausgenommene VMIDs zählen
-nicht mit. `PVEAuditor` genügt dafür.
+nicht mit. Die Sicherungsjobs (Rechenzentrum → Backup) stehen mit ihren letzten 10 Läufen auf der Seite
+**Sicherungen**. `PVEAuditor` genügt dafür.
 
 ## Agent (Linux und Windows)
 
@@ -645,8 +646,14 @@ Die Snapshot-Listen werden höchstens zweimal pro Stunde gelesen.
 ## Sicherungen (Übersicht)
 
 Sicherungen haben einen eigenen Menüpunkt und stehen nicht bei den Geräten: Die Seite **Sicherungen** fasst alles
-zusammen: die letzte Sicherung jedes Proxmox-Gasts, die vzdump-Aufgaben,
-die Veeam-Jobs, Gruppen, Jobs und Verifizierung der Proxmox Backup Server und die Windows-Regeln
+zusammen. Oben stehen die **Jobs** – die Sicherungsjobs von Proxmox VE (Rechenzentrum → Backup), die Veeam-Jobs und
+die Sync-, Prune-, Verify- und Garbage-Collection-Jobs der Proxmox Backup Server – mit dem Ergebnis des letzten
+Laufs und den letzten 10 Läufen als Balken wie bei einem Uptime-Monitor (grün erfolgreich, gelb mit Warnungen, rot
+fehlgeschlagen; die Maus zeigt Zeit, Dauer und Ergebnis). Proxmox ordnet die vzdump-Aufgaben der letzten 35 Tage
+ihrem Job zu (ab PVE 8.2 über die Job-ID im Protokoll, sonst über Speicher und Gästeauswahl); ein Lauf über mehrere
+Knoten zählt einmal, „Jetzt sichern“ eines einzelnen Gasts zählt nicht. Darunter stehen die letzte Sicherung jedes
+Proxmox-Gasts, die vzdump-Aufgaben,
+die Gruppen und Verifizierung der Proxmox Backup Server und die Windows-Regeln
 „Windows-Server-Sicherung“ und „Veeam-Sicherung“ – mit Zustand, letzter Sicherung, Ergebnis, Ziel, Größe und nächstem
 Lauf, Handlungsbedarf zuerst. Darunter stehen die Sicherungsziele (Veeam-Repositories, PBS-Datastores) mit ihrer
 Belegung und die Backup-Server. Wie Updates und Systemprotokolle lösen Sicherungen

@@ -103,6 +103,18 @@ func New() *Server {
 		{Type: "garbage_collection", ID: "offsite", Running: true},
 		{Type: "backup", ID: "backup:vm/100", Status: "OK", Ago: 3 * time.Hour},
 	}
+	// earlier nights of the daily jobs (their runs); the sync failed once 4 nights ago
+	for n := 2; n <= 6; n++ {
+		ago := time.Duration(n-1) * day
+		sync := "OK"
+		if n == 4 {
+			sync = "connection error: Connection refused (os error 111)"
+		}
+		s.tasks = append(s.tasks,
+			Task{Type: "verificationjob", ID: "backup:v-daily", Status: "OK", Ago: 26*time.Hour + ago},
+			Task{Type: "syncjob", ID: "backup:offsite:s-nightly", Status: sync, Ago: 28*time.Hour + ago},
+			Task{Type: "prunejob", ID: "backup:p-daily", Status: "OK", Ago: 5*time.Hour + ago})
+	}
 	s.srv = httptest.NewTLSServer(http.HandlerFunc(s.handle))
 	return s
 }

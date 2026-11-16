@@ -62,9 +62,37 @@ type BackupServer struct {
 	LastPoll int64  `json:"last_poll"`
 }
 
+// BackupJob is a backup job on the page "Sicherungen" with its latest runs: a backup job of
+// a Proxmox VE cluster (reported with the check "pve:backup", which also opens on click), a
+// Veeam job ("veeam:job:<id>") or a job of a Proxmox Backup Server ("pbs:task:<type>:<id>").
+// The state of a Proxmox job is that of its last run (it raises no alert of its own: failed
+// tasks are the check "pve:backup").
+type BackupJob struct {
+	DeviceID  string         `json:"device_id"`
+	Device    string         `json:"device"`
+	Type      string         `json:"type"` // device type
+	CheckKey  string         `json:"check_key"`
+	ID        string         `json:"id,omitempty"` // Proxmox job ID
+	Name      string         `json:"name"`
+	JobType   string         `json:"job_type,omitempty"`  // Veeam job type, PBS task type
+	Selection string         `json:"selection,omitempty"` // Proxmox: guests of the job
+	Schedule  string         `json:"schedule,omitempty"`  // Proxmox
+	Target    string         `json:"target,omitempty"`
+	Enabled   bool           `json:"enabled"`
+	Last      int64          `json:"last,omitempty"`    // end (else start) of the last run
+	Next      string         `json:"next,omitempty"`    // next run as text (Veeam)
+	NextTS    int64          `json:"next_ts,omitempty"` // next run (Proxmox)
+	State     string         `json:"state"`
+	Acked     bool           `json:"acked,omitempty"`
+	Mode      string         `json:"mode,omitempty"`
+	Message   string         `json:"message"`
+	Runs      []model.JobRun `json:"runs"` // oldest first, at most model.MaxJobRuns
+}
+
 // BackupOverview is the page "Sicherungen".
 type BackupOverview struct {
 	Rows     []BackupRow     `json:"rows"`
+	Jobs     []BackupJob     `json:"jobs"`
 	Storages []BackupStorage `json:"storages"`
 	Servers  []BackupServer  `json:"servers"`
 }
@@ -104,7 +132,7 @@ func (c *Core) Backups() BackupOverview {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.Now().Unix()
-	ov := BackupOverview{Rows: []BackupRow{}, Storages: []BackupStorage{}, Servers: []BackupServer{}}
+	ov := BackupOverview{Rows: []BackupRow{}, Jobs: []BackupJob{}, Storages: []BackupStorage{}, Servers: []BackupServer{}}
 	for id, d := range c.devices {
 		rt := c.rt[id]
 		if model.BackupServer(d.Type) {
@@ -143,6 +171,7 @@ func (c *Core) Backups() BackupOverview {
 			if kind == "" {
 				continue
 			}
+			ov.Jobs = append(ov.Jobs, jobsOf(id, name, d.Type, kind, cs, rt.st.LastPoll)...)
 			r := BackupRow{DeviceID: id, Device: name, Group: group, Type: d.Type, CheckKey: cs.Key, Name: cs.Name, Kind: kind,
 				State: cs.State, Acked: cs.Acked, Mode: cs.Mode, Message: cs.Message, Size: metricOf(cs, "backup.size"),
 				Target: cs.Facts["Ziel"], Next: cs.Facts["Nächster Lauf"], JobType: cs.Facts["Typ"]}
@@ -181,9 +210,63 @@ func (c *Core) Backups() BackupOverview {
 			cmp.Compare(strings.ToLower(a.Device), strings.ToLower(b.Device)), strings.Compare(a.Kind, b.Kind),
 			cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)))
 	})
+	slices.SortFunc(ov.Jobs, func(a, b BackupJob) int {
+		return cmp.Or(rank(b.State, b.Acked, b.Mode)-rank(a.State, a.Acked, a.Mode),
+			cmp.Compare(strings.ToLower(a.Device), strings.ToLower(b.Device)), cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)))
+	})
 	slices.SortFunc(ov.Servers, func(a, b BackupServer) int { return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) })
 	slices.SortFunc(ov.Storages, func(a, b BackupStorage) int {
 		return cmp.Or(cmp.Compare(strings.ToLower(a.Device), strings.ToLower(b.Device)), cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)))
 	})
 	return ov
+}
+
+// jobsOf returns the backup jobs a check stands for: the Proxmox jobs reported with
+// "pve:backup", or the Veeam or PBS job the check is.
+func jobsOf(devID, device, typ, kind string, cs model.CheckStatus, lastPoll int64) []BackupJob {
+	switch kind {
+	case "tasks":
+		out := make([]BackupJob, 0, len(cs.Jobs))
+		for _, j := range cs.Jobs {
+			bj := BackupJob{DeviceID: devID, Device: device, Type: typ, CheckKey: cs.Key, ID: j.ID, Name: j.Name,
+				Selection: j.Selection, Schedule: j.Schedule, Target: j.Target, Enabled: j.Enabled, NextTS: j.Next, Runs: j.Runs}
+			if bj.Runs == nil {
+				bj.Runs = []model.JobRun{}
+			}
+			switch {
+			case !j.Enabled:
+				bj.State, bj.Message = model.StateUnknown, "Deaktiviert"
+			case len(j.Runs) == 0:
+				bj.State, bj.Message = model.StateUnknown, "Kein Lauf in den letzten 35 Tagen"
+			default:
+				last := j.Runs[len(j.Runs)-1]
+				bj.State, bj.Message = last.State, last.Message
+			}
+			if n := len(j.Runs); n > 0 {
+				bj.Last = cmp.Or(j.Runs[n-1].End, j.Runs[n-1].Start)
+			}
+			out = append(out, bj)
+		}
+		return out
+	case "job", "pbsjob":
+		bj := BackupJob{DeviceID: devID, Device: device, Type: typ, CheckKey: cs.Key, Name: cs.Name, JobType: cs.Facts["Typ"],
+			Target: cs.Facts["Ziel"], Next: cs.Facts["Nächster Lauf"], Enabled: !strings.HasPrefix(cs.Message, "Deaktiviert"),
+			State: cs.State, Acked: cs.Acked, Mode: cs.Mode, Message: cs.Message, Runs: cs.Runs}
+		if bj.Runs == nil {
+			bj.Runs = []model.JobRun{}
+		}
+		if n := len(cs.Runs); n > 0 {
+			last := cs.Runs[n-1]
+			bj.Last = cmp.Or(last.End, last.Start)
+			// the last run's result says more than the check message (which repeats the times
+			// shown in their own columns), unless the check says something else
+			if last.State == cs.Native && !strings.HasPrefix(cs.Message, "Geplanter Lauf") {
+				bj.Message = last.Message
+			}
+		} else if age := metricOf(cs, "job.age"); age != nil && lastPoll > 0 {
+			bj.Last = lastPoll - int64(*age*3600)
+		}
+		return []BackupJob{bj}
+	}
+	return nil
 }

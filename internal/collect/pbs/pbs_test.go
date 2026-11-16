@@ -72,6 +72,14 @@ func TestCollect(t *testing.T) {
 	if ns := m["pbs:group:backup:kunde-a/vm/100"]; ns.Name != "kunde-a: vm/100 app01" || ns.Facts["Namespace"] != "kunde-a" {
 		t.Errorf("namespace group %+v", ns)
 	}
+	// the runs of the last 7 days, oldest first: a failure 4 nights ago and the last one
+	if r := m["pbs:task:syncjob:backup:offsite:s-nightly"].Runs; len(r) != 7 || r[2].State != model.StateCrit || r[6].State != model.StateCrit ||
+		r[5].State != model.StateOK || !strings.HasPrefix(r[6].Message, "Fehlgeschlagen: connection error") || r[6].End-r[6].Start != 600 {
+		t.Errorf("sync runs %+v", r)
+	}
+	if r := m["pbs:task:garbage_collection:offsite"].Runs; len(r) != 1 { // the running one is no run yet
+		t.Errorf("gc runs %+v", r)
+	}
 	if s := m["pbs:task:syncjob:backup:offsite:s-nightly"]; s.State != model.StateCrit || !strings.Contains(s.Message, "Connection timed out") {
 		t.Errorf("sync %+v", s)
 	}

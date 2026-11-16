@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TestNightlyJobsInWindow checks that every node's nightly backup job has finished and
+// TestNightlyJobsInWindow checks that every node's latest nightly backup job has finished and
 // lies inside the last 24 h at every time of day (it used to vanish shortly after 01:00).
 func TestNightlyJobsInWindow(t *testing.T) {
 	s := New()
@@ -17,8 +17,8 @@ func TestNightlyJobsInWindow(t *testing.T) {
 		list := s.tasks(now)
 		s.mu.Unlock()
 		nightly := map[string]bool{}
-		for _, tk := range list {
-			if tk.typ != "vzdump" || tk.id != "" {
+		for _, tk := range list { // newest first: the first job task of a node is tonight's
+			if tk.typ != "vzdump" || tk.id != "" || nightly[tk.node] {
 				continue
 			}
 			if tk.start.Before(now.Add(-24*time.Hour)) || tk.end.After(now) {

@@ -221,6 +221,7 @@ type task struct {
 	UPID       string `json:"upid"`
 	WorkerType string `json:"worker_type"`
 	WorkerID   string `json:"worker_id"`
+	Start      num    `json:"starttime"`
 	End        num    `json:"endtime"`
 	Status     string `json:"status"`
 }
@@ -538,11 +539,12 @@ var taskKinds = map[string]string{
 
 // taskChecks are "pbs:task:<type>:<id>": the outcome of the newest finished verify, sync,
 // prune and garbage collection task of every job or datastore in the last 7 days (an error
-// is critical, warnings are a warning).
+// is critical, warnings are a warning), with the latest finished runs.
 func taskChecks(tasks []task, now time.Time) []model.Check {
 	type last struct {
 		t       task
 		running bool
+		runs    []model.JobRun
 	}
 	latest := map[string]*last{}
 	var keys []string
@@ -561,6 +563,7 @@ func taskChecks(tasks []task, now time.Time) []model.Check {
 			l.running = true
 			continue
 		}
+		l.runs = append(l.runs, taskRun(t))
 		if t.End > l.t.End {
 			l.t = t
 		}
@@ -594,9 +597,27 @@ func taskChecks(tasks []task, now time.Time) []model.Check {
 		if l.running {
 			ch.Message = "Läuft gerade · zuletzt " + ch.Message
 		}
+		slices.SortFunc(l.runs, func(a, b model.JobRun) int { return cmp.Compare(a.Start, b.Start) })
+		ch.Runs = l.runs[max(0, len(l.runs)-model.MaxJobRuns):]
 		out = append(out, ch)
 	}
 	return out
+}
+
+// taskRun is a finished task as a run of its job.
+func taskRun(t task) model.JobRun {
+	r := model.JobRun{Start: int64(t.Start), End: int64(t.End), State: model.StateOK, Message: "Erfolgreich"}
+	if r.Start == 0 {
+		r.Start = r.End
+	}
+	switch {
+	case t.Status == "OK":
+	case strings.HasPrefix(t.Status, "WARNINGS"):
+		r.State, r.Message = model.StateWarn, "Mit Warnungen"
+	default:
+		r.State, r.Message = model.StateCrit, "Fehlgeschlagen: "+t.Status
+	}
+	return r
 }
 
 // TestResult is the answer of a connection test.

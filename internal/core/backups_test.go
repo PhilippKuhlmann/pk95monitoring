@@ -110,3 +110,45 @@ func TestPBSOnBackupPage(t *testing.T) {
 		t.Fatalf("secret lost: %+v", after.PBS)
 	}
 }
+
+// Jobs: the Proxmox jobs reported with "pve:backup" (state of their last run) and the Veeam
+// and PBS job checks, each with its latest runs; problems first.
+func TestBackupJobs(t *testing.T) {
+	e := newEnv(t, Options{})
+	id := e.agentDevice(t, "pve", nil)
+	ok := model.JobRun{Start: 1000, End: 1600, State: model.StateOK, Message: "Erfolgreich"}
+	bad := model.JobRun{Start: 90000, End: 90600, State: model.StateCrit, Message: "Fehlgeschlagen: 103 nextcloud"}
+	e.report(t, id,
+		model.Check{Key: "pve:backup", Name: "Sicherungen", Group: "Sicherungen", State: model.StateCrit, Message: "Sicherung fehlgeschlagen: 103 nextcloud",
+			Jobs: []model.BackupJob{
+				{ID: "backup-nightly", Name: "Nachtsicherung", Selection: "Alle", Schedule: "01:00", Target: "pbs", Enabled: true, Next: 200000, Runs: []model.JobRun{ok, bad}},
+				{ID: "backup-test", Name: "106 testvm", Enabled: false},
+				{ID: "backup-new", Name: "Neu", Enabled: true},
+			}},
+		model.Check{Key: "veeam:job:x", Name: "Täglich", Group: "Jobs", State: model.StateOK, Message: "Erfolgreich · 16.11.2026 22:00 (vor 3 Std.)",
+			Facts: map[string]string{"Nächster Lauf": "17.11.2026 22:00", "Typ": "VM-Sicherung", "Ziel": "Repo NAS"}, Runs: []model.JobRun{ok}},
+	)
+	jobs := e.c.Backups().Jobs
+	if len(jobs) != 4 {
+		t.Fatalf("jobs %+v", jobs)
+	}
+	n := jobs[0]
+	if n.ID != "backup-nightly" || n.State != model.StateCrit || n.Message != "Fehlgeschlagen: 103 nextcloud" || n.CheckKey != "pve:backup" ||
+		n.Last != 90600 || n.NextTS != 200000 || n.Selection != "Alle" || len(n.Runs) != 2 {
+		t.Errorf("nightly %+v", n)
+	}
+	byName := map[string]BackupJob{}
+	for _, j := range jobs {
+		byName[j.Name] = j
+	}
+	if j := byName["106 testvm"]; j.Enabled || j.Message != "Deaktiviert" || j.Runs == nil {
+		t.Errorf("disabled %+v", j)
+	}
+	if j := byName["Neu"]; j.State != model.StateUnknown || j.Message != "Kein Lauf in den letzten 35 Tagen" {
+		t.Errorf("new %+v", j)
+	}
+	if j := byName["Täglich"]; j.CheckKey != "veeam:job:x" || j.Next != "17.11.2026 22:00" || j.Target != "Repo NAS" || j.JobType != "VM-Sicherung" ||
+		!j.Enabled || len(j.Runs) != 1 || j.Last != 1600 || j.Message != "Erfolgreich" {
+		t.Errorf("veeam %+v", j)
+	}
+}
