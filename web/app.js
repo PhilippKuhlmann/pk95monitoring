@@ -562,7 +562,7 @@ function themeIcon() {
 }
 
 function shell() {
-  const cur = location.pathname;
+  const cur = navPath(location.pathname);
   const collapsed = lsGet("pk95mon-menu") === "collapsed";
   document.body.classList.toggle("collapsed", collapsed);
   app.innerHTML = `
@@ -673,7 +673,8 @@ async function render() {
   else {
     qsa(".nav-link").forEach((a) => {
       const p = a.getAttribute("href");
-      const on = location.pathname === p || (p !== "/" && location.pathname.startsWith(p));
+      const cur = navPath(location.pathname);
+      const on = cur === p || (p !== "/" && cur.startsWith(p));
       if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
   }
@@ -773,6 +774,18 @@ function eventRow(ev, compact) {
       ${(d.log || []).length ? `<div class="ev-sub">Auszug aus dem Protokoll</div><pre class="log">${d.log.map(esc).join("\n")}</pre>` : ""}
       ${link ? `<div><a class="btn gray sm" href="${esc(link)}" data-go>Ansehen</a></div>` : ""}
     </div></details>`;
+}
+
+// navPath is the path the navigation marks: the check page of a check with its own page
+// (updates, system logs, backups) belongs to that page, not to "Geräte".
+function navPath(path) {
+  const m = /^\/devices\/[^/]+\/checks\/(.+)$/.exec(path);
+  if (m) {
+    let key = m[1];
+    try { key = decodeURIComponent(key); } catch (e) { /* keep it */ }
+    if (separateCheck(key)) return alertHref({ check_key: key });
+  }
+  return path;
 }
 
 // alertHref is where an alert leads: updates and system log rules have their own pages (they

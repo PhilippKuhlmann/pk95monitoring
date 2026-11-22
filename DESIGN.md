@@ -1084,7 +1084,8 @@ gets a new VM 108 "build01" and loses CT 203 "proxy", so the discovery sections 
   "Handlungsbedarf" (`pk95mon-bak-filter`) / "Alle", table of the other rows of `GET /api/backups` (Veeam and PBS job
   rows are in "Jobs") and the backup targets with
   their fill level and the backup servers (Veeam and PBS; add/edit open the device dialog of their type); refreshes every minute.
-  Nav "Sicherungen" after "Updates". Check pages of separate checks lead back to their page.
+  Nav "Sicherungen" after "Updates". Check pages of separate checks lead back to their page, and the nav marks that
+  page instead of "Geräte" (`navPath`).
 - Page `/expiry` (nav "Ablaufdaten"): stat tiles (expired, next 30 days, certificates and domains, storage running
   full) and the `GET /api/expiry` table (certificates of HTTP(S)/TLS checks and Proxmox nodes, domains, storage
   forecasts "voll in N Tagen"), soonest first. Cards and the storage table show "voll in N Tagen" under the fill level.
