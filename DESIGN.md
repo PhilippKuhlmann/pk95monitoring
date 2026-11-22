@@ -358,7 +358,9 @@ Stable keys, unique per device. Collectors and agent MUST use these patterns.
    Validation (`rules.N.match` / `rules.N.mode`): match required, ≤ 200 characters, no duplicates, no rule that
    only matches `reach`; mode `alert` (default when empty), `quiet` or `off`; at most 200 rules.
 8. Discovery (`core/discovery.go`): the first successful collection (poll of proxmox/snmp/nut, fresh agent
-   report) records every check key it reports (before rules switch any off; not `reach`, `discovery`, `net:*`)
+   report) records every check key it reports (before rules switch any off; not `reach`, `discovery`, `net:*`,
+   system log rules, Hyper-V VMs and no backup check (`model.BackupCheck`: they come and go with the backups and
+   must alert at once; inventory entries stored by older versions are dropped))
    in `DeviceStatus.Inventory` (`{key, name, group, first, last, new, missing}`, persisted with the status, left
    out of API responses). Keys reported later are new (`new: true`) unless a rule matches them, the device has
    `auto_accept`, or the selection changed just before (host, proxmox/snmp/nut config, the agent's service

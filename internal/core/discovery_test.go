@@ -239,3 +239,26 @@ func TestDiscoveryBaselineAfterUpdate(t *testing.T) {
 		}
 	}
 }
+
+// Backup checks are no part of the inventory: a PBS job or backup group found later alerts at
+// once instead of waiting as "new", and the discovery check does not list it.
+func TestDiscoveryIgnoresBackupChecks(t *testing.T) {
+	e := newEnv(t, Options{})
+	id := e.discoveryAgent(t, "pbs01")
+	e.report(t, id, diskCheck(40), model.Check{Key: "pbs:server", Name: "Backup-Server", State: model.StateOK})
+	e.clk.Add(time.Minute)
+	e.report(t, id, diskCheck(40), model.Check{Key: "pbs:server", Name: "Backup-Server", State: model.StateOK},
+		model.Check{Key: "pbs:task:syncjob:backup:offsite:s-nightly", Name: "Sync-Job", State: model.StateCrit, Message: "Fehlgeschlagen"},
+		model.Check{Key: "veeam:job:x", Name: "Täglich", State: model.StateWarn})
+	e.wait()
+	st := e.c.Status(id)
+	if cs := mustCheck(t, st, "pbs:task:syncjob:backup:offsite:s-nightly"); cs.Mode != "" || cs.State != model.StateCrit {
+		t.Fatalf("PBS job: %+v", cs)
+	}
+	if cs := mustCheck(t, st, "veeam:job:x"); cs.Mode != "" {
+		t.Fatalf("Veeam job: %+v", cs)
+	}
+	if dc := mustCheck(t, st, model.DiscoveryKey); dc.State != model.StateOK || dc.Message != "1 Dienst bekannt, nichts zu entscheiden" {
+		t.Fatalf("discovery: %+v", dc)
+	}
+}

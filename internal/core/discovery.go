@@ -26,11 +26,13 @@ const (
 
 // inventoryKey reports whether a check takes part in the inventory: not reach, not the
 // discovery check, not network checks and system log rules (both are configured), not the
-// event log check of agents before 0.16 (replaced by the rules) and not the last backup per
-// guest (follows the guests, which the inventory has already).
+// event log check of agents before 0.16 (replaced by the rules) and not the backup checks.
+// Backup checks (Proxmox guests and tasks, Veeam, Proxmox Backup Server) stay out: backup
+// groups, jobs and their tasks come and go with the backups, and a new job must alert at
+// once instead of waiting as "new" until somebody accepts it.
 func inventoryKey(k string) bool {
 	return k != "" && k != reachKey && k != model.DiscoveryKey && k != "eventlog" && !strings.HasPrefix(k, "net:") && !strings.HasPrefix(k, eventrules.KeyPrefix) &&
-		!strings.HasPrefix(k, "pve:bak:") && !strings.HasPrefix(k, "hv:") // Hyper-V VMs move (cluster, Replica failover)
+		!model.BackupCheck(k) && !strings.HasPrefix(k, "hv:") // Hyper-V VMs move (cluster, Replica failover)
 }
 
 // reindex rebuilds the set of new keys and the vanished list from the inventory.
