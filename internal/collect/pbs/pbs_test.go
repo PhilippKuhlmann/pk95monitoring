@@ -108,9 +108,20 @@ func TestCollect(t *testing.T) {
 
 func TestDatastoreFull(t *testing.T) {
 	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.Local)
-	u := dsUsage{Store: "s", Total: 100, Used: 50, Avail: 50, FullDate: num(now.Add(-time.Hour).Unix())}
-	if ch := datastoreCheck(u, nil, now); ch.State != model.StateWarn || !strings.Contains(ch.Message, "in 0 Tagen") {
-		t.Errorf("past estimate %+v", ch)
+	// PBS reports a date in the past when the usage is flat or shrinking
+	for _, past := range []time.Time{now.Add(-time.Hour), time.Date(2016, 6, 27, 0, 0, 0, 0, time.UTC)} {
+		u := dsUsage{Store: "s", Total: 100, Used: 42, Avail: 58, FullDate: num(past.Unix())}
+		if ch := datastoreCheck(u, nil, now); ch.State != model.StateOK || strings.Contains(ch.Message, "voll") || ch.Facts["Voll voraussichtlich"] != "" {
+			t.Errorf("past estimate %v: %+v", past, ch)
+		}
+	}
+	u := dsUsage{Store: "s", Total: 100, Used: 50, Avail: 50, FullDate: num(now.Add(10*24*time.Hour + time.Hour).Unix())}
+	if ch := datastoreCheck(u, nil, now); ch.State != model.StateWarn || !strings.Contains(ch.Message, "in 10 Tagen") {
+		t.Errorf("near estimate %+v", ch)
+	}
+	u.FullDate = num(now.Add(90 * 24 * time.Hour).Unix())
+	if ch := datastoreCheck(u, nil, now); ch.State != model.StateOK || ch.Facts["Voll voraussichtlich"] == "" {
+		t.Errorf("far estimate %+v", ch)
 	}
 	if ch := datastoreCheck(dsUsage{Store: "s", Error: "not mounted"}, nil, now); ch.State != model.StateUnknown {
 		t.Errorf("error %+v", ch)

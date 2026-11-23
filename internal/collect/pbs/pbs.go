@@ -390,8 +390,9 @@ func datastoreCheck(u dsUsage, snaps []snapshot, now time.Time) model.Check {
 		ch.Facts["Sicherungsgruppen"] = strconv.Itoa(len(groups))
 		ch.Facts["Sicherungen"] = strconv.Itoa(len(snaps))
 	}
-	if u.FullDate > 0 {
-		full := time.Unix(int64(u.FullDate), 0)
+	// PBS fits a line through the last month; a date in the past means the usage is flat or
+	// shrinking (e.g. after prune and garbage collection), not that the datastore is full.
+	if full := time.Unix(int64(u.FullDate), 0); u.FullDate > 0 && full.After(now) {
 		days := int(full.Sub(now).Hours() / 24)
 		ch.Facts["Voll voraussichtlich"] = full.Local().Format("02.01.2006")
 		if days < fullWarnDays {
